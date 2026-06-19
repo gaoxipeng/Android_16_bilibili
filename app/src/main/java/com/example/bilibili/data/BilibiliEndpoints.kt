@@ -1,0 +1,36 @@
+package com.example.bilibili.data
+
+object BilibiliEndpoints {
+    const val HOME = "https://www.bilibili.com"
+    const val PASSPORT_LOGIN = "https://passport.bilibili.com/login"
+    const val NAV = "https://api.bilibili.com/x/web-interface/nav"
+    const val BUVID_SPI = "https://api.bilibili.com/x/frontend/finger/spi"
+    const val HOME_RECOMMEND = "https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd"
+    const val FOLLOWING_FEED = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all"
+    const val USER_SPACE_DYNAMIC = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+    const val POPULAR = "https://api.bilibili.com/x/web-interface/popular"
+    const val RANKING_V2 = "https://api.bilibili.com/x/web-interface/ranking/v2"
+    const val VIDEO_VIEW = "https://api.bilibili.com/x/web-interface/view"
+    const val VIDEO_PLAYURL = "https://api.bilibili.com/x/player/wbi/playurl"
+    const val HISTORY_REPORT = "https://api.bilibili.com/x/v2/history/report"
+    const val MY_INFO = "https://api.bilibili.com/x/space/myinfo"
+    const val USER_INFO = "https://api.bilibili.com/x/space/wbi/acc/info"
+    const val USER_CARD = "https://api.bilibili.com/x/web-interface/card"
+    const val USER_UPSTAT = "https://api.bilibili.com/x/space/upstat"
+    const val USER_VIDEOS = "https://api.bilibili.com/x/space/wbi/arc/search"
+    const val USER_NAVNUM = "https://api.bilibili.com/x/space/navnum"
+    const val RELATION_STAT = "https://api.bilibili.com/x/relation/stat"
+    const val RELATION = "https://api.bilibili.com/x/relation"
+    const val RELATION_MODIFY = "https://api.bilibili.com/x/relation/modify"
+    const val VIDEO_COMMENTS = "https://api.bilibili.com/x/v2/reply/wbi/main"
+    const val VIDEO_COMMENT_REPLIES = "https://api.bilibili.com/x/v2/reply/reply"
+    const val VIDEO_ONLINE = "https://api.bilibili.com/x/player/online/total"
+    const val LIVE_HOT_RANK = "https://api.live.bilibili.com/xlive/web-interface/v1/index/getHotRankList"
+    const val LIVE_ROOM_LIST = "https://api.live.bilibili.com/xlive/web-interface/v1/second/getList"
+    const val SEARCH_TYPE = "https://api.bilibili.com/x/web-interface/wbi/search/type"
+    const val SEARCH_HOTWORD = "https://s.search.bilibili.com/main/hotword"
+    const val SEARCH_SUGGEST = "https://s.search.bilibili.com/main/suggest"
+
+    const val USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+}

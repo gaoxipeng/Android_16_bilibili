@@ -1,0 +1,621 @@
+package com.example.bilibili.data
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+class BilibiliApiClient {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
+
+    private val wbiMutex = Mutex()
+    private val buvidMutex = Mutex()
+    private var mixinKey: String? = null
+    private var guestBuvid3: String? = null
+    private var guestBuvid4: String? = null
+
+    suspend fun getHomeRecommend(credential: BilibiliCredential? = null): List<BiliVideoItem> =
+        withContext(Dispatchers.IO) {
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.HOME_RECOMMEND,
+                params = emptyMap(),
+                credential = credential,
+            ).let(BilibiliJsonParser::parseVideosFromFeed)
+        }
+
+    suspend fun getFollowingVideos(credential: BilibiliCredential): List<BiliVideoItem> =
+        withContext(Dispatchers.IO) {
+            getJson(
+                url = BilibiliEndpoints.FOLLOWING_FEED,
+                params = mapOf(
+                    "timezone_offset" to "-480",
+                    "type" to "video",
+                    "platform" to "web",
+                    "web_location" to "333.1365",
+                    "features" to "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete",
+                ),
+                credential = credential,
+            ).let(BilibiliJsonParser::parseFollowingVideoFeed)
+        }
+
+    suspend fun getSiteRanking(rid: Int = 0): List<BiliVideoItem> =
+        withContext(Dispatchers.IO) {
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.RANKING_V2,
+                params = mapOf(
+                    "rid" to rid.toString(),
+                    "type" to "all",
+                    "web_location" to "333.934",
+                ),
+            ).let(BilibiliJsonParser::parseVideosFromFeed)
+        }
+
+    suspend fun getVideoView(bvid: String, credential: BilibiliCredential? = null): BiliVideoItem? =
+        getVideoDetail(bvid, credential)?.video
+
+    suspend fun getVideoDetail(bvid: String, credential: BilibiliCredential? = null): BiliVideoDetail? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.VIDEO_VIEW,
+                    params = mapOf("bvid" to bvid),
+                    credential = credential,
+                ).let(BilibiliJsonParser::parseVideoDetail)
+            }.getOrNull()
+        }
+
+    suspend fun getVideoOnlineCount(
+        bvid: String,
+        aid: Long,
+        cid: Long,
+        credential: BilibiliCredential? = null,
+    ): Long = withContext(Dispatchers.IO) {
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.VIDEO_ONLINE,
+                params = mapOf(
+                    "bvid" to bvid,
+                    "aid" to aid.toString(),
+                    "cid" to cid.toString(),
+                ),
+                credential = credential,
+            ).let(BilibiliJsonParser::parseOnlineCount)
+        }.getOrDefault(0L)
+    }
+
+    suspend fun getUserNavnum(mid: Long, credential: BilibiliCredential? = null): Long =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.USER_NAVNUM,
+                    params = mapOf("mid" to mid.toString()),
+                    credential = credential,
+                ).let(BilibiliJsonParser::parseUserNavnum)
+            }.getOrDefault(0L)
+        }
+
+    suspend fun getUserRelation(
+        mid: Long,
+        credential: BilibiliCredential,
+        referer: String = "https://space.bilibili.com/$mid",
+    ): BiliAuthorRelation = withContext(Dispatchers.IO) {
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.RELATION,
+                params = mapOf("fid" to mid.toString()),
+                credential = credential,
+                referer = referer,
+            ).let(BilibiliJsonParser::parseUserRelation)
+        }.getOrDefault(BiliAuthorRelation())
+    }
+
+    suspend fun getRelationStat(
+        mid: Long,
+        credential: BilibiliCredential,
+    ): BiliAuthorRelation = getUserRelation(mid, credential)
+
+    suspend fun modifyFollow(
+        mid: Long,
+        follow: Boolean,
+        credential: BilibiliCredential,
+        referer: String = "https://space.bilibili.com/$mid",
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (credential.biliJct.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("登录凭证无效，请重新登录"))
+        }
+        runCatching {
+            postForm(
+                url = BilibiliEndpoints.RELATION_MODIFY,
+                form = mapOf(
+                    "fid" to mid.toString(),
+                    "act" to if (follow) "1" else "2",
+                    "re_src" to "11",
+                    "csrf" to credential.biliJct,
+                ),
+                credential = credential,
+                referer = referer,
+            )
+            Unit
+        }
+    }
+
+    suspend fun getVideoComments(
+        aid: Long,
+        sort: BiliCommentSort,
+        paginationStr: String? = null,
+        credential: BilibiliCredential? = null,
+    ): BiliCommentPage = withContext(Dispatchers.IO) {
+        val params = mutableMapOf(
+            "oid" to aid.toString(),
+            "type" to "1",
+            "mode" to sort.mode.toString(),
+            "plat" to "1",
+            "web_location" to "1315875",
+        )
+        params["pagination_str"] = buildCommentPaginationStr(paginationStr)
+        getWbiJsonOnCurrentThread(BilibiliEndpoints.VIDEO_COMMENTS, params, credential)
+            .let(BilibiliJsonParser::parseCommentPage)
+    }
+
+    suspend fun getCommentReplies(
+        aid: Long,
+        rootRpid: Long,
+        bvid: String,
+        pn: Int = 1,
+        ps: Int = 20,
+        credential: BilibiliCredential? = null,
+    ): BiliCommentReplyPage = withContext(Dispatchers.IO) {
+        getJson(
+            url = BilibiliEndpoints.VIDEO_COMMENT_REPLIES,
+            params = mapOf(
+                "type" to "1",
+                "oid" to aid.toString(),
+                "root" to rootRpid.toString(),
+                "pn" to pn.toString(),
+                "ps" to ps.toString(),
+                "web_location" to "1315875",
+            ),
+            credential = credential,
+            referer = "https://www.bilibili.com/video/$bvid",
+        ).let(BilibiliJsonParser::parseCommentReplyPage)
+    }
+
+    private fun buildCommentPaginationStr(nextOffset: String?): String {
+        if (nextOffset.isNullOrBlank()) return """{"offset":""}"""
+        val escaped = nextOffset.replace("\\", "\\\\").replace("\"", "\\\"")
+        return """{"offset":"$escaped"}"""
+    }
+
+    suspend fun reportWatchHistory(
+        aid: Long,
+        cid: Long,
+        progressSeconds: Long,
+        credential: BilibiliCredential,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (aid <= 0L || cid <= 0L) return@withContext false
+        runCatching {
+            postForm(
+                url = BilibiliEndpoints.HISTORY_REPORT,
+                form = buildMap {
+                    put("aid", aid.toString())
+                    put("cid", cid.toString())
+                    put("progress", progressSeconds.coerceAtLeast(0L).toString())
+                    put("platform", "android")
+                    put("csrf", credential.biliJct)
+                },
+                credential = credential,
+            )
+            true
+        }.getOrDefault(false)
+    }
+
+    suspend fun getPlayUrl(
+        bvid: String,
+        cid: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliPlayStream? = withContext(Dispatchers.IO) {
+        runCatching {
+            val params = mutableMapOf(
+                "bvid" to bvid,
+                "cid" to cid.toString(),
+                "qn" to "80",
+                "fnval" to "4048",
+                "fnver" to "0",
+                "fourk" to "1",
+                "otype" to "json",
+                "platform" to "pc",
+            )
+            getWbiJsonOnCurrentThread(BilibiliEndpoints.VIDEO_PLAYURL, params, credential)
+                .let(BilibiliJsonParser::parsePlayUrl)
+        }.getOrNull()
+    }
+
+    suspend fun getMyInfo(credential: BilibiliCredential): BiliUserProfile? =
+        withContext(Dispatchers.IO) {
+            getJson(BilibiliEndpoints.MY_INFO, emptyMap(), credential)
+                .let(BilibiliJsonParser::parseMyInfo)
+        }
+
+    suspend fun getUserFollowerCount(mid: Long, credential: BilibiliCredential? = null): Long =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.USER_CARD,
+                    params = mapOf("mid" to mid.toString(), "photo" to "false"),
+                    credential = credential,
+                    referer = "https://space.bilibili.com/$mid",
+                ).let(BilibiliJsonParser::parseUserCardFollower)
+            }.getOrDefault(0L)
+        }
+
+    suspend fun getUserInfo(mid: Long, credential: BilibiliCredential? = null): BiliUserProfile? =
+        withContext(Dispatchers.IO) {
+            val referer = "https://space.bilibili.com/$mid"
+            val accProfile = runCatching {
+                val params = mutableMapOf("mid" to mid.toString())
+                WbiSigner.signWbi2(params)
+                getWbiJsonOnCurrentThread(
+                    url = BilibiliEndpoints.USER_INFO,
+                    params = params,
+                    credential = credential,
+                    referer = referer,
+                ).let(BilibiliJsonParser::parseUserInfo)
+            }.getOrNull()
+            val cardProfile = runCatching {
+                getJson(
+                    url = BilibiliEndpoints.USER_CARD,
+                    params = mapOf("mid" to mid.toString(), "photo" to "false"),
+                    credential = credential,
+                    referer = referer,
+                ).let(BilibiliJsonParser::parseUserCardProfile)
+            }.getOrNull()
+            val upstatLikes = runCatching {
+                getJson(
+                    url = BilibiliEndpoints.USER_UPSTAT,
+                    params = mapOf("mid" to mid.toString()),
+                    credential = credential,
+                    referer = referer,
+                ).let(BilibiliJsonParser::parseUserUpstatLikes)
+            }.getOrDefault(0L)
+            mergeUserProfiles(
+                mid = mid,
+                accProfile = accProfile,
+                cardProfile = cardProfile,
+                upstatLikes = upstatLikes,
+            )
+        }
+
+    private fun mergeUserProfiles(
+        mid: Long,
+        accProfile: BiliUserProfile?,
+        cardProfile: BiliUserProfile?,
+        upstatLikes: Long,
+    ): BiliUserProfile? {
+        val base = accProfile ?: cardProfile ?: return null
+        val card = cardProfile
+        return base.copy(
+            mid = mid,
+            name = base.name.ifBlank { card?.name.orEmpty() },
+            face = base.face.ifBlank { card?.face.orEmpty() },
+            sign = base.sign.ifBlank { card?.sign.orEmpty() },
+            level = base.level.takeIf { it > 0 } ?: card?.level ?: 0,
+            following = base.following.takeIf { it > 0L } ?: card?.following ?: 0L,
+            follower = base.follower.takeIf { it > 0L } ?: card?.follower ?: 0L,
+            likes = base.likes.takeIf { it > 0L } ?: upstatLikes,
+            topPhoto = base.topPhoto.ifBlank { card?.topPhoto.orEmpty() },
+        )
+    }
+
+    suspend fun getUserVideos(
+        mid: Long,
+        pn: Int = 1,
+        credential: BilibiliCredential? = null,
+    ): List<BiliVideoItem> = getUserVideoPage(mid, pn, credential).videos
+
+    suspend fun getUserVideoPage(
+        mid: Long,
+        pn: Int = 1,
+        credential: BilibiliCredential? = null,
+    ): BiliUserVideoPage = withContext(Dispatchers.IO) {
+        val params = mutableMapOf(
+            "mid" to mid.toString(),
+            "ps" to "30",
+            "tid" to "0",
+            "pn" to pn.toString(),
+            "keyword" to "",
+            "order" to "pubdate",
+            "order_avoided" to "true",
+            "platform" to "web",
+        )
+        WbiSigner.signWbi2(params)
+        getWbiJsonOnCurrentThread(
+            url = BilibiliEndpoints.USER_VIDEOS,
+            params = params,
+            credential = credential,
+            referer = "https://space.bilibili.com/$mid",
+        ).let(BilibiliJsonParser::parseUserVideoPage)
+    }
+
+    suspend fun getUserSpaceDynamics(
+        mid: Long,
+        offset: String? = null,
+        credential: BilibiliCredential? = null,
+    ): BiliDynamicFeedPage = withContext(Dispatchers.IO) {
+        val params = buildMap {
+            put("host_mid", mid.toString())
+            put("timezone_offset", "-480")
+            put("platform", "web")
+            put("features", "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete")
+            if (!offset.isNullOrBlank()) put("offset", offset)
+        }
+        getJson(
+            url = BilibiliEndpoints.USER_SPACE_DYNAMIC,
+            params = params,
+            credential = credential,
+            referer = "https://space.bilibili.com/$mid/dynamic",
+        ).let(BilibiliJsonParser::parseSpaceDynamicFeed)
+    }
+
+    suspend fun searchVideos(
+        keyword: String,
+        page: Int = 1,
+        credential: BilibiliCredential? = null,
+    ): BiliSearchResultPage<BiliVideoItem> = withContext(Dispatchers.IO) {
+        runCatching {
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.SEARCH_TYPE,
+                params = mapOf(
+                    "search_type" to "video",
+                    "keyword" to keyword,
+                    "page" to page.toString(),
+                    "order" to "totalrank",
+                    "duration" to "0",
+                    "tids" to "0",
+                ),
+                credential = credential,
+                referer = "https://search.bilibili.com/video?keyword=${encode(keyword)}",
+            ).let(BilibiliJsonParser::parseSearchVideoPage)
+        }.getOrDefault(BiliSearchResultPage.empty())
+    }
+
+    suspend fun searchUsers(
+        keyword: String,
+        page: Int = 1,
+        credential: BilibiliCredential? = null,
+    ): BiliSearchResultPage<BiliSearchUserItem> = withContext(Dispatchers.IO) {
+        runCatching {
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.SEARCH_TYPE,
+                params = mapOf(
+                    "search_type" to "bili_user",
+                    "keyword" to keyword,
+                    "page" to page.toString(),
+                    "order" to "0",
+                    "user_type" to "0",
+                ),
+                credential = credential,
+                referer = "https://search.bilibili.com/upuser?keyword=${encode(keyword)}",
+            ).let(BilibiliJsonParser::parseSearchUserPage)
+        }.getOrDefault(BiliSearchResultPage.empty())
+    }
+
+    suspend fun getSearchHotWords(limit: Int = 20): List<BiliHotSearchItem> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.SEARCH_HOTWORD,
+                    params = mapOf("limit" to limit.toString()),
+                    referer = "https://www.bilibili.com",
+                ).let(BilibiliJsonParser::parseSearchHotWords)
+            }.getOrDefault(emptyList())
+        }
+
+    suspend fun getSearchSuggest(term: String): List<String> = withContext(Dispatchers.IO) {
+        if (term.isBlank()) return@withContext emptyList()
+        runCatching {
+            getJsonAllowNonZero(
+                url = BilibiliEndpoints.SEARCH_SUGGEST,
+                params = mapOf(
+                    "term" to term,
+                    "main_ver" to "v1",
+                    "func" to "suggest",
+                    "highlight" to "",
+                    "suggest_type" to "accurate",
+                    "sub_type" to "tag",
+                    "userid" to "-1",
+                ),
+                referer = "https://search.bilibili.com",
+            ).let(BilibiliJsonParser::parseSearchSuggest)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun getLiveHotRank(): List<BiliLiveRoom> =
+        withContext(Dispatchers.IO) {
+            getJson(BilibiliEndpoints.LIVE_HOT_RANK, emptyMap())
+                .let(BilibiliJsonParser::parseLiveHotRank)
+        }
+
+    suspend fun getLiveAreaList(page: Int = 1): List<BiliLiveRoom> =
+        withContext(Dispatchers.IO) {
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.LIVE_ROOM_LIST,
+                params = mapOf(
+                    "platform" to "web",
+                    "parent_area_id" to "0",
+                    "area_id" to "0",
+                    "page" to page.toString(),
+                ),
+            ).let(BilibiliJsonParser::parseLiveAreaList)
+        }
+
+    private suspend fun getWbiJsonOnCurrentThread(
+        url: String,
+        params: Map<String, String>,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): JSONObject {
+        val signed = WbiSigner.sign(params.toMutableMap(), ensureMixinKey(credential))
+        return getJson(url, signed, credential, referer)
+    }
+
+    private suspend fun ensureMixinKey(credential: BilibiliCredential?): String =
+        wbiMutex.withLock {
+            mixinKey?.let { return it }
+            val nav = getJson(BilibiliEndpoints.NAV, emptyMap(), credential)
+            val wbiImg = nav.optJSONObject("data")?.optJSONObject("wbi_img")
+                ?: error("无法获取 WBI 密钥")
+            val key = WbiSigner.deriveMixinKey(
+                imgUrl = wbiImg.optString("img_url"),
+                subUrl = wbiImg.optString("sub_url"),
+            )
+            mixinKey = key
+            key
+        }
+
+    private suspend fun ensureGuestBuvid() {
+        buvidMutex.withLock {
+            if (!guestBuvid3.isNullOrBlank()) return@withLock
+            runCatching {
+                val request = Request.Builder()
+                    .url(BilibiliEndpoints.BUVID_SPI)
+                    .header("User-Agent", BilibiliEndpoints.USER_AGENT)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) return@runCatching
+                    val data = JSONObject(body).optJSONObject("data") ?: return@runCatching
+                    guestBuvid3 = data.optString("b_3").takeIf { it.isNotBlank() }
+                    guestBuvid4 = data.optString("b_4").takeIf { it.isNotBlank() }
+                }
+            }
+        }
+    }
+
+    private suspend fun buildCookieHeader(credential: BilibiliCredential?): String? {
+        ensureGuestBuvid()
+        val parts = mutableListOf<String>()
+        if (credential != null) {
+            parts += credential.toCookieHeader()
+            if (credential.buvid3.isBlank()) {
+                guestBuvid3?.let { parts += "buvid3=$it" }
+            }
+            if (credential.buvid4.isBlank()) {
+                guestBuvid4?.let { parts += "buvid4=$it" }
+            }
+        } else {
+            guestBuvid3?.let { parts += "buvid3=$it" }
+            guestBuvid4?.let { parts += "buvid4=$it" }
+        }
+        return parts.joinToString("; ").takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun postForm(
+        url: String,
+        form: Map<String, String>,
+        credential: BilibiliCredential,
+        referer: String = BilibiliEndpoints.HOME,
+    ): JSONObject {
+        val body = form.entries.joinToString("&") { (key, value) ->
+            "${encode(key)}=${encode(value)}"
+        }
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+            .header("User-Agent", BilibiliEndpoints.USER_AGENT)
+            .header("Referer", referer)
+            .header("Origin", "https://www.bilibili.com")
+        buildCookieHeader(credential)?.let { cookie ->
+            requestBuilder.header("Cookie", cookie)
+        }
+        client.newCall(requestBuilder.build()).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error("HTTP ${response.code}")
+            val json = JSONObject(responseBody)
+            if (json.optInt("code") != 0) {
+                error(json.optString("message", "请求失败"))
+            }
+            return json
+        }
+    }
+
+    private suspend fun getJsonAllowNonZero(
+        url: String,
+        params: Map<String, String>,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): JSONObject {
+        val query = params.entries.joinToString("&") { (key, value) ->
+            "${encode(key)}=${encode(value)}"
+        }
+        val fullUrl = if (query.isBlank()) url else "$url?$query"
+        val requestBuilder = Request.Builder()
+            .url(fullUrl)
+            .header("User-Agent", BilibiliEndpoints.USER_AGENT)
+            .header("Referer", referer)
+        buildCookieHeader(credential)?.let { cookie ->
+            requestBuilder.header("Cookie", cookie)
+        }
+        client.newCall(requestBuilder.build()).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}")
+            }
+            return runCatching { JSONObject(body) }.getOrElse {
+                error("响应解析失败")
+            }
+        }
+    }
+
+    private suspend fun getJson(
+        url: String,
+        params: Map<String, String>,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): JSONObject {
+        val query = params.entries.joinToString("&") { (key, value) ->
+            "${encode(key)}=${encode(value)}"
+        }
+        val fullUrl = if (query.isBlank()) url else "$url?$query"
+        val requestBuilder = Request.Builder()
+            .url(fullUrl)
+            .header("User-Agent", BilibiliEndpoints.USER_AGENT)
+            .header("Referer", referer)
+        buildCookieHeader(credential)?.let { cookie ->
+            requestBuilder.header("Cookie", cookie)
+        }
+        client.newCall(requestBuilder.build()).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val message = when (response.code) {
+                    412 -> "请求被 B 站风控拦截，请稍后重试"
+                    else -> "HTTP ${response.code}"
+                }
+                error(message)
+            }
+            val json = runCatching { JSONObject(body) }.getOrElse {
+                error("响应解析失败")
+            }
+            if (json.optInt("code") != 0) {
+                error(json.optString("message", "请求失败"))
+            }
+            return json
+        }
+    }
+
+    private fun encode(value: String): String =
+        java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
+
+    fun invalidateWbiCache() {
+        mixinKey = null
+    }
+}
