@@ -5,13 +5,37 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.exoplayer.ExoPlayer
+import com.example.bilibili.data.BiliDanmakuItem
 
-class VideoPlaybackCoordinator {
+class VideoPlaybackCoordinator(
+    initialDanmakuVisible: Boolean = true,
+    private val persistDanmakuVisible: ((Boolean) -> Unit)? = null,
+) {
     var activeKey by mutableStateOf<String?>(null)
     var fullscreenKey by mutableStateOf<String?>(null)
     var peekPlaybackKey by mutableStateOf<String?>(null)
     var pendingPeekHandoffKey by mutableStateOf<String?>(null)
     val positions = mutableStateMapOf<String, Long>()
+    var danmakuVisible by mutableStateOf(initialDanmakuVisible)
+        private set
+    private val danmakuCache = mutableMapOf<Long, List<BiliDanmakuItem>>()
+
+    fun toggleDanmaku() {
+        danmakuVisible = !danmakuVisible
+        persistDanmakuVisible?.invoke(danmakuVisible)
+    }
+
+    suspend fun cachedDanmaku(
+        cid: Long,
+        loader: suspend () -> List<BiliDanmakuItem>,
+    ): List<BiliDanmakuItem> {
+        danmakuCache[cid]?.takeIf { it.isNotEmpty() }?.let { return it }
+        val loaded = loader()
+        if (loaded.isNotEmpty()) {
+            danmakuCache[cid] = loaded
+        }
+        return loaded
+    }
 
     private var handoffPlayer: ExoPlayer? = null
     private var handoffKey: String? = null

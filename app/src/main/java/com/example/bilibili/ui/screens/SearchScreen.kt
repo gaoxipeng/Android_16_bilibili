@@ -62,7 +62,8 @@ import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.theme.BiliPink
-import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -81,7 +82,6 @@ fun SearchScreen(
     credential: BilibiliCredential?,
     playUrls: Map<String, BiliPlayStream>,
     coordinator: VideoPlaybackCoordinator,
-    backdrop: Backdrop,
     onClose: () -> Unit,
     onVideoClick: (BiliVideoItem) -> Unit,
     onUserClick: (Long, String, String) -> Unit,
@@ -89,6 +89,7 @@ fun SearchScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val searchBackdrop = rememberLayerBackdrop()
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -265,20 +266,26 @@ fun SearchScreen(
             }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
-            .statusBarsPadding(),
-    ) {
-        SearchInputCapsule(
-            query = queryInput,
-            onQueryChange = {
-                queryInput = it
-                if (activeQuery != null) activeQuery = null
-            },
-            onSearch = { submitQuery(queryInput) },
-            backdrop = backdrop,
+    Box(modifier = modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .matchParentSize()
+                .layerBackdrop(searchBackdrop)
+                .background(MaterialTheme.colorScheme.surface),
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding(),
+        ) {
+            SearchInputCapsule(
+                query = queryInput,
+                onQueryChange = {
+                    queryInput = it
+                    if (activeQuery != null) activeQuery = null
+                },
+                onSearch = { submitQuery(queryInput) },
+                backdrop = searchBackdrop,
             focusRequester = focusRequester,
             onClear = {
                 queryInput = ""
@@ -456,6 +463,7 @@ fun SearchScreen(
                 }
             }
         }
+    }
     }
 }
 

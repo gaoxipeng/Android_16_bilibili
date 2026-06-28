@@ -12,6 +12,26 @@ object BilibiliJsonParser {
         return items.toVideoList()
     }
 
+    fun parseHomeRecommendPage(
+        json: JSONObject,
+        freshIdx: Int,
+        fetchRow: Int,
+    ): BiliHomeRecommendPage {
+        val videos = parseVideosFromFeed(json)
+        return BiliHomeRecommendPage(
+            videos = videos,
+            nextFreshIdx = freshIdx + 1,
+            nextFetchRow = if (videos.isEmpty()) fetchRow else fetchRow + videos.size,
+            lastShowList = buildHomeRecommendShowList(videos),
+            hasMore = videos.isNotEmpty(),
+        )
+    }
+
+    private fun buildHomeRecommendShowList(videos: List<BiliVideoItem>): String =
+        videos.mapNotNull { video ->
+            video.aid.takeIf { it > 0L }?.toString()
+        }.joinToString("_")
+
     fun parseVideoView(json: JSONObject): BiliVideoItem? = parseVideoDetail(json)?.video
 
     fun parseVideoDetail(json: JSONObject): BiliVideoDetail? {
@@ -600,6 +620,51 @@ object BilibiliJsonParser {
         }
     }
 
+    fun parseWatchHistoryPage(json: JSONObject): BiliHistoryPage {
+        val data = json.optJSONObject("data") ?: return BiliHistoryPage(emptyList(), null)
+        val cursor = data.optJSONObject("cursor")?.let { cursorJson ->
+            BiliHistoryCursor(
+                max = cursorJson.optLong("max"),
+                viewAt = cursorJson.optLong("view_at"),
+                business = cursorJson.optString("business"),
+                ps = cursorJson.optInt("ps"),
+            )
+        }
+        val list = data.optJSONArray("list") ?: org.json.JSONArray()
+        val items = buildList(list.length()) {
+            for (index in 0 until list.length()) {
+                parseHistoryItem(list.optJSONObject(index) ?: continue)?.let(::add)
+            }
+        }
+        return BiliHistoryPage(items = items, cursor = cursor)
+    }
+
+    private fun parseHistoryItem(item: JSONObject): BiliHistoryItem? {
+        val history = item.optJSONObject("history") ?: return null
+        if (history.optString("business") != "archive") return null
+        val bvid = history.optString("bvid")
+        if (bvid.isBlank()) return null
+        val aid = history.optLong("oid")
+        if (aid <= 0L) return null
+        val title = item.optString("title").ifBlank { item.optString("show_title") }
+        val cover = item.optString("cover").ifBlank {
+            item.optJSONArray("covers")?.optString(0).orEmpty()
+        }
+        return BiliHistoryItem(
+            kid = "archive_$aid",
+            bvid = bvid,
+            aid = aid,
+            cid = history.optLong("cid"),
+            title = title,
+            coverUrl = normalizeImageUrl(cover),
+            authorName = item.optString("author_name"),
+            authorMid = item.optLong("author_mid"),
+            viewAtSeconds = item.optLong("view_at"),
+            progressSeconds = item.optInt("progress").coerceAtLeast(0),
+            durationSeconds = item.optInt("duration").coerceAtLeast(0),
+        )
+    }
+
     fun parseSearchVideoPage(json: JSONObject): BiliSearchResultPage<BiliVideoItem> {
         val data = json.optJSONObject("data") ?: return BiliSearchResultPage.empty()
         val page = data.optInt("page", 1).coerceAtLeast(1)
@@ -707,10 +772,12 @@ object BilibiliJsonParser {
         }
     }
 
-    fun parseFollowingVideoFeed(json: JSONObject): List<BiliVideoItem> {
-        val items = json.optJSONObject("data")?.optJSONArray("items") ?: return emptyList()
+    fun parseFollowingVideoFeed(json: JSONObject): BiliFollowingFeedPage {
+        val data = json.optJSONObject("data")
+            ?: return BiliFollowingFeedPage(emptyList(), nextOffset = null, hasMore = false)
+        val items = data.optJSONArray("items") ?: return BiliFollowingFeedPage(emptyList(), nextOffset = null, hasMore = false)
         val seen = mutableSetOf<String>()
-        return buildList {
+        val videos = buildList {
             for (index in 0 until items.length()) {
                 val item = items.optJSONObject(index) ?: continue
                 parseDynamicVideoItem(item)?.let { video ->
@@ -718,6 +785,13 @@ object BilibiliJsonParser {
                 }
             }
         }
+        val nextOffset = data.optString("offset").takeIf { it.isNotBlank() }
+        val hasMore = data.optBoolean("has_more", nextOffset != null && videos.isNotEmpty())
+        return BiliFollowingFeedPage(
+            videos = videos,
+            nextOffset = nextOffset,
+            hasMore = hasMore,
+        )
     }
 
     private fun parseDynamicVideoItem(item: JSONObject): BiliVideoItem? {

@@ -79,8 +79,10 @@ import com.example.bilibili.data.BiliUserProfile
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.player.StatusBarIconsEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.ui.components.BilibiliFollowButton
+import com.example.bilibili.ui.components.BiliUserLevelIcon
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.format.formatBiliCount
@@ -103,7 +105,12 @@ private val ProfileHeaderAvatarFrameSize = ProfileHeaderAvatarSize + ProfileHead
 private val ProfileHeaderCoverAspect = 2.55f
 private val ProfileHeaderCardCoverOverlap = 22.dp
 private val ProfileHeaderCardRadius = 16.dp
-private val ProfileHeaderStatsSpacing = 14.dp
+private val ProfileHeaderStatsSpacing = 4.dp
+private val ProfileCompactAvatarSize = 32.dp
+private val ProfileCompactBarStartPadding = 16.dp
+private val ProfileCompactBarContentSpacing = 10.dp
+private val ProfileCompactLevelIconWidth = 28.dp
+private val ProfileCompactLevelIconHeight = 18.dp
 
 @Composable
 fun UserProfileScreen(
@@ -330,6 +337,9 @@ fun UserProfileScreen(
     }
     val showFollowButton = myMid == null || myMid != mid
     var webReader by remember { mutableStateOf<BiliWebReaderState?>(null) }
+    val compactHeaderVisible = animatedCollapse > 0.01f
+
+    StatusBarIconsEffect(darkIcons = compactHeaderVisible)
 
     Box(
         modifier = modifier
@@ -349,35 +359,50 @@ fun UserProfileScreen(
                             .height(compactBarHeight)
                             .graphicsLayer { clip = true },
                     ) {
-                        if (animatedCollapse > 0.01f) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(topInset + compactBarContentHeight)
-                                    .background(Color.White)
-                                    .padding(
-                                        top = topInset,
-                                        start = 12.dp,
-                                        end = 8.dp,
-                                    )
-                                    .graphicsLayer { alpha = animatedCollapse },
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
+                        if (compactHeaderVisible) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(topInset)
+                                        .background(Color.White),
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(compactBarContentHeight)
+                                        .background(Color.White)
+                                        .padding(
+                                            start = ProfileCompactBarStartPadding,
+                                            end = if (showFollowButton) 12.dp else 4.dp,
+                                        )
+                                        .graphicsLayer { alpha = animatedCollapse },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(ProfileCompactBarContentSpacing),
+                                ) {
                                 RemoteImage(
                                     url = profile.face,
                                     modifier = Modifier
-                                        .size(36.dp)
+                                        .size(ProfileCompactAvatarSize)
                                         .clip(CircleShape),
                                     contentScale = ContentScale.Crop,
                                 )
-                                ProfileAuthorNameRow(
-                                    name = profile.name.ifBlank { "UP主" },
-                                    level = profile.level,
-                                    nameStyle = MaterialTheme.typography.titleSmall,
+                                Column(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .padding(horizontal = 8.dp),
-                                )
+                                        .fillMaxHeight(),
+                                    verticalArrangement = Arrangement.Center,
+                                ) {
+                                    ProfileAuthorNameRow(
+                                        name = profile.name.ifBlank { "UP主" },
+                                        level = profile.level,
+                                        nameStyle = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.SemiBold,
+                                        ),
+                                        levelIconWidth = ProfileCompactLevelIconWidth,
+                                        levelIconHeight = ProfileCompactLevelIconHeight,
+                                    )
+                                }
                                 if (showFollowButton) {
                                     BilibiliFollowButton(
                                         following = relation.following,
@@ -419,6 +444,7 @@ fun UserProfileScreen(
                                         },
                                     )
                                 }
+                            }
                             }
                         }
                     }
@@ -640,6 +666,16 @@ fun UserProfileScreen(
             }
         }
 
+        if (compactHeaderVisible) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .height(topInset)
+                    .background(Color.White),
+            )
+        }
+
         BiliWebReaderOverlay(
             state = webReader,
             onBack = { webReader = null },
@@ -738,11 +774,11 @@ private fun UserProfileHeader(
                             ) {
                                 Spacer(Modifier.height(ProfileHeaderAvatarFrameSize - avatarExposeAboveCard))
                             }
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(start = 12.dp, top = 8.dp),
-                            ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 12.dp, top = 6.dp),
+                    ) {
                                 ProfileAuthorNameRow(
                                     name = profile.name.ifBlank { "UP主" },
                                     level = profile.level,
@@ -756,7 +792,7 @@ private fun UserProfileHeader(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 3,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(top = 8.dp),
+                                    modifier = Modifier.padding(top = 6.dp),
                                 )
                             }
                         }
@@ -764,7 +800,7 @@ private fun UserProfileHeader(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 12.dp),
+                                .padding(top = 8.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                         ) {
                             ProfileStatItem("关注", profile.following)
@@ -851,7 +887,7 @@ private fun UserProfileContentTabs(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
+            .padding(start = 12.dp, bottom = 2.dp),
     ) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(22.dp),
@@ -1184,6 +1220,8 @@ private fun ProfileAuthorNameRow(
     level: Int,
     nameStyle: androidx.compose.ui.text.TextStyle,
     modifier: Modifier = Modifier,
+    levelIconWidth: Dp = 34.dp,
+    levelIconHeight: Dp = 22.dp,
 ) {
     Row(
         modifier = modifier,
@@ -1197,24 +1235,13 @@ private fun ProfileAuthorNameRow(
             modifier = Modifier.weight(1f, fill = false),
         )
         if (level > 0) {
-            Spacer(Modifier.width(4.dp))
-            ProfileLevelBadge(level)
+            BiliUserLevelIcon(
+                level = level,
+                width = levelIconWidth,
+                height = levelIconHeight,
+            )
         }
     }
-}
-
-@Composable
-private fun ProfileLevelBadge(level: Int) {
-    Text(
-        text = "LV$level",
-        fontSize = 8.sp,
-        lineHeight = 10.sp,
-        color = BiliPink,
-        modifier = Modifier
-            .clip(RoundedCornerShape(2.dp))
-            .background(BiliPink.copy(alpha = 0.1f))
-            .padding(horizontal = 3.dp, vertical = 0.dp),
-    )
 }
 
 @Composable

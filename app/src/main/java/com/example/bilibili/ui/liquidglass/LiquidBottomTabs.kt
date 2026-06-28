@@ -3,6 +3,7 @@ package com.example.bilibili.ui.liquidglass
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -263,6 +264,9 @@ fun LiquidBottomTabs(
             )
         }
 
+        val barShape = RoundedCornerShape(percent = 50)
+        val barBorderColor = liquidMenuBorderColor(isLightTheme)
+
         CompositionLocalProvider(LocalLiquidBottomTabBackdropRow provides false) {
             Row(
                 Modifier
@@ -272,20 +276,19 @@ fun LiquidBottomTabs(
                     }
                     .drawBackdrop(
                         backdrop = backdrop,
-                        shape = { RoundedCornerShape(percent = 50) },
-                        effects = {
-                            vibrancy()
-                            blur(2f.dp.toPx())
-                            lens(12f.dp.toPx(), 24f.dp.toPx())
-                        },
+                        shape = { barShape },
+                        effects = { liquidMenuGlassEffects() },
+                        highlight = null,
+                        shadow = null,
                         layerBlock = {
                             val progress = indicatorPressProgress
                             val scale = lerp(1f, 1f + 16f.dp.toPx() / size.width, progress)
                             scaleX = scale
                             scaleY = scale
                         },
-                        onDrawSurface = { drawRect(surfaceColor) }
+                        onDrawSurface = { drawRect(surfaceColor) },
                     )
+                    .border(LiquidMenuBorderWidth, barBorderColor, barShape)
                     .then(interactiveHighlight.modifier)
                     .height(64f.dp)
                     .fillMaxWidth()
@@ -315,10 +318,10 @@ fun LiquidBottomTabs(
                         effects = {
                             val progress = indicatorPressProgress
                             vibrancy()
-                            blur(2f.dp.toPx())
+                            blur(BottomBarCapsuleBlurRadius.toPx())
                             lens(
-                                12f.dp.toPx() * progress.coerceAtLeast(0.01f),
-                                24f.dp.toPx() * progress.coerceAtLeast(0.01f),
+                                BottomBarCapsuleLensRefraction.toPx() * progress.coerceAtLeast(0.01f),
+                                BottomBarCapsuleBlurRadius.toPx() * progress.coerceAtLeast(0.01f),
                             )
                         },
                         highlight = {

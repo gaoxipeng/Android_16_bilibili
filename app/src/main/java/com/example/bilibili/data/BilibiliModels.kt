@@ -33,6 +33,28 @@ data class BiliPlayStream(
     val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
 }
 
+data class BiliDanmakuItem(
+    val timeMs: Long,
+    val mode: Int,
+    val fontSize: Int,
+    val colorArgb: Int,
+    val content: String,
+) {
+    val id: Int = (timeMs xor (content.hashCode().toLong()) xor mode.toLong()).toInt()
+}
+
+enum class BiliDanmakuMode(val value: Int) {
+    Scroll(1),
+    Bottom(4),
+    Top(5),
+    ReverseScroll(6),
+    ;
+
+    companion object {
+        fun from(value: Int): BiliDanmakuMode? = entries.firstOrNull { it.value == value }
+    }
+}
+
 data class BiliVideoItem(
     val bvid: String,
     val aid: Long,
@@ -173,6 +195,20 @@ data class BiliUserVideoPage(
     val hasMore: Boolean = false,
 )
 
+data class BiliHomeRecommendPage(
+    val videos: List<BiliVideoItem>,
+    val nextFreshIdx: Int,
+    val nextFetchRow: Int,
+    val lastShowList: String,
+    val hasMore: Boolean,
+)
+
+data class BiliFollowingFeedPage(
+    val videos: List<BiliVideoItem>,
+    val nextOffset: String?,
+    val hasMore: Boolean,
+)
+
 data class BiliHotSearchItem(
     val keyword: String,
     val showName: String,
@@ -186,6 +222,34 @@ data class BiliSearchUserItem(
     val sign: String,
     val fans: Long,
     val level: Int,
+)
+
+data class BiliHistoryCursor(
+    val max: Long,
+    val viewAt: Long,
+    val business: String,
+    val ps: Int,
+) {
+    val hasMore: Boolean get() = ps > 0 && max > 0L
+}
+
+data class BiliHistoryItem(
+    val kid: String,
+    val bvid: String,
+    val aid: Long,
+    val cid: Long,
+    val title: String,
+    val coverUrl: String,
+    val authorName: String,
+    val authorMid: Long,
+    val viewAtSeconds: Long,
+    val progressSeconds: Int,
+    val durationSeconds: Int,
+)
+
+data class BiliHistoryPage(
+    val items: List<BiliHistoryItem>,
+    val cursor: BiliHistoryCursor?,
 )
 
 data class BiliSearchResultPage<T>(

@@ -13,13 +13,16 @@ import org.json.JSONObject
 
 class BilibiliWebSession(context: Context) {
     val webView: WebView = WebView(context)
+    private val viewportCoordinator = MobileWebViewportCoordinator()
 
     init {
         configureWebView()
         webView.loadUrl(BilibiliEndpoints.HOME)
     }
 
-    fun openLogin() {
+    fun openLogin(forceReload: Boolean = false) {
+        val activeUrl = webView.url.orEmpty()
+        if (!forceReload && activeUrl.contains("passport.bilibili.com")) return
         webView.loadUrl(BilibiliEndpoints.PASSPORT_LOGIN)
     }
 
@@ -62,12 +65,60 @@ class BilibiliWebSession(context: Context) {
             domStorageEnabled = true
             databaseEnabled = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            loadsImagesAutomatically = true
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            setSupportZoom(true)
+            builtInZoomControls = true
+            displayZoomControls = false
+            textZoom = 100
             userAgentString = BilibiliEndpoints.USER_AGENT
         }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                if (!viewportCoordinator.shouldFitOnPageFinished(url)) return
+                view?.fitMobileWebViewport(scrollToTop = true)
+            }
         }
     }
+}
+
+private class MobileWebViewportCoordinator {
+    private var lastFittedUrl: String? = null
+
+    fun shouldFitOnPageFinished(url: String?): Boolean {
+        val normalized = url.orEmpty()
+        if (normalized == lastFittedUrl) return false
+        lastFittedUrl = normalized
+        return true
+    }
+}
+
+private fun WebView.fitMobileWebViewport(scrollToTop: Boolean = true) {
+    evaluateJavascript(
+        """
+        (function() {
+            var meta = document.querySelector('meta[name="viewport"]');
+            if (!meta) {
+                meta = document.createElement('meta');
+                meta.name = 'viewport';
+                document.head.appendChild(meta);
+            }
+            meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
+            var width = window.innerWidth + 'px';
+            var height = window.innerHeight + 'px';
+            document.documentElement.style.width = width;
+            document.documentElement.style.height = height;
+            document.body.style.width = width;
+            document.body.style.minHeight = height;
+            document.body.style.margin = '0';
+            ${if (scrollToTop) "window.scrollTo(0, 0);" else ""}
+        })();
+        """.trimIndent(),
+        null,
+    )
 }

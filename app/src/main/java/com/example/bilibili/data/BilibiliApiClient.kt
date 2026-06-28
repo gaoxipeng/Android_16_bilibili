@@ -24,26 +24,56 @@ class BilibiliApiClient {
     private var guestBuvid3: String? = null
     private var guestBuvid4: String? = null
 
-    suspend fun getHomeRecommend(credential: BilibiliCredential? = null): List<BiliVideoItem> =
+    suspend fun getHomeRecommend(
+        credential: BilibiliCredential? = null,
+        freshIdx: Int = 1,
+        fetchRow: Int = 1,
+        lastShowList: String = "",
+        pageSize: Int = 30,
+    ): BiliHomeRecommendPage =
         withContext(Dispatchers.IO) {
+            val params = buildMap {
+                put("fresh_type", "4")
+                put("ps", pageSize.coerceIn(1, 30).toString())
+                put("fresh_idx", freshIdx.toString())
+                put("fresh_idx_1h", freshIdx.toString())
+                put("brush", freshIdx.toString())
+                put("fetch_row", fetchRow.toString())
+                put("web_location", "1430650")
+                if (lastShowList.isNotBlank()) {
+                    put("last_showlist", lastShowList)
+                }
+            }
             getWbiJsonOnCurrentThread(
                 url = BilibiliEndpoints.HOME_RECOMMEND,
-                params = emptyMap(),
+                params = params,
                 credential = credential,
-            ).let(BilibiliJsonParser::parseVideosFromFeed)
+            ).let { json ->
+                BilibiliJsonParser.parseHomeRecommendPage(json, freshIdx, fetchRow)
+            }
         }
 
-    suspend fun getFollowingVideos(credential: BilibiliCredential): List<BiliVideoItem> =
+    suspend fun getFollowingVideos(
+        credential: BilibiliCredential,
+        offset: String? = null,
+    ): BiliFollowingFeedPage =
         withContext(Dispatchers.IO) {
+            val params = buildMap {
+                put("timezone_offset", "-480")
+                put("type", "video")
+                put("platform", "web")
+                put("web_location", "333.1365")
+                put(
+                    "features",
+                    "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete",
+                )
+                if (!offset.isNullOrBlank()) {
+                    put("offset", offset)
+                }
+            }
             getJson(
                 url = BilibiliEndpoints.FOLLOWING_FEED,
-                params = mapOf(
-                    "timezone_offset" to "-480",
-                    "type" to "video",
-                    "platform" to "web",
-                    "web_location" to "333.1365",
-                    "features" to "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete",
-                ),
+                params = params,
                 credential = credential,
             ).let(BilibiliJsonParser::parseFollowingVideoFeed)
         }
@@ -91,6 +121,62 @@ class BilibiliApiClient {
                 credential = credential,
             ).let(BilibiliJsonParser::parseOnlineCount)
         }.getOrDefault(0L)
+    }
+
+    suspend fun getDanmakuList(
+        cid: Long,
+        durationSeconds: Int = 0,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): List<BiliDanmakuItem> = withContext(Dispatchers.IO) {
+        if (cid <= 0L) return@withContext emptyList()
+        val segmentCount = when {
+            durationSeconds > 0 -> ((durationSeconds + 359) / 360).coerceIn(1, 40)
+            else -> 12
+        }
+        val all = mutableListOf<BiliDanmakuItem>()
+        for (segment in 1..segmentCount) {
+            val parsed = runCatching {
+                val bytes = getBytes(
+                    url = BilibiliEndpoints.DANMAKU_SEG,
+                    params = mapOf(
+                        "type" to "1",
+                        "oid" to cid.toString(),
+                        "segment_index" to segment.toString(),
+                    ),
+                    credential = credential,
+                    referer = referer,
+                )
+                BilibiliDanmakuParser.parseProtobufSeg(bytes)
+            }.getOrDefault(emptyList())
+            if (parsed.isEmpty()) break
+            all += parsed
+        }
+        if (all.isNotEmpty()) {
+            return@withContext all.sortedBy { it.timeMs }
+        }
+        runCatching {
+            val bytes = getBytes(
+                url = BilibiliEndpoints.DANMAKU_LIST,
+                params = mapOf(
+                    "oid" to cid.toString(),
+                    "type" to "1",
+                ),
+                credential = credential,
+                referer = referer,
+            )
+            BilibiliDanmakuParser.parseListSo(bytes)
+        }.getOrElse {
+            runCatching {
+                val bytes = getBytes(
+                    url = "${BilibiliEndpoints.DANMAKU_XML}/$cid.xml",
+                    params = emptyMap(),
+                    credential = credential,
+                    referer = referer,
+                )
+                BilibiliDanmakuParser.parseListSo(bytes)
+            }.getOrDefault(emptyList())
+        }.sortedBy { it.timeMs }
     }
 
     suspend fun getUserNavnum(mid: Long, credential: BilibiliCredential? = null): Long =
@@ -439,6 +525,48 @@ class BilibiliApiClient {
         }.getOrDefault(emptyList())
     }
 
+    suspend fun getWatchHistory(
+        credential: BilibiliCredential,
+        max: Long = 0L,
+        viewAt: Long = 0L,
+        business: String = "",
+        pageSize: Int = 20,
+    ): BiliHistoryPage = withContext(Dispatchers.IO) {
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.HISTORY_CURSOR,
+                params = buildMap {
+                    put("max", max.toString())
+                    put("view_at", viewAt.toString())
+                    put("business", business)
+                    put("type", "archive")
+                    put("ps", pageSize.coerceIn(1, 30).toString())
+                },
+                credential = credential,
+                referer = "https://www.bilibili.com/account/history",
+            ).let(BilibiliJsonParser::parseWatchHistoryPage)
+        }.getOrDefault(BiliHistoryPage(emptyList(), null))
+    }
+
+    suspend fun deleteWatchHistory(
+        kid: String,
+        credential: BilibiliCredential,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (kid.isBlank() || credential.biliJct.isBlank()) return@withContext false
+        runCatching {
+            postForm(
+                url = BilibiliEndpoints.HISTORY_DELETE,
+                form = mapOf(
+                    "kid" to kid,
+                    "csrf" to credential.biliJct,
+                ),
+                credential = credential,
+                referer = "https://www.bilibili.com/account/history",
+            )
+            true
+        }.getOrDefault(false)
+    }
+
     suspend fun getLiveHotRank(): List<BiliLiveRoom> =
         withContext(Dispatchers.IO) {
             getJson(BilibiliEndpoints.LIVE_HOT_RANK, emptyMap())
@@ -573,6 +701,32 @@ class BilibiliApiClient {
             return runCatching { JSONObject(body) }.getOrElse {
                 error("响应解析失败")
             }
+        }
+    }
+
+    private suspend fun getBytes(
+        url: String,
+        params: Map<String, String>,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): ByteArray {
+        val query = params.entries.joinToString("&") { (key, value) ->
+            "${encode(key)}=${encode(value)}"
+        }
+        val fullUrl = if (query.isBlank()) url else "$url?$query"
+        val requestBuilder = Request.Builder()
+            .url(fullUrl)
+            .header("User-Agent", BilibiliEndpoints.USER_AGENT)
+            .header("Referer", referer)
+        buildCookieHeader(credential)?.let { cookie ->
+            requestBuilder.header("Cookie", cookie)
+        }
+        client.newCall(requestBuilder.build()).execute().use { response ->
+            val body = response.body?.bytes() ?: ByteArray(0)
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}")
+            }
+            return body
         }
     }
 

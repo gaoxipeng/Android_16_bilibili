@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,6 +44,8 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 private val VideoOverlayLiquidBlurRadius = 14.dp
 private val VideoOverlayAuthorColor = Color(0xFFFFA640)
+private val VideoOverlayBorderWidth = 0.5.dp
+private val VideoOverlayBorderColor = Color(0x80999999)
 
 @Composable
 fun VideoFeedCard(
@@ -267,8 +271,7 @@ private fun VideoFeedOverlayCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = video.authorName,
+                    Row(
                         modifier = Modifier
                             .weight(1f)
                             .clickable(enabled = video.authorMid > 0L) {
@@ -278,11 +281,19 @@ private fun VideoFeedOverlayCard(
                                     openAuthorSpace(context, video.authorMid)
                                 }
                             },
-                        color = VideoOverlayAuthorColor,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        UpAuthorBadge(color = VideoOverlayAuthorColor)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = video.authorName,
+                            modifier = Modifier.weight(1f),
+                            color = VideoOverlayAuthorColor,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         text = "${formatCount(video.viewCount)}播放",
                         modifier = Modifier.padding(start = 8.dp),
@@ -310,6 +321,9 @@ private fun DurationLiquidCapsule(
         tint = tint,
         pill = true,
         blurRadius = VideoOverlayLiquidBlurRadius,
+        enableEdgeHighlight = false,
+        borderWidth = VideoOverlayBorderWidth,
+        borderColor = VideoOverlayBorderColor,
     ) {
         Text(
             text = formatDuration(seconds),
@@ -333,6 +347,9 @@ private fun VideoMetaLiquidCapsule(
         tint = tint,
         cornerRadius = 14.dp,
         blurRadius = VideoOverlayLiquidBlurRadius,
+        enableEdgeHighlight = false,
+        borderWidth = VideoOverlayBorderWidth,
+        borderColor = VideoOverlayBorderColor,
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),

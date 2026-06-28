@@ -46,6 +46,8 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlin.math.abs
 import kotlin.math.hypot
 
+private const val VideoPeekLongPressTimeoutMs = 600L
+
 @Composable
 fun InlineVideoCard(
     video: BiliVideoItem,
@@ -169,7 +171,7 @@ fun InlineVideoCard(
                     ensurePlayStreamState.value?.invoke()
                     var cancelledByMoveBeforeLongPress = false
                     var releasedBeforeLongPress = false
-                    val longPressed = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    val longPressed = withTimeoutOrNull(VideoPeekLongPressTimeoutMs) {
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id }

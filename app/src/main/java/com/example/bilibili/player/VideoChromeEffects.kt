@@ -4,10 +4,28 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+
+@Composable
+fun StatusBarIconsEffect(darkIcons: Boolean) {
+    val context = LocalContext.current
+    val activity = context as? Activity ?: return
+    val window = activity.window
+    val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+    DisposableEffect(activity) {
+        val previousLightStatusBars = insetsController.isAppearanceLightStatusBars
+        onDispose {
+            insetsController.isAppearanceLightStatusBars = previousLightStatusBars
+        }
+    }
+    SideEffect {
+        insetsController.isAppearanceLightStatusBars = darkIcons
+    }
+}
 
 @Composable
 fun LightContentStatusBarEffect(enabled: Boolean = true) {

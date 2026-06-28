@@ -9,6 +9,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +32,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,13 +47,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.ui.components.ObserveListNearEnd
 import com.example.bilibili.ui.components.VideoFeedCard
+import com.example.bilibili.ui.BindFeedTabReselectEffect
+import com.example.bilibili.ui.LocalFeedTabForReselect
+import com.example.bilibili.ui.LocalFeedTabReselectController
+import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.liquidglass.SurfaceLiquidCapsule
 import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.flow.collectLatest
@@ -60,6 +71,9 @@ internal val HomeSearchBarBottomGap = 8.dp
 internal val HomeSearchBarHeight = 40.dp
 internal val HomeSearchBarTopGap = 8.dp
 internal val HomeSearchBarHorizontalInset = 12.dp
+internal val HomeSearchBarBorderWidth = 0.5.dp
+internal val HomeSearchBarBorderColor = Color(0x80999999)
+internal val HomeSearchBarBorderColorOnSurface = Color(0xFFBBBBBB)
 internal val HomeSearchBarReservedHeight =
     HomeSearchBarTopGap + HomeSearchBarHeight + HomeSearchBarBottomGap
 
@@ -71,6 +85,7 @@ fun HomeScreen(
     loading: Boolean,
     error: String?,
     onRefresh: () -> Unit,
+    onPullRefresh: () -> Unit = onRefresh,
     onVideoClick: (BiliVideoItem) -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
     onAuthorClick: (Long) -> Unit = {},
@@ -79,10 +94,29 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
     emptyHint: String? = null,
     onSearchVisibleChange: (Boolean) -> Unit = {},
+    loadingMore: Boolean = false,
+    hasMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
+    showSearchBar: Boolean = false,
+    onSearchClick: () -> Unit = {},
+    pullRefreshState: PullToRefreshState = rememberPullToRefreshState(),
+    showEmbeddedPullRefreshIndicator: Boolean = true,
 ) {
     val listState = rememberLazyListState()
     var showSearch by remember { mutableStateOf(true) }
     var previousScrollKey by remember { mutableIntStateOf(0) }
+    val feedTab = LocalFeedTabForReselect.current
+    val feedTabReselectController = LocalFeedTabReselectController.current
+
+    if (feedTab != null && feedTabReselectController != null) {
+        BindFeedTabReselectEffect(
+            tab = feedTab,
+            controller = feedTabReselectController,
+            listState = listState,
+            onRefresh = onPullRefresh,
+            onScrolledToTop = { showSearch = true },
+        )
+    }
 
     LaunchedEffect(showSearch) {
         onSearchVisibleChange(showSearch)
@@ -108,51 +142,96 @@ fun HomeScreen(
             }
     }
 
+    ObserveListNearEnd(
+        listState = listState,
+        enabled = hasMore && !loading && !loadingMore && videos.isNotEmpty(),
+        onNearEnd = onLoadMore,
+    )
+
     PullToRefreshBox(
         isRefreshing = loading,
-        onRefresh = onRefresh,
+        onRefresh = onPullRefresh,
+        state = pullRefreshState,
+        indicator = {
+            if (showEmbeddedPullRefreshIndicator) {
+                PullToRefreshDefaults.Indicator(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .zIndex(2f),
+                    isRefreshing = loading,
+                    state = pullRefreshState,
+                )
+            }
+        },
         modifier = modifier.fillMaxSize(),
     ) {
-        when {
-            error != null && videos.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(error, color = MaterialTheme.colorScheme.error)
-                }
-            }
-            videos.isEmpty() && loading -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-            videos.isEmpty() && !loading -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = emptyHint ?: "暂无内容",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            else -> {
-                LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(
-                        top = contentPadding.calculateTopPadding() + HomeSearchBarReservedHeight,
-                        bottom = contentPadding.calculateBottomPadding() + 88.dp,
-                        start = 12.dp,
-                        end = 12.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(videos, key = { it.bvid }) { video ->
-                        VideoFeedCard(
-                            video = video,
-                            playStream = playUrls[video.bvid],
-                            coordinator = coordinator,
-                            onClick = { onVideoClick(video) },
-                            onEnsurePlayStream = { onEnsurePlayStream(video) },
-                            onAuthorClick = onAuthorClick,
-                            overlayMetaOnCover = true,
-                        )
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val listContentHeight = maxHeight
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    top = contentPadding.calculateTopPadding() + HomeSearchBarReservedHeight,
+                    bottom = contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve,
+                    start = 12.dp,
+                    end = 12.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when {
+                    error != null && videos.isEmpty() -> {
+                        item(key = "home-error") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(listContentHeight),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(error, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                    videos.isEmpty() -> {
+                        item(key = "home-empty") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(listContentHeight),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (!loading) {
+                                    Text(
+                                        text = emptyHint ?: "暂无内容",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        items(videos, key = { it.bvid }) { video ->
+                            VideoFeedCard(
+                                video = video,
+                                playStream = playUrls[video.bvid],
+                                coordinator = coordinator,
+                                onClick = { onVideoClick(video) },
+                                onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                onAuthorClick = onAuthorClick,
+                                overlayMetaOnCover = true,
+                            )
+                        }
+                        if (loadingMore) {
+                            item(key = "feed-loading-more") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -163,7 +242,6 @@ fun HomeScreen(
 @Composable
 fun HomeSearchCapsule(
     visible: Boolean,
-    backdrop: Backdrop,
     contentPadding: PaddingValues,
     onSearchClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -173,13 +251,14 @@ fun HomeSearchCapsule(
         enter = fadeIn(tween(160)) + slideInVertically(tween(200)) { -it / 2 },
         exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { -it / 2 },
         modifier = modifier
-            .fillMaxWidth()
             .padding(top = contentPadding.calculateTopPadding() + HomeSearchBarTopGap)
             .padding(horizontal = HomeSearchBarHorizontalInset),
     ) {
         SurfaceLiquidCapsule(
-            backdrop = backdrop,
             pill = true,
+            useMenuGlassStyle = true,
+            borderWidth = HomeSearchBarBorderWidth,
+            borderColor = HomeSearchBarBorderColor,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(HomeSearchBarHeight)
@@ -225,6 +304,9 @@ fun SearchInputCapsule(
     SurfaceLiquidCapsule(
         backdrop = backdrop,
         pill = true,
+        useMenuGlassStyle = true,
+        borderWidth = HomeSearchBarBorderWidth,
+        borderColor = HomeSearchBarBorderColorOnSurface,
         modifier = modifier
             .fillMaxWidth()
             .height(HomeSearchBarHeight),
