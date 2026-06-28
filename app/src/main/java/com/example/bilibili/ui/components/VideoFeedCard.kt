@@ -2,9 +2,6 @@ package com.example.bilibili.ui.components
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,14 +9,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,25 +27,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.player.InlineVideoCard
 import com.example.bilibili.player.LocalVideoPeekController
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.player.videoPlaybackKey
-import com.example.bilibili.ui.liquidglass.TintedLiquidCapsule
-import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
-private val VideoOverlayLiquidBlurRadius = 14.dp
+internal val VideoFeedCardCorner = 8.dp
+private val VideoFeedMetaPadding = 8.dp
+private val VideoFeedCoverOverlayPadding = 6.dp
+private val VideoFeedCoverOverlayColor = Color.White
+private val VideoFeedCoverOverlayIconSize = 10.dp
+private val VideoFeedCoverOverlayTextStyle
+    @Composable get() = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp)
+private val VideoFeedCoverScrimHeightFraction = 0.45f
 private val VideoOverlayAuthorColor = Color(0xFFFFA640)
-private val VideoOverlayBorderWidth = 0.5.dp
-private val VideoOverlayBorderColor = Color(0x80999999)
 
 @Composable
 fun VideoFeedCard(
@@ -60,7 +66,7 @@ fun VideoFeedCard(
     onAuthorClick: ((Long) -> Unit)? = null,
 ) {
     if (overlayMetaOnCover) {
-        VideoFeedOverlayCard(
+        VideoFeedGridCard(
             video = video,
             playStream = playStream,
             coordinator = coordinator,
@@ -87,6 +93,7 @@ fun VideoFeedCard(
             containerColor = MaterialTheme.colorScheme.surface,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+        onClick = onClick,
     ) {
         Column {
             if (playStream != null) {
@@ -102,24 +109,31 @@ fun VideoFeedCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(topStart = corner, topEnd = corner))
-                        .clickable(onClick = onClick),
+                        .clip(RoundedCornerShape(topStart = corner, topEnd = corner)),
                 ) {
                     RemoteImage(
                         url = video.coverUrl,
                         modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
                     )
-                    DurationBadge(
-                        seconds = video.durationSeconds,
+                    CoverBottomScrim(
+                        tint = rememberCoverAverageColor(video.coverUrl),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(VideoFeedCoverScrimHeightFraction)
+                            .align(Alignment.BottomCenter),
+                    )
+                    CoverOverlayText(
+                        text = formatDuration(video.durationSeconds),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(6.dp),
+                            .padding(VideoFeedCoverOverlayPadding),
                     )
                 }
             }
             Column(
                 Modifier
-                    .clickable(onClick = onClick)
+                    .fillMaxWidth()
                     .padding(horizontal = contentPadding, vertical = contentPadding),
             ) {
                 Text(
@@ -145,36 +159,14 @@ fun VideoFeedCard(
                         maxLines = 1,
                     )
                 } else {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text = video.authorName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = "${formatCount(video.viewCount)}播放 · ${formatCount(video.danmakuCount)}弹幕",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (video.description.isNotBlank()) {
-                        Text(
-                            text = video.description,
-                            modifier = Modifier.padding(top = 6.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                    Text(
+                        text = video.authorName,
+                        modifier = Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -182,7 +174,7 @@ fun VideoFeedCard(
 }
 
 @Composable
-private fun VideoFeedOverlayCard(
+private fun VideoFeedGridCard(
     video: BiliVideoItem,
     playStream: BiliPlayStream?,
     coordinator: VideoPlaybackCoordinator,
@@ -192,114 +184,108 @@ private fun VideoFeedOverlayCard(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val corner = 14.dp
-    val shape = RoundedCornerShape(corner)
+    val shape = RoundedCornerShape(VideoFeedCardCorner)
     val cardBackdrop = rememberLayerBackdrop()
     val coverTint = rememberCoverAverageColor(video.coverUrl)
-    val overlayTextColor = remember(coverTint) { coverTint.contrastingOverlayTextColor() }
-    val overlaySubtextColor = overlayTextColor.copy(alpha = 0.88f)
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val metaBackground = remember(coverTint, surfaceColor) {
+        coverTint.softenedMetaBackground(surfaceColor)
+    }
+    val metaTextColor = remember(metaBackground) { metaBackground.contrastingOverlayTextColor() }
     val playbackKey = videoPlaybackKey(video.bvid)
     val videoPeekController = LocalVideoPeekController.current
     val isVideoPeekActive = videoPeekController.activeRequest?.video?.bvid == video.bvid
-    val showMetaOverlay = !isVideoPeekActive &&
-        coordinator.activeKey != playbackKey &&
+    val showCoverOverlay = !isVideoPeekActive &&
         coordinator.fullscreenKey != playbackKey &&
         coordinator.peekPlaybackKey != playbackKey
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(16f / 9f)
-            .clip(shape),
+    ElevatedCard(
+        modifier = modifier.fillMaxWidth(),
+        shape = shape,
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp),
+        onClick = onClick,
     ) {
-        InlineVideoCard(
-            video = video,
-            playStream = playStream,
-            coordinator = coordinator,
-            modifier = Modifier.fillMaxSize(),
-            cornerRadius = corner,
-            sharedBackdrop = cardBackdrop,
-            roundAllCorners = true,
-            showDurationBadge = false,
-            enforceAspectRatio = false,
-            onEnsurePlayStream = onEnsurePlayStream,
-            currentPlayStream = { playStream },
-            onCardClick = onClick,
-        )
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f),
+            ) {
+                InlineVideoCard(
+                    video = video,
+                    playStream = playStream,
+                    coordinator = coordinator,
+                    modifier = Modifier.fillMaxSize(),
+                    cornerRadius = VideoFeedCardCorner,
+                    sharedBackdrop = cardBackdrop,
+                    roundAllCorners = false,
+                    showDurationBadge = false,
+                    enforceAspectRatio = false,
+                    onEnsurePlayStream = onEnsurePlayStream,
+                    currentPlayStream = { playStream },
+                    onCardClick = onClick,
+                )
 
-        AnimatedVisibility(
-            visible = showMetaOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(10.dp),
-        ) {
-            DurationLiquidCapsule(
-                seconds = video.durationSeconds,
-                backdrop = cardBackdrop,
-                tint = coverTint,
-                textColor = overlayTextColor,
-            )
-        }
+                if (showCoverOverlay) {
+                    CoverBottomScrim(
+                        tint = coverTint,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(VideoFeedCoverScrimHeightFraction)
+                            .align(Alignment.BottomCenter),
+                    )
+                    CoverVideoStatsRow(
+                        viewCount = video.viewCount,
+                        danmakuCount = video.danmakuCount,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(VideoFeedCoverOverlayPadding),
+                    )
+                    CoverOverlayText(
+                        text = formatDuration(video.durationSeconds),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(VideoFeedCoverOverlayPadding),
+                    )
+                }
+            }
 
-        AnimatedVisibility(
-            visible = showMetaOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .padding(10.dp),
-        ) {
-            VideoMetaLiquidCapsule(
-                backdrop = cardBackdrop,
-                tint = coverTint,
-                modifier = Modifier.fillMaxWidth(),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(metaBackground)
+                    .padding(VideoFeedMetaPadding),
             ) {
                 Text(
                     text = video.title,
-                    color = overlayTextColor,
                     style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    color = metaTextColor,
                 )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(top = 4.dp)
+                        .clickable(enabled = video.authorMid > 0L) {
+                            if (onAuthorClick != null) {
+                                onAuthorClick(video.authorMid)
+                            } else {
+                                openAuthorSpace(context, video.authorMid)
+                            }
+                        },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable(enabled = video.authorMid > 0L) {
-                                if (onAuthorClick != null) {
-                                    onAuthorClick(video.authorMid)
-                                } else {
-                                    openAuthorSpace(context, video.authorMid)
-                                }
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        UpAuthorBadge(color = VideoOverlayAuthorColor)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = video.authorName,
-                            modifier = Modifier.weight(1f),
-                            color = VideoOverlayAuthorColor,
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                    UpAuthorBadge(color = VideoOverlayAuthorColor)
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        text = "${formatCount(video.viewCount)}播放",
-                        modifier = Modifier.padding(start = 8.dp),
-                        color = overlaySubtextColor,
+                        text = video.authorName,
+                        modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.labelMedium,
+                        color = VideoOverlayAuthorColor,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -308,65 +294,88 @@ private fun VideoFeedOverlayCard(
 }
 
 @Composable
-private fun DurationLiquidCapsule(
-    seconds: Int,
-    backdrop: Backdrop,
-    tint: Color,
-    textColor: Color,
+private fun CoverVideoStatsRow(
+    viewCount: Long,
+    danmakuCount: Long,
     modifier: Modifier = Modifier,
 ) {
-    TintedLiquidCapsule(
+    Row(
         modifier = modifier,
-        backdrop = backdrop,
-        tint = tint,
-        pill = true,
-        blurRadius = VideoOverlayLiquidBlurRadius,
-        enableEdgeHighlight = false,
-        borderWidth = VideoOverlayBorderWidth,
-        borderColor = VideoOverlayBorderColor,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = formatDuration(seconds),
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            color = textColor,
-            style = MaterialTheme.typography.labelMedium,
+        CoverOverlayStat(
+            icon = BiliVideoPlayCountIcon,
+            value = formatCount(viewCount),
+        )
+        CoverOverlayStat(
+            icon = BiliVideoDanmakuCountIcon,
+            value = formatCount(danmakuCount),
         )
     }
 }
 
 @Composable
-private fun VideoMetaLiquidCapsule(
-    backdrop: Backdrop,
-    tint: Color,
+private fun CoverOverlayStat(
+    icon: ImageVector,
+    value: String,
     modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
-    TintedLiquidCapsule(
+    Row(
         modifier = modifier,
-        backdrop = backdrop,
-        tint = tint,
-        cornerRadius = 14.dp,
-        blurRadius = VideoOverlayLiquidBlurRadius,
-        enableEdgeHighlight = false,
-        borderWidth = VideoOverlayBorderWidth,
-        borderColor = VideoOverlayBorderColor,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            content = content,
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(VideoFeedCoverOverlayIconSize),
+            tint = VideoFeedCoverOverlayColor,
         )
+        CoverOverlayText(text = value)
     }
 }
 
 @Composable
-private fun DurationBadge(seconds: Int, modifier: Modifier = Modifier) {
+private fun CoverBottomScrim(
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    val scrimColor = remember(tint) { tint.coverBottomScrimColor() }
+    Box(
+        modifier = modifier.background(
+            Brush.verticalGradient(
+                colorStops = arrayOf(
+                    0f to Color.Transparent,
+                    0.45f to scrimColor.copy(alpha = 0.28f),
+                    1f to scrimColor.copy(alpha = 0.82f),
+                ),
+            ),
+        ),
+    )
+}
+
+@Composable
+private fun CoverOverlayText(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
     Text(
-        text = formatDuration(seconds),
-        modifier = modifier
-            .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        color = Color.White,
-        style = MaterialTheme.typography.labelSmall,
+        text = text,
+        modifier = modifier,
+        color = VideoFeedCoverOverlayColor,
+        style = VideoFeedCoverOverlayTextStyle,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+private fun Color.coverBottomScrimColor(): Color {
+    val darken = 0.26f
+    return Color(
+        red = red * darken + 0.03f,
+        green = green * darken + 0.03f,
+        blue = blue * darken + 0.03f,
     )
 }
 

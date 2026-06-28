@@ -1,6 +1,8 @@
 package com.example.bilibili.ui
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -54,6 +56,9 @@ internal fun rememberFeedTabReselectController(): FeedTabReselectController =
 internal fun LazyListState.isScrolledToTop(): Boolean =
     firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0
 
+internal fun LazyGridState.isScrolledToTop(): Boolean =
+    firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0
+
 @Composable
 internal fun BindFeedTabReselectEffect(
     tab: MainTab,
@@ -69,6 +74,33 @@ internal fun BindFeedTabReselectEffect(
                 isAtTop = { listState.isScrolledToTop() },
                 scrollToTop = {
                     listState.animateScrollToItem(0)
+                    onScrolledToTop()
+                },
+                refresh = onRefresh,
+            ),
+        )
+        onDispose { controller.unregister(tab) }
+    }
+}
+
+internal fun LazyStaggeredGridState.isScrolledToTop(): Boolean =
+    firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0
+
+@Composable
+internal fun BindFeedTabReselectEffect(
+    tab: MainTab,
+    controller: FeedTabReselectController,
+    staggeredGridState: LazyStaggeredGridState,
+    onRefresh: () -> Unit,
+    onScrolledToTop: () -> Unit = {},
+) {
+    DisposableEffect(tab, controller, staggeredGridState, onRefresh, onScrolledToTop) {
+        controller.register(
+            tab,
+            FeedTabReselectHandler(
+                isAtTop = { staggeredGridState.isScrolledToTop() },
+                scrollToTop = {
+                    staggeredGridState.animateScrollToItem(0)
                     onScrolledToTop()
                 },
                 refresh = onRefresh,

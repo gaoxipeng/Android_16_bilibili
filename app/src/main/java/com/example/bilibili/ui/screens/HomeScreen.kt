@@ -17,9 +17,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -55,7 +57,7 @@ import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.player.VideoPlaybackCoordinator
-import com.example.bilibili.ui.components.ObserveListNearEnd
+import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
 import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.BindFeedTabReselectEffect
 import com.example.bilibili.ui.LocalFeedTabForReselect
@@ -76,6 +78,9 @@ internal val HomeSearchBarBorderColor = Color(0x80999999)
 internal val HomeSearchBarBorderColorOnSurface = Color(0xFFBBBBBB)
 internal val HomeSearchBarReservedHeight =
     HomeSearchBarTopGap + HomeSearchBarHeight + HomeSearchBarBottomGap
+
+internal val HomeFeedGridSpacing = 6.dp
+internal val HomeFeedGridHorizontalPadding = 10.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,7 +107,7 @@ fun HomeScreen(
     pullRefreshState: PullToRefreshState = rememberPullToRefreshState(),
     showEmbeddedPullRefreshIndicator: Boolean = true,
 ) {
-    val listState = rememberLazyListState()
+    val staggeredGridState = rememberLazyStaggeredGridState()
     var showSearch by remember { mutableStateOf(true) }
     var previousScrollKey by remember { mutableIntStateOf(0) }
     val feedTab = LocalFeedTabForReselect.current
@@ -112,7 +117,7 @@ fun HomeScreen(
         BindFeedTabReselectEffect(
             tab = feedTab,
             controller = feedTabReselectController,
-            listState = listState,
+            staggeredGridState = staggeredGridState,
             onRefresh = onPullRefresh,
             onScrolledToTop = { showSearch = true },
         )
@@ -122,9 +127,9 @@ fun HomeScreen(
         onSearchVisibleChange(showSearch)
     }
 
-    LaunchedEffect(listState) {
+    LaunchedEffect(staggeredGridState) {
         snapshotFlow {
-            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            staggeredGridState.firstVisibleItemIndex to staggeredGridState.firstVisibleItemScrollOffset
         }
             .distinctUntilChanged()
             .map { (index, offset) -> index * 100_000 + offset }
@@ -134,7 +139,8 @@ fun HomeScreen(
 
                 // 向上滑（内容上移）一段距离后隐藏；向下滑立即显示
                 if (delta > 0) {
-                    val shouldHide = listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 240
+                    val shouldHide = staggeredGridState.firstVisibleItemIndex > 0 ||
+                        staggeredGridState.firstVisibleItemScrollOffset > 240
                     if (shouldHide) showSearch = false
                 } else if (delta < 0) {
                     showSearch = true
@@ -142,8 +148,8 @@ fun HomeScreen(
             }
     }
 
-    ObserveListNearEnd(
-        listState = listState,
+    ObserveStaggeredGridNearEnd(
+        gridState = staggeredGridState,
         enabled = hasMore && !loading && !loadingMore && videos.isNotEmpty(),
         onNearEnd = onLoadMore,
     )
@@ -167,20 +173,22 @@ fun HomeScreen(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val listContentHeight = maxHeight
-            LazyColumn(
-                state = listState,
+            LazyVerticalStaggeredGrid(
+                columns = StaggeredGridCells.Fixed(2),
+                state = staggeredGridState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     top = contentPadding.calculateTopPadding() + HomeSearchBarReservedHeight,
                     bottom = contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve,
-                    start = 12.dp,
-                    end = 12.dp,
+                    start = HomeFeedGridHorizontalPadding,
+                    end = HomeFeedGridHorizontalPadding,
                 ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                verticalItemSpacing = HomeFeedGridSpacing,
             ) {
                 when {
                     error != null && videos.isEmpty() -> {
-                        item(key = "home-error") {
+                        item(key = "home-error", span = StaggeredGridItemSpan.FullLine) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -192,7 +200,7 @@ fun HomeScreen(
                         }
                     }
                     videos.isEmpty() -> {
-                        item(key = "home-empty") {
+                        item(key = "home-empty", span = StaggeredGridItemSpan.FullLine) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -221,7 +229,7 @@ fun HomeScreen(
                             )
                         }
                         if (loadingMore) {
-                            item(key = "feed-loading-more") {
+                            item(key = "feed-loading-more", span = StaggeredGridItemSpan.FullLine) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()

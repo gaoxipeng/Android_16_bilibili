@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import coil.imageLoader
 import coil.request.ImageRequest
@@ -51,6 +52,11 @@ internal fun Color.contrastingOverlayTextColor(): Color {
     val luminance = 0.299f * red + 0.587f * green + 0.114f * blue
     return if (luminance > 0.62f) Color(0xFF1A1A1A) else Color.White
 }
+
+internal fun Color.softenedMetaBackground(
+    base: Color,
+    blendTowardBase: Float = 0.52f,
+): Color = lerp(this, base, blendTowardBase)
 
 private fun Bitmap.averageColor(): Color {
     if (width <= 0 || height <= 0) {

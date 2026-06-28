@@ -43,9 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +71,8 @@ import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.BiliCommentImageStrip
 import com.example.bilibili.ui.components.BiliCommentText
 import com.example.bilibili.ui.components.BiliUserLevelIcon
+import com.example.bilibili.ui.components.BiliVideoDanmakuCountIcon
+import com.example.bilibili.ui.components.BiliVideoPlayCountIcon
 import com.example.bilibili.ui.components.BilibiliFollowButton
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoDetailTab
@@ -871,7 +870,7 @@ private fun VideoDetailStatsSection(
             horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Icon(
-                imageVector = VideoDetailPlayCountIcon,
+                imageVector = BiliVideoPlayCountIcon,
                 contentDescription = null,
                 modifier = Modifier.size(14.dp),
                 tint = metaColor,
@@ -887,7 +886,7 @@ private fun VideoDetailStatsSection(
             horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Icon(
-                imageVector = VideoDetailDanmakuCountIcon,
+                imageVector = BiliVideoDanmakuCountIcon,
                 contentDescription = null,
                 modifier = Modifier.size(14.dp),
                 tint = metaColor,
@@ -911,44 +910,6 @@ private fun VideoDetailStatsSection(
             )
         }
     }
-}
-
-private val VideoDetailPlayCountIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "VideoDetailPlayCount",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 1024f,
-        viewportHeight = 1024f,
-    ).apply {
-        addPath(
-            fill = SolidColor(Color.Black),
-            pathData = PathParser().parsePathString("M800 128H224C134.4 128 64 198.4 64 288v448c0 89.6 70.4 160 160 160h576c89.6 0 160-70.4 160-160V288c0-89.6-70.4-160-160-160z m96 608c0 54.4-41.6 96-96 96H224c-54.4 0-96-41.6-96-96V288c0-54.4 41.6-96 96-96h576c54.4 0 96 41.6 96 96v448z").toNodes(),
-        )
-        addPath(
-            fill = SolidColor(Color.Black),
-            pathData = PathParser().parsePathString("M684.8 483.2l-256-112c-22.4-9.6-44.8 6.4-44.8 28.8v224c0 22.4 22.4 38.4 44.8 28.8l256-112c25.6-9.6 25.6-48 0-57.6z").toNodes(),
-        )
-    }.build()
-}
-
-private val VideoDetailDanmakuCountIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "VideoDetailDanmakuCount",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 1024f,
-        viewportHeight = 1024f,
-    ).apply {
-        addPath(
-            fill = SolidColor(Color.Black),
-            pathData = PathParser().parsePathString("M800 128H224C134.4 128 64 198.4 64 288v448c0 89.6 70.4 160 160 160h576c89.6 0 160-70.4 160-160V288c0-89.6-70.4-160-160-160z m96 608c0 54.4-41.6 96-96 96H224c-54.4 0-96-41.6-96-96V288c0-54.4 41.6-96 96-96h576c54.4 0 96 41.6 96 96v448z").toNodes(),
-        )
-        addPath(
-            fill = SolidColor(Color.Black),
-            pathData = PathParser().parsePathString("M240 384h64v64h-64zM368 384h384v64h-384zM432 576h352v64h-352zM304 576h64v64h-64z").toNodes(),
-        )
-    }.build()
 }
 
 @Composable

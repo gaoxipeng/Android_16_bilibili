@@ -27,9 +27,13 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -83,6 +87,8 @@ import com.example.bilibili.player.StatusBarIconsEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.ui.components.BilibiliFollowButton
 import com.example.bilibili.ui.components.BiliUserLevelIcon
+import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
+import com.example.bilibili.ui.components.ObserveListNearEnd
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.format.formatBiliCount
@@ -158,7 +164,7 @@ fun UserProfileScreen(
     var dynamicsLoadingMore by remember(mid) { mutableStateOf(false) }
     var dynamicsLoaded by remember(mid) { mutableStateOf(false) }
 
-    val postsListState = rememberLazyListState()
+    val postsStaggeredGridState = rememberLazyStaggeredGridState()
     val dynamicsListState = rememberLazyListState()
     val pagerState = rememberPagerState(
         initialPage = 0,
@@ -287,7 +293,7 @@ fun UserProfileScreen(
             }
     }
 
-    ObserveListNearEnd(postsListState) { loadMoreVideos() }
+    ObserveStaggeredGridNearEnd(postsStaggeredGridState) { loadMoreVideos() }
     ObserveListNearEnd(dynamicsListState) { loadMoreDynamics() }
 
     val tabScrollPosition by remember {
@@ -299,17 +305,20 @@ fun UserProfileScreen(
     val density = LocalDensity.current
     val collapseThresholdPx = remember(density) { with(density) { 72.dp.roundToPx() } }
     val compactBarContentHeight = 48.dp
-    val activeListState = when (pagerState.currentPage) {
-        UserProfileContentTab.Posts.ordinal -> postsListState
-        else -> dynamicsListState
-    }
     var profileHeaderHeight by remember(mid) { mutableStateOf(0.dp) }
-    val collapseProgress by remember(activeListState, collapseThresholdPx) {
+    val collapseProgress by remember(pagerState.currentPage, postsStaggeredGridState, dynamicsListState, collapseThresholdPx) {
         derivedStateOf {
-            when {
-                activeListState.firstVisibleItemIndex > 0 -> 1f
-                else -> (activeListState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
-                    .coerceIn(0f, 1f)
+            when (pagerState.currentPage) {
+                UserProfileContentTab.Posts.ordinal -> when {
+                    postsStaggeredGridState.firstVisibleItemIndex > 0 -> 1f
+                    else -> (postsStaggeredGridState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
+                        .coerceIn(0f, 1f)
+                }
+                else -> when {
+                    dynamicsListState.firstVisibleItemIndex > 0 -> 1f
+                    else -> (dynamicsListState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
+                        .coerceIn(0f, 1f)
+                }
             }
         }
     }
@@ -528,7 +537,7 @@ fun UserProfileScreen(
                                 coroutineScope.launch {
                                     when (tab) {
                                         UserProfileContentTab.Posts ->
-                                            postsListState.animateScrollToItem(0)
+                                            postsStaggeredGridState.animateScrollToItem(0)
                                         UserProfileContentTab.Dynamics ->
                                             dynamicsListState.animateScrollToItem(0)
                                     }
@@ -571,18 +580,20 @@ fun UserProfileScreen(
                         ) { page ->
                             when (UserProfileContentTab.entries[page]) {
                                 UserProfileContentTab.Posts -> {
-                                    LazyColumn(
-                                        state = postsListState,
+                                    LazyVerticalStaggeredGrid(
+                                        columns = StaggeredGridCells.Fixed(2),
+                                        state = postsStaggeredGridState,
                                         modifier = Modifier.fillMaxSize(),
                                         contentPadding = PaddingValues(
-                                            start = 12.dp,
-                                            end = 12.dp,
+                                            start = HomeFeedGridHorizontalPadding,
+                                            end = HomeFeedGridHorizontalPadding,
                                             bottom = 24.dp,
                                         ),
-                                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                                        verticalItemSpacing = HomeFeedGridSpacing,
                                     ) {
                                         if (videos.isEmpty()) {
-                                            item(key = "posts-empty") {
+                                            item(key = "posts-empty", span = StaggeredGridItemSpan.FullLine) {
                                                 ProfileEmptyState(
                                                     title = "暂无投稿",
                                                     body = "该 UP 主还没有发布视频。",
@@ -600,12 +611,12 @@ fun UserProfileScreen(
                                                 )
                                             }
                                             if (videosLoadingMore) {
-                                                item(key = "posts-loading") {
+                                                item(key = "posts-loading", span = StaggeredGridItemSpan.FullLine) {
                                                     ProfileLoadingMoreIndicator()
                                                 }
                                             }
                                             if (!videosHasMore && videos.isNotEmpty()) {
-                                                item(key = "posts-end") {
+                                                item(key = "posts-end", span = StaggeredGridItemSpan.FullLine) {
                                                     ProfileListEndHint()
                                                 }
                                             }
@@ -1298,24 +1309,4 @@ private fun ProfileListEndHint() {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-}
-
-@Composable
-private fun ObserveListNearEnd(
-    listState: LazyListState,
-    onNearEnd: () -> Unit,
-) {
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            val layoutInfo = listState.layoutInfo
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to layoutInfo.totalItemsCount
-        }
-            .distinctUntilChanged()
-            .collect { (lastVisible, total) ->
-                if (total > 0 && lastVisible >= total - 4) {
-                    onNearEnd()
-                }
-            }
-    }
 }
