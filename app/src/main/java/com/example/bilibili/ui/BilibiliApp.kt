@@ -28,7 +28,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import com.example.bilibili.data.BiliUserProfile
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliAccountStore
@@ -36,6 +35,7 @@ import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliHomeFeedStore
 import com.example.bilibili.data.CachedHomeFeed
 import com.example.bilibili.data.BilibiliPlayerPreferences
+import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.data.BilibiliWebSession
 import com.example.bilibili.data.StoredBilibiliAccount
 import com.example.bilibili.player.BilibiliVideoSurface
@@ -90,6 +90,8 @@ fun BilibiliApp() {
     val homeFeedStore = remember { BilibiliHomeFeedStore(context) }
     val cachedHomeFeed = remember { homeFeedStore.read() }
     val playerPreferences = remember { BilibiliPlayerPreferences(context) }
+    val feedLayoutStore = remember { FeedLayoutStore(context) }
+    var feedColumnCount by remember { mutableIntStateOf(feedLayoutStore.readColumnCount()) }
     val webSession = remember { BilibiliWebSession(context) }
     val coordinator = remember(playerPreferences) {
         VideoPlaybackCoordinator(
@@ -105,8 +107,6 @@ fun BilibiliApp() {
     var homeVideos by remember { mutableStateOf(cachedHomeFeed?.videos ?: emptyList()) }
     var followVideos by remember { mutableStateOf<List<BiliVideoItem>>(emptyList()) }
     var hotVideos by remember { mutableStateOf<List<BiliVideoItem>>(emptyList()) }
-    var mineProfile by remember { mutableStateOf<BiliUserProfile?>(null) }
-    var mineVideos by remember { mutableStateOf<List<BiliVideoItem>>(emptyList()) }
 
     var homeLoading by remember { mutableStateOf(false) }
     var homeLoadingMore by remember { mutableStateOf(false) }
@@ -121,12 +121,10 @@ fun BilibiliApp() {
     var followOffset by remember { mutableStateOf<String?>(null) }
 
     var hotLoading by remember { mutableStateOf(false) }
-    var mineLoading by remember { mutableStateOf(false) }
 
     var homeError by remember { mutableStateOf<String?>(null) }
     var followError by remember { mutableStateOf<String?>(null) }
     var hotError by remember { mutableStateOf<String?>(null) }
-    var mineError by remember { mutableStateOf<String?>(null) }
 
     val playUrls = remember { mutableStateMapOf<String, BiliPlayStream>() }
     var activeAccount by remember { mutableStateOf(accountStore.getActiveAccount()) }
@@ -340,22 +338,6 @@ fun BilibiliApp() {
         }
     }
 
-    fun refreshMine() {
-        val account = activeAccount ?: return
-        scope.launch {
-            mineLoading = true
-            mineError = null
-            runCatching {
-                val basic = api.getMyInfo(account.credential)
-                val mid = basic?.mid ?: account.uid.toLong()
-                val full = api.getUserInfo(mid, account.credential)
-                mineProfile = full ?: basic
-                mineVideos = api.getUserVideos(mid, credential = account.credential)
-            }.onFailure { mineError = it.message }
-            mineLoading = false
-        }
-    }
-
     fun persistLogin() {
         scope.launch {
             val credential = webSession.readCredentialFromCookies() ?: return@launch
@@ -371,7 +353,6 @@ fun BilibiliApp() {
             activeAccount = account
             api.invalidateWbiCache()
             refreshHome()
-            refreshMine()
             Toast.makeText(context, "登录成功", Toast.LENGTH_SHORT).show()
             refreshFollow()
         }
@@ -383,7 +364,6 @@ fun BilibiliApp() {
         }
         if (activeAccount != null) refreshFollow()
         refreshHot()
-        if (activeAccount != null) refreshMine()
     }
 
     LaunchedEffect(selectedTab) {
@@ -393,7 +373,7 @@ fun BilibiliApp() {
             MainTab.Following -> if (activeAccount != null && followVideos.isEmpty()) refreshFollow()
             MainTab.Hot -> if (hotVideos.isEmpty()) refreshHot()
             MainTab.History -> Unit
-            MainTab.Mine -> if (activeAccount != null && mineProfile == null) refreshMine()
+            MainTab.Mine -> Unit
         }
     }
 
@@ -444,12 +424,12 @@ fun BilibiliApp() {
         MainTab.Hot -> hotPullRefreshState
         else -> homePullRefreshState
     }
-    val fullscreenVideo = remember(fullscreenKey, detailVideo, homeVideos, followVideos, hotVideos, mineVideos) {
+    val fullscreenVideo = remember(fullscreenKey, detailVideo, homeVideos, followVideos, hotVideos) {
         val bvid = fullscreenKey?.substringAfter(":") ?: return@remember null
         when {
             detailVideo?.bvid == bvid -> detailVideo
             else -> {
-                val all = homeVideos + followVideos + hotVideos + mineVideos
+                val all = homeVideos + followVideos + hotVideos
                 all.firstOrNull { it.bvid == bvid }
             }
         }
@@ -527,6 +507,7 @@ fun BilibiliApp() {
                     onSearchClick = ::openSearch,
                     pullRefreshState = homePullRefreshState,
                     showEmbeddedPullRefreshIndicator = false,
+                    feedColumnCount = feedColumnCount,
                     )
                 }
                 MainTab.Following -> FeedTabReselectScope(MainTab.Following, feedTabReselectController) {
@@ -557,6 +538,7 @@ fun BilibiliApp() {
                     onSearchClick = ::openSearch,
                     pullRefreshState = followPullRefreshState,
                     showEmbeddedPullRefreshIndicator = false,
+                    feedColumnCount = feedColumnCount,
                     )
                 }
                 MainTab.Hot -> FeedTabReselectScope(MainTab.Hot, feedTabReselectController) {
@@ -579,6 +561,7 @@ fun BilibiliApp() {
                     onSearchClick = ::openSearch,
                     pullRefreshState = hotPullRefreshState,
                     showEmbeddedPullRefreshIndicator = false,
+                    feedColumnCount = feedColumnCount,
                     )
                 }
                 MainTab.History -> FeedTabReselectScope(MainTab.History, feedTabReselectController) {
@@ -596,32 +579,32 @@ fun BilibiliApp() {
                     menuController = historyMenuController,
                     )
                 }
-                MainTab.Mine -> MineScreen(
-                    loggedIn = activeAccount != null,
-                    profile = mineProfile,
-                    videos = mineVideos,
-                    playUrls = playUrls,
-                    loading = mineLoading,
-                    error = mineError,
-                    onLoginClick = {
-                        showLoginSheet = true
-                    },
-                    onLogoutClick = {
-                        activeAccount = null
-                        mineProfile = null
-                        mineVideos = emptyList()
-                        followVideos = emptyList()
-                        accountStore.setActiveAccountId(null)
-                    },
-                    onRefresh = ::refreshMine,
-                    onVideoClick = { video ->
-                        scope.launch {
-                            resolvePlayUrl(video)?.let { coordinator.requestInlinePlayback(videoPlaybackKey(video.bvid)) }
-                        }
-                    },
-                    coordinator = coordinator,
-                    contentPadding = padding,
-                )
+                MainTab.Mine -> {
+                    val account = activeAccount
+                    MineScreen(
+                        loggedIn = account != null,
+                        mid = account?.uid?.toLongOrNull() ?: 0L,
+                        seedName = account?.name.orEmpty(),
+                        seedFace = account?.face.orEmpty(),
+                        api = api,
+                        credential = credential(),
+                        playUrls = playUrls,
+                        coordinator = coordinator,
+                        onLoginClick = {
+                            showLoginSheet = true
+                        },
+                        onVideoClick = { video -> openVideoDetail(video) },
+                        onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
+                        onLoginRequired = { showLoginSheet = true },
+                        contentPadding = padding,
+                        feedColumnCount = feedColumnCount,
+                        onFeedColumnCountChange = { count ->
+                            feedColumnCount = count
+                            feedLayoutStore.writeColumnCount(count)
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             }
 
@@ -671,18 +654,25 @@ fun BilibiliApp() {
                 target = visitedProfile,
                 modifier = Modifier.fillMaxSize().zIndex(95f),
             ) { target ->
+                val myMid = activeAccount?.uid?.toLongOrNull()
                 UserProfileScreen(
                     mid = target.mid,
                     seedName = target.name,
                     seedFace = target.face,
                     api = api,
                     credential = credential(),
-                    myMid = activeAccount?.uid?.toLongOrNull(),
+                    myMid = myMid,
                     playUrls = playUrls,
                     coordinator = coordinator,
                     onVideoClick = { item -> openVideoDetail(item) },
                     onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
                     onLoginRequired = { showLoginSheet = true },
+                    enableSettings = myMid != null && myMid == target.mid,
+                    feedColumnCount = feedColumnCount,
+                    onFeedColumnCountChange = { count ->
+                        feedColumnCount = count
+                        feedLayoutStore.writeColumnCount(count)
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -795,7 +785,7 @@ fun BilibiliApp() {
                     if (selectedTab in FeedTabReselectController.FEED_RESELECT_TABS) {
                         feedTabReselectController.handleReselect(selectedTab, scope)
                     } else when (selectedTab) {
-                        MainTab.Mine -> if (activeAccount != null) refreshMine() else showLoginSheet = true
+                        MainTab.Mine -> if (activeAccount == null) showLoginSheet = true
                         else -> Unit
                     }
                 },

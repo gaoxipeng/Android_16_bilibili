@@ -1,9 +1,11 @@
 package com.example.bilibili.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,8 +40,11 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -83,6 +88,7 @@ import com.example.bilibili.data.BiliUserProfile
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.player.StatusBarIconsEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.ui.components.BilibiliFollowButton
@@ -93,6 +99,7 @@ import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.format.formatBiliPublishTime
+import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.theme.BiliPink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -111,7 +118,9 @@ private val ProfileHeaderAvatarFrameSize = ProfileHeaderAvatarSize + ProfileHead
 private val ProfileHeaderCoverAspect = 2.55f
 private val ProfileHeaderCardCoverOverlap = 22.dp
 private val ProfileHeaderCardRadius = 16.dp
-private val ProfileHeaderStatsSpacing = 4.dp
+private val ProfileHeaderCardBorderWidth = 0.5.dp
+private val ProfileHeaderCardBorderColor = Color(0xFFE8E8E8)
+private val ProfileHeaderCardContentInset = 6.dp
 private val ProfileCompactAvatarSize = 32.dp
 private val ProfileCompactBarStartPadding = 16.dp
 private val ProfileCompactBarContentSpacing = 10.dp
@@ -132,9 +141,15 @@ fun UserProfileScreen(
     onEnsurePlayStream: (BiliVideoItem) -> Unit = {},
     onLoginRequired: () -> Unit,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    enableSettings: Boolean = false,
+    feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
+    onFeedColumnCountChange: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var showSettings by remember { mutableStateOf(false) }
+    val useSingleColumnPosts = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
 
     var profile by remember(mid) {
         mutableStateOf(
@@ -165,6 +180,7 @@ fun UserProfileScreen(
     var dynamicsLoaded by remember(mid) { mutableStateOf(false) }
 
     val postsStaggeredGridState = rememberLazyStaggeredGridState()
+    val postsListState = rememberLazyListState()
     val dynamicsListState = rememberLazyListState()
     val pagerState = rememberPagerState(
         initialPage = 0,
@@ -293,7 +309,11 @@ fun UserProfileScreen(
             }
     }
 
-    ObserveStaggeredGridNearEnd(postsStaggeredGridState) { loadMoreVideos() }
+    if (useSingleColumnPosts) {
+        ObserveListNearEnd(postsListState) { loadMoreVideos() }
+    } else {
+        ObserveStaggeredGridNearEnd(postsStaggeredGridState) { loadMoreVideos() }
+    }
     ObserveListNearEnd(dynamicsListState) { loadMoreDynamics() }
 
     val tabScrollPosition by remember {
@@ -306,10 +326,22 @@ fun UserProfileScreen(
     val collapseThresholdPx = remember(density) { with(density) { 72.dp.roundToPx() } }
     val compactBarContentHeight = 48.dp
     var profileHeaderHeight by remember(mid) { mutableStateOf(0.dp) }
-    val collapseProgress by remember(pagerState.currentPage, postsStaggeredGridState, dynamicsListState, collapseThresholdPx) {
+    val collapseProgress by remember(
+        pagerState.currentPage,
+        postsStaggeredGridState,
+        postsListState,
+        dynamicsListState,
+        collapseThresholdPx,
+        useSingleColumnPosts,
+    ) {
         derivedStateOf {
             when (pagerState.currentPage) {
                 UserProfileContentTab.Posts.ordinal -> when {
+                    useSingleColumnPosts -> when {
+                        postsListState.firstVisibleItemIndex > 0 -> 1f
+                        else -> (postsListState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
+                            .coerceIn(0f, 1f)
+                    }
                     postsStaggeredGridState.firstVisibleItemIndex > 0 -> 1f
                     else -> (postsStaggeredGridState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
                         .coerceIn(0f, 1f)
@@ -344,11 +376,30 @@ fun UserProfileScreen(
         animatedCollapse >= 1f -> 0.dp
         else -> Dp.Unspecified
     }
+    val tabsOverlapOffset = ProfileHeaderCardCoverOverlap * (1f - animatedCollapse)
     val showFollowButton = myMid == null || myMid != mid
+    val openSettings = if (enableSettings) {
+        { showSettings = true }
+    } else {
+        null
+    }
     var webReader by remember { mutableStateOf<BiliWebReaderState?>(null) }
     val compactHeaderVisible = animatedCollapse > 0.01f
+    val profileListBottomPadding =
+        contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve
 
     StatusBarIconsEffect(darkIcons = compactHeaderVisible)
+
+    if (showSettings) {
+        BackHandler { showSettings = false }
+        SettingsScreen(
+            feedColumnCount = feedColumnCount,
+            onFeedColumnCountChange = onFeedColumnCountChange,
+            onBack = { showSettings = false },
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
+    }
 
     Box(
         modifier = modifier
@@ -383,7 +434,7 @@ fun UserProfileScreen(
                                         .background(Color.White)
                                         .padding(
                                             start = ProfileCompactBarStartPadding,
-                                            end = if (showFollowButton) 12.dp else 4.dp,
+                                            end = if (showFollowButton) 12.dp else if (enableSettings) 4.dp else 4.dp,
                                         )
                                         .graphicsLayer { alpha = animatedCollapse },
                                     verticalAlignment = Alignment.CenterVertically,
@@ -452,6 +503,17 @@ fun UserProfileScreen(
                                             }
                                         },
                                     )
+                                } else if (enableSettings) {
+                                    IconButton(
+                                        onClick = { showSettings = true },
+                                        modifier = Modifier.size(40.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Settings,
+                                            contentDescription = "设置",
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
                                 }
                             }
                             }
@@ -491,6 +553,7 @@ fun UserProfileScreen(
                                 showFollowButton = showFollowButton,
                                 relation = relation,
                                 followLoading = followLoading,
+                                onOpenSettings = openSettings,
                                 onFollowClick = {
                                     val cred = credential ?: run {
                                         onLoginRequired()
@@ -529,96 +592,167 @@ fun UserProfileScreen(
                         }
                     }
 
-                    UserProfileContentTabs(
-                        scrollPosition = tabScrollPosition,
-                        onTabSelected = { tab ->
-                            val sameTab = tab == UserProfileContentTab.entries[pagerState.currentPage]
-                            if (sameTab) {
-                                coroutineScope.launch {
-                                    when (tab) {
-                                        UserProfileContentTab.Posts ->
-                                            postsStaggeredGridState.animateScrollToItem(0)
-                                        UserProfileContentTab.Dynamics ->
-                                            dynamicsListState.animateScrollToItem(0)
-                                    }
-                                }
-                            } else {
-                                coroutineScope.launch {
-                                    pagerState.animateScrollToPage(
-                                        UserProfileContentTab.entries.indexOf(tab),
-                                    )
-                                }
-                            }
-                        },
-                    )
-
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f),
-                    )
-
-                    loadError?.let { error ->
-                        Text(
-                            text = error,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-
-                    if (loading && videos.isEmpty() && dynamics.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .offset(y = -tabsOverlapOffset),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface),
                         ) {
-                            CircularProgressIndicator()
+                            UserProfileContentTabs(
+                                scrollPosition = tabScrollPosition,
+                                onTabSelected = { tab ->
+                                    val sameTab = tab == UserProfileContentTab.entries[pagerState.currentPage]
+                                    if (sameTab) {
+                                        coroutineScope.launch {
+                                            when (tab) {
+                                                UserProfileContentTab.Posts -> if (useSingleColumnPosts) {
+                                                    postsListState.animateScrollToItem(0)
+                                                } else {
+                                                    postsStaggeredGridState.animateScrollToItem(0)
+                                                }
+                                                UserProfileContentTab.Dynamics ->
+                                                    dynamicsListState.animateScrollToItem(0)
+                                            }
+                                        }
+                                    } else {
+                                        coroutineScope.launch {
+                                            pagerState.animateScrollToPage(
+                                                UserProfileContentTab.entries.indexOf(tab),
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+
+                            loadError?.let { error ->
+                                Text(
+                                    text = error,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
                         }
-                    } else {
-                        HorizontalPager(
-                            state = pagerState,
-                            modifier = Modifier.fillMaxWidth().weight(1f),
-                            beyondViewportPageCount = 0,
-                        ) { page ->
+
+                        if (loading && videos.isEmpty() && dynamics.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        } else {
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .background(MaterialTheme.colorScheme.background),
+                                beyondViewportPageCount = 0,
+                            ) { page ->
                             when (UserProfileContentTab.entries[page]) {
                                 UserProfileContentTab.Posts -> {
-                                    LazyVerticalStaggeredGrid(
-                                        columns = StaggeredGridCells.Fixed(2),
-                                        state = postsStaggeredGridState,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentPadding = PaddingValues(
-                                            start = HomeFeedGridHorizontalPadding,
-                                            end = HomeFeedGridHorizontalPadding,
-                                            bottom = 24.dp,
-                                        ),
-                                        horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
-                                        verticalItemSpacing = HomeFeedGridSpacing,
-                                    ) {
-                                        if (videos.isEmpty()) {
-                                            item(key = "posts-empty", span = StaggeredGridItemSpan.FullLine) {
-                                                ProfileEmptyState(
-                                                    title = "暂无投稿",
-                                                    body = "该 UP 主还没有发布视频。",
-                                                )
-                                            }
-                                        } else {
-                                            items(videos, key = { it.bvid }) { video ->
-                                                VideoFeedCard(
-                                                    video = video,
-                                                    playStream = playUrls[video.bvid],
-                                                    coordinator = coordinator,
-                                                    onClick = { onVideoClick(video) },
-                                                    onEnsurePlayStream = { onEnsurePlayStream(video) },
-                                                    overlayMetaOnCover = true,
-                                                )
-                                            }
-                                            if (videosLoadingMore) {
-                                                item(key = "posts-loading", span = StaggeredGridItemSpan.FullLine) {
-                                                    ProfileLoadingMoreIndicator()
+                                    if (useSingleColumnPosts) {
+                                        LazyColumn(
+                                            state = postsListState,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentPadding = PaddingValues(
+                                                start = HomeFeedSingleColumnHorizontalPadding,
+                                                end = HomeFeedSingleColumnHorizontalPadding,
+                                                bottom = 24.dp + profileListBottomPadding,
+                                            ),
+                                            verticalArrangement = Arrangement.spacedBy(HomeFeedSingleColumnSpacing),
+                                        ) {
+                                            if (videos.isEmpty()) {
+                                                item(key = "posts-empty") {
+                                                    ProfileEmptyState(
+                                                        title = "暂无投稿",
+                                                        body = "该 UP 主还没有发布视频。",
+                                                    )
+                                                }
+                                            } else {
+                                                items(videos, key = { it.bvid }) { video ->
+                                                    VideoFeedCard(
+                                                        video = video,
+                                                        playStream = playUrls[video.bvid],
+                                                        coordinator = coordinator,
+                                                        onClick = { onVideoClick(video) },
+                                                        onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                                        overlayMetaOnCover = true,
+                                                    )
+                                                }
+                                                if (videosLoadingMore) {
+                                                    item(key = "posts-loading") {
+                                                        ProfileLoadingMoreIndicator()
+                                                    }
+                                                }
+                                                if (!videosHasMore && videos.isNotEmpty()) {
+                                                    item(key = "posts-end") {
+                                                        ProfileListEndHint()
+                                                    }
                                                 }
                                             }
-                                            if (!videosHasMore && videos.isNotEmpty()) {
-                                                item(key = "posts-end", span = StaggeredGridItemSpan.FullLine) {
-                                                    ProfileListEndHint()
+                                            item(key = "posts-scroll-fill") {
+                                                Spacer(Modifier.fillParentMaxHeight())
+                                            }
+                                        }
+                                    } else {
+                                        LazyVerticalStaggeredGrid(
+                                            columns = StaggeredGridCells.Fixed(2),
+                                            state = postsStaggeredGridState,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentPadding = PaddingValues(
+                                                start = HomeFeedGridHorizontalPadding,
+                                                end = HomeFeedGridHorizontalPadding,
+                                                bottom = 24.dp + profileListBottomPadding,
+                                            ),
+                                            horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                                            verticalItemSpacing = HomeFeedGridSpacing,
+                                        ) {
+                                            if (videos.isEmpty()) {
+                                                item(key = "posts-empty", span = StaggeredGridItemSpan.FullLine) {
+                                                    ProfileEmptyState(
+                                                        title = "暂无投稿",
+                                                        body = "该 UP 主还没有发布视频。",
+                                                    )
                                                 }
+                                            } else {
+                                                items(videos, key = { it.bvid }) { video ->
+                                                    VideoFeedCard(
+                                                        video = video,
+                                                        playStream = playUrls[video.bvid],
+                                                        coordinator = coordinator,
+                                                        onClick = { onVideoClick(video) },
+                                                        onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                                        gridStyle = true,
+                                                    )
+                                                }
+                                                if (videosLoadingMore) {
+                                                    item(key = "posts-loading", span = StaggeredGridItemSpan.FullLine) {
+                                                        ProfileLoadingMoreIndicator()
+                                                    }
+                                                }
+                                                if (!videosHasMore && videos.isNotEmpty()) {
+                                                    item(key = "posts-end", span = StaggeredGridItemSpan.FullLine) {
+                                                        ProfileListEndHint()
+                                                    }
+                                                }
+                                            }
+                                            item(
+                                                key = "posts-scroll-fill",
+                                                span = StaggeredGridItemSpan.FullLine,
+                                            ) {
+                                                val fillHeight = profileHeaderHeight.coerceAtLeast(320.dp)
+                                                Spacer(
+                                                    Modifier
+                                                        .fillMaxWidth()
+                                                        .height(fillHeight),
+                                                )
                                             }
                                         }
                                     }
@@ -628,7 +762,9 @@ fun UserProfileScreen(
                                     LazyColumn(
                                         state = dynamicsListState,
                                         modifier = Modifier.fillMaxSize(),
-                                        contentPadding = PaddingValues(bottom = 24.dp),
+                                        contentPadding = PaddingValues(
+                                            bottom = 24.dp + profileListBottomPadding,
+                                        ),
                                     ) {
                                         if (dynamics.isEmpty()) {
                                             item(key = "dynamics-empty") {
@@ -668,8 +804,12 @@ fun UserProfileScreen(
                                                 }
                                             }
                                         }
+                                        item(key = "dynamics-scroll-fill") {
+                                            Spacer(Modifier.fillParentMaxHeight())
+                                        }
                                     }
                                 }
+                            }
                             }
                         }
                     }
@@ -704,6 +844,7 @@ private fun UserProfileHeader(
     followLoading: Boolean,
     onFollowClick: () -> Unit,
     compactVisible: Boolean,
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     val avatarExposeAboveCard = ProfileHeaderAvatarFrameSize / 3f
 
@@ -754,14 +895,36 @@ private fun UserProfileHeader(
                             )
                         }
                     }
+                    if (onOpenSettings != null && compactVisible) {
+                        IconButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .statusBarsPadding()
+                                .padding(top = 4.dp, end = 6.dp)
+                                .size(40.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Settings,
+                                contentDescription = "设置",
+                                tint = Color.White,
+                            )
+                        }
+                    }
                 }
 
+                val profileCardShape = RoundedCornerShape(ProfileHeaderCardRadius)
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .offset(y = -ProfileHeaderCardCoverOverlap)
-                        .zIndex(1f),
-                    shape = RoundedCornerShape(topStart = ProfileHeaderCardRadius, topEnd = ProfileHeaderCardRadius),
+                        .zIndex(1f)
+                        .border(
+                            width = ProfileHeaderCardBorderWidth,
+                            color = ProfileHeaderCardBorderColor,
+                            shape = profileCardShape,
+                        ),
+                    shape = profileCardShape,
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 0.dp,
                     tonalElevation = 0.dp,
@@ -772,7 +935,7 @@ private fun UserProfileHeader(
                             .padding(
                                 start = 16.dp,
                                 end = 16.dp,
-                                bottom = ProfileHeaderStatsSpacing,
+                                bottom = ProfileHeaderCardContentInset,
                             ),
                     ) {
                         Row(
@@ -788,7 +951,7 @@ private fun UserProfileHeader(
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .padding(start = 12.dp, top = 6.dp),
+                            .padding(start = 12.dp, top = ProfileHeaderCardContentInset),
                     ) {
                                 ProfileAuthorNameRow(
                                     name = profile.name.ifBlank { "UP主" },
@@ -898,11 +1061,11 @@ private fun UserProfileContentTabs(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, bottom = 2.dp),
+            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
     ) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(22.dp),
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.Bottom,
         ) {
             tabs.forEachIndexed { index, tab ->
                 val selected = index == highlightedIndex
@@ -916,7 +1079,7 @@ private fun UserProfileContentTabs(
                         }
                         .clip(RoundedCornerShape(3.dp))
                         .clickable { onTabSelected(tab) }
-                        .padding(horizontal = 2.dp, vertical = 4.dp),
+                        .padding(horizontal = 2.dp, vertical = 2.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(

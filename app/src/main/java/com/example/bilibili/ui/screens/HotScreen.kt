@@ -16,6 +16,8 @@ import com.example.bilibili.data.BiliPlayStream
 
 import com.example.bilibili.data.BiliVideoItem
 
+import com.example.bilibili.data.FeedLayoutStore
+
 import com.example.bilibili.player.VideoPlaybackCoordinator
 
 
@@ -58,6 +60,8 @@ fun HotScreen(
 
     showEmbeddedPullRefreshIndicator: Boolean = true,
 
+    feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
+
 ) {
 
     HomeScreen(
@@ -97,6 +101,8 @@ fun HotScreen(
         pullRefreshState = pullRefreshState,
 
         showEmbeddedPullRefreshIndicator = showEmbeddedPullRefreshIndicator,
+
+        feedColumnCount = feedColumnCount,
 
     )
 

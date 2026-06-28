@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -56,7 +59,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
+import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.ui.components.ObserveListNearEnd
 import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
 import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.BindFeedTabReselectEffect
@@ -81,6 +86,8 @@ internal val HomeSearchBarReservedHeight =
 
 internal val HomeFeedGridSpacing = 6.dp
 internal val HomeFeedGridHorizontalPadding = 10.dp
+internal val HomeFeedSingleColumnHorizontalPadding = 12.dp
+internal val HomeFeedSingleColumnSpacing = 12.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,7 +113,10 @@ fun HomeScreen(
     onSearchClick: () -> Unit = {},
     pullRefreshState: PullToRefreshState = rememberPullToRefreshState(),
     showEmbeddedPullRefreshIndicator: Boolean = true,
+    feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
 ) {
+    val useSingleColumn = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
+    val listState = rememberLazyListState()
     val staggeredGridState = rememberLazyStaggeredGridState()
     var showSearch by remember { mutableStateOf(true) }
     var previousScrollKey by remember { mutableIntStateOf(0) }
@@ -114,33 +124,54 @@ fun HomeScreen(
     val feedTabReselectController = LocalFeedTabReselectController.current
 
     if (feedTab != null && feedTabReselectController != null) {
-        BindFeedTabReselectEffect(
-            tab = feedTab,
-            controller = feedTabReselectController,
-            staggeredGridState = staggeredGridState,
-            onRefresh = onPullRefresh,
-            onScrolledToTop = { showSearch = true },
-        )
+        if (useSingleColumn) {
+            BindFeedTabReselectEffect(
+                tab = feedTab,
+                controller = feedTabReselectController,
+                listState = listState,
+                onRefresh = onPullRefresh,
+                onScrolledToTop = { showSearch = true },
+            )
+        } else {
+            BindFeedTabReselectEffect(
+                tab = feedTab,
+                controller = feedTabReselectController,
+                staggeredGridState = staggeredGridState,
+                onRefresh = onPullRefresh,
+                onScrolledToTop = { showSearch = true },
+            )
+        }
     }
 
     LaunchedEffect(showSearch) {
         onSearchVisibleChange(showSearch)
     }
 
-    LaunchedEffect(staggeredGridState) {
-        snapshotFlow {
-            staggeredGridState.firstVisibleItemIndex to staggeredGridState.firstVisibleItemScrollOffset
+    LaunchedEffect(useSingleColumn, listState, staggeredGridState) {
+        val scrollFlow = if (useSingleColumn) {
+            snapshotFlow {
+                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            }
+        } else {
+            snapshotFlow {
+                staggeredGridState.firstVisibleItemIndex to staggeredGridState.firstVisibleItemScrollOffset
+            }
         }
+        scrollFlow
             .distinctUntilChanged()
             .map { (index, offset) -> index * 100_000 + offset }
             .collectLatest { current ->
                 val delta = current - previousScrollKey
                 previousScrollKey = current
 
-                // 向上滑（内容上移）一段距离后隐藏；向下滑立即显示
                 if (delta > 0) {
-                    val shouldHide = staggeredGridState.firstVisibleItemIndex > 0 ||
-                        staggeredGridState.firstVisibleItemScrollOffset > 240
+                    val shouldHide = if (useSingleColumn) {
+                        listState.firstVisibleItemIndex > 0 ||
+                            listState.firstVisibleItemScrollOffset > 240
+                    } else {
+                        staggeredGridState.firstVisibleItemIndex > 0 ||
+                            staggeredGridState.firstVisibleItemScrollOffset > 240
+                    }
                     if (shouldHide) showSearch = false
                 } else if (delta < 0) {
                     showSearch = true
@@ -148,11 +179,19 @@ fun HomeScreen(
             }
     }
 
-    ObserveStaggeredGridNearEnd(
-        gridState = staggeredGridState,
-        enabled = hasMore && !loading && !loadingMore && videos.isNotEmpty(),
-        onNearEnd = onLoadMore,
-    )
+    if (useSingleColumn) {
+        ObserveListNearEnd(
+            listState = listState,
+            enabled = hasMore && !loading && !loadingMore && videos.isNotEmpty(),
+            onNearEnd = onLoadMore,
+        )
+    } else {
+        ObserveStaggeredGridNearEnd(
+            gridState = staggeredGridState,
+            enabled = hasMore && !loading && !loadingMore && videos.isNotEmpty(),
+            onNearEnd = onLoadMore,
+        )
+    }
 
     PullToRefreshBox(
         isRefreshing = loading,
@@ -173,70 +212,144 @@ fun HomeScreen(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val listContentHeight = maxHeight
-            LazyVerticalStaggeredGrid(
-                columns = StaggeredGridCells.Fixed(2),
-                state = staggeredGridState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    top = contentPadding.calculateTopPadding() + HomeSearchBarReservedHeight,
-                    bottom = contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve,
-                    start = HomeFeedGridHorizontalPadding,
-                    end = HomeFeedGridHorizontalPadding,
-                ),
-                horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
-                verticalItemSpacing = HomeFeedGridSpacing,
-            ) {
-                when {
-                    error != null && videos.isEmpty() -> {
-                        item(key = "home-error", span = StaggeredGridItemSpan.FullLine) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(listContentHeight),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(error, color = MaterialTheme.colorScheme.error)
+            val feedTopPadding = contentPadding.calculateTopPadding() + HomeSearchBarReservedHeight
+            val feedBottomPadding = contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve
+
+            if (useSingleColumn) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        top = feedTopPadding,
+                        bottom = feedBottomPadding,
+                        start = HomeFeedSingleColumnHorizontalPadding,
+                        end = HomeFeedSingleColumnHorizontalPadding,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(HomeFeedSingleColumnSpacing),
+                ) {
+                    when {
+                        error != null && videos.isEmpty() -> {
+                            item(key = "home-error") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(listContentHeight),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(error, color = MaterialTheme.colorScheme.error)
+                                }
                             }
                         }
-                    }
-                    videos.isEmpty() -> {
-                        item(key = "home-empty", span = StaggeredGridItemSpan.FullLine) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(listContentHeight),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                if (!loading) {
-                                    Text(
-                                        text = emptyHint ?: "暂无内容",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                        videos.isEmpty() -> {
+                            item(key = "home-empty") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(listContentHeight),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (!loading) {
+                                        Text(
+                                            text = emptyHint ?: "暂无内容",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            items(videos, key = { it.bvid }) { video ->
+                                VideoFeedCard(
+                                    video = video,
+                                    playStream = playUrls[video.bvid],
+                                    coordinator = coordinator,
+                                    onClick = { onVideoClick(video) },
+                                    onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                    onAuthorClick = onAuthorClick,
+                                    overlayMetaOnCover = true,
+                                )
+                            }
+                            if (loadingMore) {
+                                item(key = "feed-loading-more") {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                    }
                                 }
                             }
                         }
                     }
-                    else -> {
-                        items(videos, key = { it.bvid }) { video ->
-                            VideoFeedCard(
-                                video = video,
-                                playStream = playUrls[video.bvid],
-                                coordinator = coordinator,
-                                onClick = { onVideoClick(video) },
-                                onEnsurePlayStream = { onEnsurePlayStream(video) },
-                                onAuthorClick = onAuthorClick,
-                                overlayMetaOnCover = true,
-                            )
-                        }
-                        if (loadingMore) {
-                            item(key = "feed-loading-more", span = StaggeredGridItemSpan.FullLine) {
+                }
+            } else {
+                LazyVerticalStaggeredGrid(
+                    columns = StaggeredGridCells.Fixed(2),
+                    state = staggeredGridState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        top = feedTopPadding,
+                        bottom = feedBottomPadding,
+                        start = HomeFeedGridHorizontalPadding,
+                        end = HomeFeedGridHorizontalPadding,
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                    verticalItemSpacing = HomeFeedGridSpacing,
+                ) {
+                    when {
+                        error != null && videos.isEmpty() -> {
+                            item(key = "home-error", span = StaggeredGridItemSpan.FullLine) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 16.dp),
+                                        .height(listContentHeight),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                    Text(error, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                        videos.isEmpty() -> {
+                            item(key = "home-empty", span = StaggeredGridItemSpan.FullLine) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(listContentHeight),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (!loading) {
+                                        Text(
+                                            text = emptyHint ?: "暂无内容",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            items(videos, key = { it.bvid }) { video ->
+                                VideoFeedCard(
+                                    video = video,
+                                    playStream = playUrls[video.bvid],
+                                    coordinator = coordinator,
+                                    onClick = { onVideoClick(video) },
+                                    onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                    onAuthorClick = onAuthorClick,
+                                    gridStyle = true,
+                                )
+                            }
+                            if (loadingMore) {
+                                item(key = "feed-loading-more", span = StaggeredGridItemSpan.FullLine) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                    }
                                 }
                             }
                         }

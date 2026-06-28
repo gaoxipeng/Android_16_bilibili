@@ -44,6 +44,8 @@ import com.example.bilibili.data.BiliPlayStream
 
 import com.example.bilibili.data.BiliVideoItem
 
+import com.example.bilibili.data.FeedLayoutStore
+
 import com.example.bilibili.player.VideoPlaybackCoordinator
 
 
@@ -97,6 +99,8 @@ fun FollowingScreen(
     pullRefreshState: PullToRefreshState = rememberPullToRefreshState(),
 
     showEmbeddedPullRefreshIndicator: Boolean = true,
+
+    feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
 
 ) {
 
@@ -179,6 +183,8 @@ fun FollowingScreen(
         pullRefreshState = pullRefreshState,
 
         showEmbeddedPullRefreshIndicator = showEmbeddedPullRefreshIndicator,
+
+        feedColumnCount = feedColumnCount,
 
     )
 
