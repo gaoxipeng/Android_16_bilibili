@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,13 +39,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.bilibili.R
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 
@@ -53,9 +53,10 @@ private const val AppVersionName = "0.0.1"
 private val SettingsBottomBarInset = 96.dp
 private val SettingsPageBackground = Color.White
 private val SettingsCardBackground = Color(0xFFF5F5F5)
-private val SettingsAboutIconOuterSize = 52.dp
-private val SettingsAboutIconInnerSize = 36.dp
+private val SettingsAboutIconSize = 52.dp
 private val SettingsAboutIconCornerRadius = 14.dp
+private val SettingsAboutIconTvPadding = 13.dp
+private val BiliBrandBlue = Color(0xFF00A1D6)
 
 private data class HelpSection(
     val title: String,
@@ -104,6 +105,7 @@ private val appHelpSections = listOf(
             "「历史」页展示观看记录，按日期分组展示，支持删除单条或整组记录。",
             "「我的」页为个人主页，右上角齿轮进入设置。",
             "设置中可切换信息流单列/双列布局；弹幕偏好修改后全局生效。",
+            "后台播放声音：关闭后，应用切到后台时会暂停视频；浮窗播放时切换页面不会暂停。",
         ),
     ),
 )
@@ -112,6 +114,8 @@ private val appHelpSections = listOf(
 fun SettingsScreen(
     feedColumnCount: Int,
     onFeedColumnCountChange: (Int) -> Unit,
+    backgroundPlaybackEnabled: Boolean = false,
+    onBackgroundPlaybackChange: (Boolean) -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -149,6 +153,12 @@ fun SettingsScreen(
                         onExpandedChange = { feedLayoutExpanded = it },
                         columnCount = feedColumnCount,
                         onColumnCountChange = onFeedColumnCountChange,
+                    )
+                }
+                item {
+                    SettingsPlaybackCard(
+                        backgroundPlaybackEnabled = backgroundPlaybackEnabled,
+                        onBackgroundPlaybackChange = onBackgroundPlaybackChange,
                     )
                 }
                 item {
@@ -205,23 +215,64 @@ private fun SettingsPageShell(
 }
 
 @Composable
-private fun SettingsAppIcon(
-    modifier: Modifier = Modifier,
-    contentScale: ContentScale = ContentScale.Crop,
-) {
-    val context = LocalContext.current
-    val iconBitmap = remember {
-        context.packageManager
-            .getApplicationIcon(context.packageName)
-            .toBitmap()
-            .asImageBitmap()
+private fun SettingsAboutAppIcon(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(SettingsAboutIconCornerRadius))
+            .background(BiliBrandBlue),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.ic_launcher_image),
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(SettingsAboutIconTvPadding),
+            contentScale = ContentScale.Fit,
+        )
     }
-    Image(
-        bitmap = iconBitmap,
-        contentDescription = null,
-        modifier = modifier,
-        contentScale = contentScale,
-    )
+}
+
+@Composable
+private fun SettingsPlaybackCard(
+    backgroundPlaybackEnabled: Boolean,
+    onBackgroundPlaybackChange: (Boolean) -> Unit,
+) {
+    SettingsPlainCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = "后台播放声音",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (backgroundPlaybackEnabled) {
+                        "返回桌面时继续播放视频声音"
+                    } else {
+                        "返回桌面时自动暂停视频"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = backgroundPlaybackEnabled,
+                onCheckedChange = onBackgroundPlaybackChange,
+            )
+        }
+    }
 }
 
 @Composable
@@ -271,18 +322,9 @@ private fun SettingsAboutCard(versionName: String) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Box(
-                modifier = Modifier
-                    .size(SettingsAboutIconOuterSize)
-                    .clip(RoundedCornerShape(SettingsAboutIconCornerRadius))
-                    .background(Color(0xFF00A1D6)),
-                contentAlignment = Alignment.Center,
-            ) {
-                SettingsAppIcon(
-                    modifier = Modifier.size(SettingsAboutIconInnerSize),
-                    contentScale = ContentScale.Fit,
-                )
-            }
+            SettingsAboutAppIcon(
+                modifier = Modifier.size(SettingsAboutIconSize),
+            )
         }
     }
 }

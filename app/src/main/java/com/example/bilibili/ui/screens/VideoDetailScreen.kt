@@ -61,12 +61,15 @@ import com.example.bilibili.data.BiliCommentPicture
 import com.example.bilibili.data.BiliCommentSort
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliUserProfile
+import com.example.bilibili.data.BiliVideoPage
+import com.example.bilibili.data.BiliUgcSeason
 import com.example.bilibili.data.BiliVideoDetail
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BiliVideoRelation
 import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.player.BilibiliVideoSurface
 import com.example.bilibili.player.LightContentStatusBarEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
@@ -75,6 +78,7 @@ import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.BiliCommentImageStrip
 import com.example.bilibili.ui.components.BiliCommentText
+import com.example.bilibili.ui.components.BiliRichText
 import com.example.bilibili.ui.components.BiliUserLevelIcon
 import com.example.bilibili.ui.components.BiliVideoDanmakuCountIcon
 import com.example.bilibili.ui.components.BiliVideoPlayCountIcon
@@ -82,13 +86,22 @@ import com.example.bilibili.ui.components.BilibiliFollowButton
 import com.example.bilibili.ui.components.VideoCoinChoiceDialog
 import com.example.bilibili.ui.components.VideoDetailActionBar
 import com.example.bilibili.ui.components.RemoteImage
+import com.example.bilibili.ui.components.VideoDetailMoreMenu
 import com.example.bilibili.ui.components.VideoDetailTab
 import com.example.bilibili.ui.components.VideoDetailTabBar
+import com.example.bilibili.ui.components.VideoDetailCollectionSheet
+import com.example.bilibili.ui.components.VideoDetailMultiPartSection
+import com.example.bilibili.ui.components.VideoDetailUgcSeasonSection
+import com.example.bilibili.util.BiliLinkTarget
+import com.example.bilibili.util.ExternalUrlOpener
+import com.example.bilibili.util.BilibiliAppLauncher
 import com.example.bilibili.ui.components.imageviewer.BiliFullscreenImageViewer
 import com.example.bilibili.ui.format.formatBiliCommentTime
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.format.formatBiliPublishTime
 import com.example.bilibili.ui.theme.BiliPink
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.async
@@ -208,6 +221,14 @@ private fun findAutoLoadSubReplyRootId(
     return null
 }
 
+private sealed interface VideoCollectionSheetState {
+    data class MultiPart(val pages: List<BiliVideoPage>) : VideoCollectionSheetState
+    data class UgcSeason(
+        val season: BiliUgcSeason,
+        val highlightSectionId: Long?,
+    ) : VideoCollectionSheetState
+}
+
 @Composable
 fun VideoDetailScreen(
     seedVideo: BiliVideoItem,
@@ -218,6 +239,9 @@ fun VideoDetailScreen(
     myMid: Long?,
     onLoginRequired: () -> Unit,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
+    onSwitchVideoPart: (BiliVideoPage, BiliPlayStream) -> Unit = { _, _ -> },
+    onOpenUgcEpisode: (BiliVideoItem) -> Unit = {},
+    onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
     playbackActive: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
@@ -247,6 +271,13 @@ fun VideoDetailScreen(
     var videoActionLoading by remember(seedVideo.bvid) { mutableStateOf(false) }
     var showCoinDialog by remember(seedVideo.bvid) { mutableStateOf(false) }
     var coinMenuAnchor by remember(seedVideo.bvid) { mutableStateOf(Rect.Zero) }
+    var showMoreMenu by remember(seedVideo.bvid) { mutableStateOf(false) }
+    var moreMenuAnchor by remember(seedVideo.bvid) { mutableStateOf(Rect.Zero) }
+    var showCollectionSheet by remember(seedVideo.bvid) { mutableStateOf(false) }
+    var collectionSheetState by remember(seedVideo.bvid) { mutableStateOf<VideoCollectionSheetState?>(null) }
+    var sheetUgcSeason by remember(seedVideo.bvid) { mutableStateOf<BiliUgcSeason?>(null) }
+    var activePart by remember(seedVideo.bvid, seedVideo.cid) { mutableStateOf<BiliVideoPage?>(null) }
+    var overridePlayStream by remember(seedVideo.bvid, seedVideo.cid) { mutableStateOf<BiliPlayStream?>(null) }
 
     val pagerState = rememberPagerState(initialPage = 0) { VideoDetailTab.entries.size }
     val tabScrollPosition by remember {
@@ -326,7 +357,7 @@ fun VideoDetailScreen(
             runCatching {
                 val loadedDetail = api.getVideoDetail(seedVideo.bvid, credential)
                 if (loadedDetail != null) {
-                    detail = loadedDetail
+                    detail = api.hydrateVideoUgcSeason(loadedDetail, credential)
                     commentCount = loadedDetail.replyCount
                     onlineCount = api.getVideoOnlineCount(
                         loadedDetail.video.bvid,
@@ -382,6 +413,29 @@ fun VideoDetailScreen(
         }
     }
 
+    LaunchedEffect(showCollectionSheet, collectionSheetState, credential?.dedeUserId) {
+        val state = collectionSheetState
+        if (!showCollectionSheet || state !is VideoCollectionSheetState.UgcSeason) {
+            if (!showCollectionSheet) {
+                sheetUgcSeason = null
+            }
+            return@LaunchedEffect
+        }
+        val season = state.season
+        val authorMid = detail?.video?.authorMid ?: seedVideo.authorMid
+        sheetUgcSeason = if (season.needsHydration()) {
+            api.getUgcSeasonArchives(
+                mid = season.mid.takeIf { it > 0L } ?: authorMid,
+                seasonId = season.id,
+                credential = credential,
+            )?.let { hydrated ->
+                BilibiliJsonParser.mergeUgcSeasonArchives(season, hydrated)
+            } ?: season
+        } else {
+            season
+        }
+    }
+
     LaunchedEffect(seedVideo.bvid, credential?.dedeUserId) {
         authorCard = placeholderAuthorCard(seedVideo)
         runCatching {
@@ -419,12 +473,15 @@ fun VideoDetailScreen(
                 }
 
                 val loadedDetail = detailDeferred.await() ?: error("无法加载视频详情")
-                detail = loadedDetail
+                detail = api.hydrateVideoUgcSeason(loadedDetail, credential)
                 commentCount = loadedDetail.replyCount
-                videoRelation = api.getVideoArchiveRelation(
-                    bvid = loadedDetail.video.bvid,
-                    aid = loadedDetail.video.aid,
-                    credential = credential,
+                videoRelation = BilibiliJsonParser.mergeVideoRelations(
+                    loadedDetail.userRelation,
+                    api.getVideoArchiveRelation(
+                        bvid = loadedDetail.video.bvid,
+                        aid = loadedDetail.video.aid,
+                        credential = credential,
+                    ),
                 )
 
                 val video = loadedDetail.video
@@ -522,8 +579,103 @@ fun VideoDetailScreen(
 
     val currentDetail = detail
     val currentVideo = currentDetail?.video ?: seedVideo
-    val currentStream = playStream
+    val currentStream = overridePlayStream ?: playStream
+    val currentCid = currentStream?.cid?.takeIf { it > 0L } ?: activePart?.cid ?: seedVideo.cid
+    val displayTitle = activePart?.title?.takeIf { it.isNotBlank() } ?: currentVideo.title
+    val displayDurationSeconds = activePart?.durationSeconds?.takeIf { it > 0 }
+        ?: currentVideo.durationSeconds
+
+    val playbackTargetCid = activePart?.cid?.takeIf { it > 0L }
+        ?: seedVideo.cid.takeIf { it > 0L }
+    val streamMatchesTarget = playbackTargetCid == null ||
+        currentStream?.cid?.takeIf { it > 0L } == playbackTargetCid
+
+    LaunchedEffect(
+        seedVideo.bvid,
+        seedVideo.cid,
+        playStream?.cid,
+        overridePlayStream?.cid,
+        currentDetail?.video?.cid,
+        credential?.dedeUserId,
+    ) {
+        if (overridePlayStream?.cid?.takeIf { it > 0L } != null) return@LaunchedEffect
+        if (playStream?.cid?.takeIf { it > 0L } != null) return@LaunchedEffect
+
+        val targetCid = seedVideo.cid.takeIf { it > 0L }
+            ?: currentDetail?.video?.cid?.takeIf { it > 0L }
+            ?: return@LaunchedEffect
+
+        runCatching {
+            val stream = api.getPlayUrl(seedVideo.bvid, targetCid, credential)
+                ?: return@LaunchedEffect
+            overridePlayStream = stream.copy(
+                aid = seedVideo.aid.takeIf { it > 0L } ?: stream.aid,
+                cid = targetCid,
+            )
+            currentDetail?.pages?.find { it.cid == targetCid }?.let { activePart = it }
+            coordinator.requestInlinePlayback(playbackKey)
+        }
+    }
+
+    LaunchedEffect(currentDetail?.pages, playStream?.cid, seedVideo.cid, overridePlayStream?.cid, activePart?.cid) {
+        val pages = currentDetail?.pages.orEmpty()
+        if (pages.isEmpty()) return@LaunchedEffect
+
+        val targetCid = activePart?.cid?.takeIf { it > 0L }
+            ?: overridePlayStream?.cid?.takeIf { it > 0L }
+            ?: playStream?.cid?.takeIf { it > 0L }
+            ?: seedVideo.cid.takeIf { it > 0L }
+            ?: return@LaunchedEffect
+
+        val page = pages.find { it.cid == targetCid } ?: return@LaunchedEffect
+        if (activePart?.cid != page.cid) {
+            activePart = page
+        }
+
+        if (overridePlayStream?.cid == page.cid || playStream?.cid == page.cid) {
+            return@LaunchedEffect
+        }
+
+        runCatching {
+            val stream = api.getPlayUrl(seedVideo.bvid, page.cid, credential)
+                ?: return@LaunchedEffect
+            overridePlayStream = stream.copy(aid = seedVideo.aid, cid = page.cid)
+            coordinator.requestInlinePlayback(playbackKey)
+            onlineCount = api.getVideoOnlineCount(
+                bvid = seedVideo.bvid,
+                aid = seedVideo.aid,
+                cid = page.cid,
+                credential = credential,
+            )
+        }
+    }
+
+    fun switchToPart(page: BiliVideoPage) {
+        if (page.cid == currentCid) return
+        scope.launch {
+            runCatching {
+                val stream = api.getPlayUrl(seedVideo.bvid, page.cid, credential)
+                    ?: error("无法获取播放地址")
+                val resolvedStream = stream.copy(aid = seedVideo.aid, cid = page.cid)
+                activePart = page
+                overridePlayStream = resolvedStream
+                onSwitchVideoPart(page, resolvedStream)
+                coordinator.savePlaybackPosition(playbackKey, 0L)
+                coordinator.requestInlinePlayback(playbackKey)
+                onlineCount = api.getVideoOnlineCount(
+                    bvid = seedVideo.bvid,
+                    aid = seedVideo.aid,
+                    cid = page.cid,
+                    credential = credential,
+                )
+            }.onFailure {
+                Toast.makeText(context, it.message ?: "切换分P失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val isVideoFullscreen = coordinator.fullscreenKey == playbackKey
+    val hazeState = rememberHazeState()
 
     LightContentStatusBarEffect()
 
@@ -531,6 +683,11 @@ fun VideoDetailScreen(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
+    ) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .hazeSource(state = hazeState),
     ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -552,7 +709,7 @@ fun VideoDetailScreen(
                         .aspectRatio(16f / 9f)
                         .background(Color.Black),
                 ) {
-                    if (currentStream != null && !isVideoFullscreen) {
+                    if (currentStream != null && streamMatchesTarget && !isVideoFullscreen) {
                         BilibiliVideoSurface(
                             playbackKey = playbackKey,
                             stream = currentStream,
@@ -576,7 +733,7 @@ fun VideoDetailScreen(
                             loadDanmaku = { cid ->
                                 api.getDanmakuList(
                                     cid = cid,
-                                    durationSeconds = currentVideo.durationSeconds,
+                                    durationSeconds = displayDurationSeconds,
                                     credential = credential,
                                     referer = "https://www.bilibili.com/video/${currentVideo.bvid}",
                                 )
@@ -584,7 +741,7 @@ fun VideoDetailScreen(
                             playbackEnabled = playbackActive,
                             portraitVideo = currentVideo.isPortraitVideo,
                         )
-                    } else if (currentStream != null) {
+                    } else if (currentStream != null && streamMatchesTarget) {
                         Box(Modifier.fillMaxSize())
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -620,6 +777,10 @@ fun VideoDetailScreen(
                         pagerState.animateScrollToPage(VideoDetailTab.entries.indexOf(tab))
                     }
                 }
+            },
+            onMoreClick = { anchorBounds ->
+                moreMenuAnchor = anchorBounds
+                showMoreMenu = true
             },
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f))
@@ -696,7 +857,7 @@ fun VideoDetailScreen(
                         }
                         item(key = "intro-title") {
                             Text(
-                                text = currentVideo.title,
+                                text = displayTitle,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
@@ -711,11 +872,45 @@ fun VideoDetailScreen(
                             )
                         }
                         item(key = "intro-desc") {
-                            Text(
+                            BiliRichText(
                                 text = currentVideo.description.ifBlank { "暂无简介" },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                onLinkClick = { target ->
+                                    when (target) {
+                                        is BiliLinkTarget.UserSpace -> {
+                                            onAuthorClick(
+                                                BiliUserProfile(
+                                                    mid = target.mid,
+                                                    name = "",
+                                                    face = "",
+                                                    sign = "",
+                                                    level = 0,
+                                                ),
+                                            )
+                                        }
+                                        is BiliLinkTarget.Video -> {
+                                            onOpenDescriptionVideo(
+                                                BiliVideoItem(
+                                                    bvid = target.bvid,
+                                                    aid = target.aid,
+                                                    title = "",
+                                                    coverUrl = "",
+                                                    authorName = currentVideo.authorName,
+                                                    authorMid = currentVideo.authorMid,
+                                                    viewCount = 0,
+                                                    danmakuCount = 0,
+                                                    likeCount = 0,
+                                                    durationSeconds = 0,
+                                                ),
+                                                target.partPage,
+                                            )
+                                        }
+                                        is BiliLinkTarget.External -> {
+                                            ExternalUrlOpener.open(context, target.url)
+                                        }
+                                    }
+                                },
                             )
                         }
                         item(key = "intro-actions") {
@@ -788,7 +983,7 @@ fun VideoDetailScreen(
                                                 },
                                             )
                                             api.getVideoDetail(currentVideo.bvid, cred)?.let { refreshed ->
-                                                detail = refreshed
+                                                detail = api.hydrateVideoUgcSeason(refreshed, cred)
                                             }
                                         }.onFailure {
                                             Toast.makeText(
@@ -881,6 +1076,35 @@ fun VideoDetailScreen(
                                     }
                                 },
                             )
+                        }
+                        currentDetail?.ugcSeason?.takeIf { it.shouldDisplay }?.let { season ->
+                            item(key = "intro-ugc-season") {
+                                VideoDetailUgcSeasonSection(
+                                    season = season,
+                                    onGroupClick = { sectionId ->
+                                        collectionSheetState = VideoCollectionSheetState.UgcSeason(
+                                            season = season,
+                                            highlightSectionId = sectionId,
+                                        )
+                                        showCollectionSheet = true
+                                    },
+                                )
+                            }
+                        }
+                        if (currentDetail?.ugcSeason?.shouldDisplay != true) {
+                            val pages = currentDetail?.pages.orEmpty()
+                            if (pages.size > 1) {
+                                item(key = "intro-multi-part") {
+                                    VideoDetailMultiPartSection(
+                                        title = currentVideo.title,
+                                        partCount = pages.size,
+                                        onClick = {
+                                            collectionSheetState = VideoCollectionSheetState.MultiPart(pages)
+                                            showCollectionSheet = true
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1000,11 +1224,13 @@ fun VideoDetailScreen(
             }
         }
     }
+    }
     VideoCoinChoiceDialog(
         visible = showCoinDialog,
         anchorBoundsInRoot = coinMenuAnchor,
         canCoinTwo = videoRelation.coinCount == 0,
         onDismiss = { showCoinDialog = false },
+        hazeState = hazeState,
             onCoinOne = {
                 showCoinDialog = false
                 val cred = credential ?: return@VideoCoinChoiceDialog
@@ -1052,6 +1278,50 @@ fun VideoDetailScreen(
                 }
             },
         )
+    VideoDetailMoreMenu(
+        visible = showMoreMenu,
+        anchorBoundsInRoot = moreMenuAnchor,
+        hazeState = hazeState,
+        onDismiss = { showMoreMenu = false },
+        onOpenOfficialApp = {
+            showMoreMenu = false
+            BilibiliAppLauncher.openVideo(
+                context = context,
+                bvid = currentVideo.bvid,
+                aid = currentVideo.aid,
+            )
+        },
+    )
+    collectionSheetState?.let { sheetState ->
+        val sheetTitle = when (sheetState) {
+            is VideoCollectionSheetState.MultiPart -> "分集 (${sheetState.pages.size})"
+            is VideoCollectionSheetState.UgcSeason -> {
+                val count = sheetUgcSeason?.episodeCount ?: sheetState.season.episodeCount
+                "合集 ($count)"
+            }
+        }
+        VideoDetailCollectionSheet(
+            visible = showCollectionSheet,
+            sheetTitle = sheetTitle,
+            hazeState = hazeState,
+            ugcSeason = when (sheetState) {
+                is VideoCollectionSheetState.UgcSeason -> sheetUgcSeason ?: sheetState.season
+                is VideoCollectionSheetState.MultiPart -> null
+            },
+            highlightSectionId = (sheetState as? VideoCollectionSheetState.UgcSeason)?.highlightSectionId,
+            pages = when (sheetState) {
+                is VideoCollectionSheetState.MultiPart -> sheetState.pages
+                is VideoCollectionSheetState.UgcSeason -> emptyList()
+            },
+            currentBvid = currentVideo.bvid,
+            currentCid = currentCid,
+            authorName = currentVideo.authorName,
+            authorMid = currentVideo.authorMid,
+            onDismiss = { showCollectionSheet = false },
+            onUgcEpisodeClick = onOpenUgcEpisode,
+            onPartClick = ::switchToPart,
+        )
+    }
     commentImageViewer?.let { request ->
         BiliFullscreenImageViewer(
             images = request.images,

@@ -89,6 +89,7 @@ import com.example.bilibili.ui.components.BiliWebReaderState
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliUserProfile
 import com.example.bilibili.data.BiliUserVideoSort
+import com.example.bilibili.data.BiliUserWallet
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
@@ -110,6 +111,7 @@ import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.components.imageviewer.BiliFullscreenImageViewer
 import com.example.bilibili.ui.components.imageviewer.BiliImageGrid
 import com.example.bilibili.data.BiliViewerImage
+import com.example.bilibili.ui.format.formatBiliCoinBalance
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.format.formatBiliPublishTime
 import com.example.bilibili.ui.format.formatVideoDurationLabel
@@ -198,6 +200,8 @@ fun UserProfileScreen(
     cacheProfile: Boolean = false,
     feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
     onFeedColumnCountChange: (Int) -> Unit = {},
+    backgroundPlaybackEnabled: Boolean = false,
+    onBackgroundPlaybackChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -320,9 +324,15 @@ fun UserProfileScreen(
                 uiState.videosHasMore = page.hasMore
                 uiState.videosPage = 1
             }
+            val walletDeferred = async {
+                if (enableSettings && credential != null) {
+                    uiState.wallet = api.getUserWallet(credential)
+                }
+            }
             profileDeferred.await()
             relationDeferred.await()
             videosDeferred.await()
+            walletDeferred.await()
         }
         coroutineScope.launch {
             runCatching { refreshProfileIpLocation() }
@@ -533,6 +543,8 @@ fun UserProfileScreen(
         SettingsScreen(
             feedColumnCount = feedColumnCount,
             onFeedColumnCountChange = onFeedColumnCountChange,
+            backgroundPlaybackEnabled = backgroundPlaybackEnabled,
+            onBackgroundPlaybackChange = onBackgroundPlaybackChange,
             onBack = { showSettings = false },
             modifier = Modifier.fillMaxSize(),
         )
@@ -596,6 +608,7 @@ fun UserProfileScreen(
                                         nameStyle = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = FontWeight.SemiBold,
                                         ),
+                                        wallet = uiState.wallet,
                                     )
                                 }
                                 if (showFollowButton) {
@@ -687,6 +700,7 @@ fun UserProfileScreen(
                                 showFollowButton = showFollowButton,
                                 relation = uiState.relation,
                                 followLoading = uiState.followLoading,
+                                wallet = uiState.wallet,
                                 onOpenSettings = openSettings,
                                 onOpenRelationList = { tab ->
                                     onOpenRelationList(
@@ -998,6 +1012,7 @@ private fun UserProfileHeader(
     showFollowButton: Boolean,
     relation: BiliAuthorRelation,
     followLoading: Boolean,
+    wallet: BiliUserWallet? = null,
     onFollowClick: () -> Unit,
     compactVisible: Boolean,
     onOpenSettings: (() -> Unit)? = null,
@@ -1112,6 +1127,7 @@ private fun UserProfileHeader(
                                     nameStyle = MaterialTheme.typography.titleLarge.copy(
                                         fontWeight = FontWeight.Bold,
                                     ),
+                                    wallet = wallet,
                                 )
                                 Text(
                                     text = profile.sign.ifBlank { "这个人很神秘，什么都没有写" },
@@ -1760,6 +1776,7 @@ private fun ProfileAuthorNameRow(
     nameStyle: androidx.compose.ui.text.TextStyle,
     modifier: Modifier = Modifier,
     ipLocation: String? = null,
+    wallet: BiliUserWallet? = null,
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -1779,7 +1796,12 @@ private fun ProfileAuthorNameRow(
                 BiliUserLevelIcon(level = level)
             }
         }
-        if (!ipLocation.isNullOrBlank()) {
+        if (wallet != null) {
+            ProfileWalletSummary(
+                wallet = wallet,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        } else if (!ipLocation.isNullOrBlank()) {
             Text(
                 text = "IP属地：$ipLocation",
                 style = MaterialTheme.typography.labelSmall,
@@ -1789,6 +1811,31 @@ private fun ProfileAuthorNameRow(
                 modifier = Modifier.padding(start = 8.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun ProfileWalletSummary(
+    wallet: BiliUserWallet,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "B币：${formatBiliCoinBalance(wallet.bcoinBalance)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Text(
+            text = "硬币：${formatBiliCount(wallet.coinCount)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 

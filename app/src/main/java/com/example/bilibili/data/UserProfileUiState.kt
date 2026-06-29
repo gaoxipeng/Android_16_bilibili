@@ -41,6 +41,7 @@ class UserProfileUiState(
 
     var loaded by mutableStateOf(false)
     var profileHeaderHeight by mutableStateOf(0.dp)
+    var wallet by mutableStateOf<BiliUserWallet?>(null)
 }
 
 object UserProfileSessionCache {

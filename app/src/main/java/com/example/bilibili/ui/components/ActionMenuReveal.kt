@@ -39,6 +39,7 @@ internal fun ActionMenuReveal(
     menuHeight: Dp,
     originInMenu: Offset,
     modifier: Modifier = Modifier,
+    revealKey: Any? = null,
     onExitComplete: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
@@ -55,7 +56,7 @@ internal fun ActionMenuReveal(
     val alpha = remember { Animatable(0f) }
     var rendered by remember { mutableStateOf(false) }
 
-    LaunchedEffect(visible) {
+    LaunchedEffect(visible, revealKey) {
         if (visible) {
             rendered = true
             alpha.snapTo(0f)
@@ -148,9 +149,9 @@ internal fun calculateFeedCardActionMenuOffsetPx(
     return ActionMenuPlacement(IntOffset(x.roundToInt(), y.roundToInt()), hasSpaceBelow)
 }
 
-internal val ActionMenuWidth = 160.dp
 internal val ActionMenuCornerRadius = 22.dp
-internal val ActionMenuBlurRadius = 24.dp
+internal val ActionMenuBlurRadius = 36.dp
+internal val ActionSheetBlurRadius = 80.dp
 internal val ActionMenuCardInset = 5.dp
 internal val ActionMenuItemGap = 3.dp
 internal val ActionMenuCapsuleHeight = 38.dp

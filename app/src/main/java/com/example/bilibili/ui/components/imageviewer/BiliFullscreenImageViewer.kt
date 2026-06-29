@@ -80,7 +80,7 @@ import com.example.bilibili.ui.components.ActionMenuReveal
 import com.example.bilibili.ui.components.ActionMenuRow
 import com.example.bilibili.ui.components.ActionMenuThreeRowHeight
 import com.example.bilibili.ui.components.ActionMenuTwoRowHeight
-import com.example.bilibili.ui.components.ActionMenuWidth
+import com.example.bilibili.ui.components.rememberActionMenuWidth
 import com.example.bilibili.ui.components.calculateActionMenuOffsetFromPointPx
 import com.example.bilibili.ui.components.computeActionMenuOriginInMenu
 import com.kyant.backdrop.Backdrop
@@ -1089,10 +1089,16 @@ private fun BoxScope.FullscreenImageActionMenu(
     var saving by remember { mutableStateOf(false) }
     val images = allImages.ifEmpty { listOf(image) }
     val showSaveAll = images.size > 1
-    val menuWidth = ActionMenuWidth
+    val menuLabels = buildList {
+        add("保存")
+        if (showSaveAll) add("保存全部")
+        add("分享")
+    }
     val estimatedMenuHeight = if (showSaveAll) ActionMenuThreeRowHeight else ActionMenuTwoRowHeight
     val margin = 14.dp
     val gap = 10.dp
+    val maxMenuWidth = with(density) { screenWidthPx.toDp() } - margin * 2
+    val menuWidth = rememberActionMenuWidth(menuLabels, maxMenuWidth)
     val menuWidthPx = with(density) { menuWidth.toPx() }
     val menuHeightPx = with(density) { estimatedMenuHeight.toPx() }
     val menuPlacement = calculateActionMenuOffsetFromPointPx(

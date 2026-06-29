@@ -237,6 +237,12 @@ fun LiquidButton(
 fun liquidSurfaceColor(isLightTheme: Boolean): Color =
     if (isLightTheme) Color.White.copy(0.48f) else Color.White.copy(0.22f)
 
+fun liquidMenuSurfaceColor(isLightTheme: Boolean): Color =
+    if (isLightTheme) Color.White.copy(0.82f) else Color.White.copy(0.38f)
+
+fun liquidSheetSurfaceColor(isLightTheme: Boolean): Color =
+    if (isLightTheme) Color.White.copy(0.92f) else Color.White.copy(0.48f)
+
 @Composable
 fun SurfaceLiquidCapsule(
     modifier: Modifier = Modifier,
@@ -251,7 +257,7 @@ fun SurfaceLiquidCapsule(
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
     val isLightTheme = !isSystemInDarkTheme()
-    val surfaceColor = liquidSurfaceColor(isLightTheme)
+    val surfaceColor = liquidMenuSurfaceColor(isLightTheme)
     val menuBorderColor = liquidMenuBorderColor(isLightTheme)
     val shape = if (pill) RoundedCornerShape(percent = 50) else RoundedCornerShape(cornerRadius)
     val borderModifier = when {
@@ -460,13 +466,14 @@ fun SurfaceLiquidMenuCard(
     backdrop: Backdrop? = null,
     cornerRadius: Dp = 14.dp,
     blurRadius: Dp = LiquidMenuGlassBlurRadius,
+    surfaceColor: Color? = null,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
     val isLightTheme = !isSystemInDarkTheme()
     val shape = RoundedCornerShape(cornerRadius)
-    val surfaceColor = liquidSurfaceColor(isLightTheme)
+    val resolvedSurfaceColor = surfaceColor ?: liquidSurfaceColor(isLightTheme)
     val borderColor = liquidMenuBorderColor(isLightTheme)
 
     if (resolvedBackdrop != null) {
@@ -482,7 +489,8 @@ fun SurfaceLiquidMenuCard(
                         lens(12f.dp.toPx(), 24f.dp.toPx())
                     },
                     highlight = null,
-                    onDrawSurface = { drawRect(surfaceColor) },
+                    shadow = null,
+                    onDrawSurface = { drawRect(resolvedSurfaceColor) },
                 )
                 .border(LiquidMenuBorderWidth, borderColor, shape)
                 .padding(contentPadding),
@@ -493,7 +501,7 @@ fun SurfaceLiquidMenuCard(
         Column(
             modifier
                 .clip(shape)
-                .background(surfaceColor, shape)
+                .background(resolvedSurfaceColor, shape)
                 .border(LiquidMenuBorderWidth, borderColor, shape)
                 .padding(contentPadding),
             horizontalAlignment = Alignment.Start,

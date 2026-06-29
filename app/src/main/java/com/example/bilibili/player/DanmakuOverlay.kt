@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -31,14 +32,109 @@ import androidx.compose.ui.unit.sp
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.BiliDanmakuMode
 import com.example.bilibili.data.DanmakuSettings
+import com.example.bilibili.player.VideoPlaybackCoordinator.DanmakuTimelineSnapshot
 import kotlin.math.abs
 
 private const val FixedDanmakuDurationMs = 4_000L
 private const val ScrollBaseDurationMs = 7_000L
 private const val ScrollPerCharDurationMs = 120L
 private const val SpawnLookaheadMs = 120L
-private const val ReopenPrimeMaxCount = 8
+private const val ReopenPrimeMaxCount = 24
 private const val ReopenPrimeMaxAheadMs = 12_000L
+private const val DANMAKU_TRACK_COUNT = 18
+private const val FIXED_DANMAKU_ROW_COUNT = 8
+private const val TRACK_GAP_SEC = 0.15f
+private val ScrollDanmakuGapDp = 28.dp
+internal val DanmakuTrackLineHeightDp = 26.dp
+internal val DanmakuCompactTrackLineHeightDp = 20.dp
+
+private fun passesDensityGate(item: BiliDanmakuItem, items: List<BiliDanmakuItem>): Boolean {
+    if (items.size <= 1_200) return true
+    val keepRatio = when {
+        items.size > 8_000 -> 0.45f
+        items.size > 4_000 -> 0.55f
+        items.size > 2_000 -> 0.68f
+        else -> 0.82f
+    }
+    return abs(item.id % 100) < (keepRatio * 100f).toInt()
+}
+
+private fun scrollTrackEntryBlockSec(
+    durationSec: Float,
+    textWidthPx: Float,
+    screenWidthPx: Float,
+    gapPx: Float,
+): Float {
+    if (screenWidthPx <= 0f) {
+        return (durationSec * 0.28f + TRACK_GAP_SEC).coerceIn(0.35f, durationSec * 0.6f)
+    }
+    return (durationSec * (textWidthPx + gapPx) / (screenWidthPx + textWidthPx) + TRACK_GAP_SEC)
+        .coerceIn(0.35f, durationSec * 0.85f)
+}
+
+private fun scrollDanmakuLeftPx(
+    screenWidthPx: Float,
+    textWidthPx: Float,
+    elapsedMs: Long,
+    durationMs: Long,
+): Float {
+    val progress = (elapsedMs.toFloat() / durationMs.coerceAtLeast(1L)).coerceIn(0f, 1f)
+    return screenWidthPx - (screenWidthPx + textWidthPx) * progress
+}
+
+private fun reverseDanmakuLeftPx(
+    screenWidthPx: Float,
+    textWidthPx: Float,
+    elapsedMs: Long,
+    durationMs: Long,
+): Float {
+    val progress = (elapsedMs.toFloat() / durationMs.coerceAtLeast(1L)).coerceIn(0f, 1f)
+    return -textWidthPx + (screenWidthPx + textWidthPx) * progress
+}
+
+private fun canSpawnScrollOnTrack(
+    track: Int,
+    activeDanmaku: List<ActiveDanmaku>,
+    displayTimeMs: Long,
+    screenWidthPx: Float,
+    gapPx: Float,
+    speedMultiplier: Float,
+    reverse: Boolean,
+): Boolean {
+    for (active in activeDanmaku) {
+        if (active.track != track) continue
+        val mode = BiliDanmakuMode.from(active.item.mode) ?: continue
+        val isReverse = mode == BiliDanmakuMode.ReverseScroll
+        if (mode != BiliDanmakuMode.Scroll && !isReverse) continue
+        if (reverse != isReverse) continue
+
+        val elapsed = displayTimeMs - active.animStartDisplayTimeMs
+        if (elapsed < 0L) continue
+        val durationMs = danmakuScrollDurationMs(active.item, speedMultiplier)
+        if (elapsed >= durationMs) continue
+
+        if (reverse) {
+            val leftPx = reverseDanmakuLeftPx(
+                screenWidthPx = screenWidthPx,
+                textWidthPx = active.textWidthPx,
+                elapsedMs = elapsed,
+                durationMs = durationMs,
+            )
+            if (leftPx < gapPx) return false
+        } else {
+            val leftPx = scrollDanmakuLeftPx(
+                screenWidthPx = screenWidthPx,
+                textWidthPx = active.textWidthPx,
+                elapsedMs = elapsed,
+                durationMs = durationMs,
+            )
+            val existingRightPx = leftPx + active.textWidthPx
+            if (existingRightPx + gapPx <= screenWidthPx) continue
+            return false
+        }
+    }
+    return true
+}
 
 internal fun danmakuColor(argb: Int): Color {
     val value = argb and 0xFFFFFF
@@ -86,7 +182,12 @@ private class DanmakuSpawnContext(
     val activeDanmaku: MutableList<ActiveDanmaku>,
     val spawnedIds: MutableSet<Int>,
     val trackReleaseTimes: FloatArray,
+    val topFixedReleaseTimes: FloatArray,
+    val bottomFixedReleaseTimes: FloatArray,
     val scrollAreaHeightPx: Float,
+    val screenWidthPx: Float,
+    val scrollGapPx: Float,
+    val trackLineHeightPx: Float,
     val speedMultiplier: Float,
     val measureDanmaku: (BiliDanmakuItem) -> ActiveDanmaku?,
 ) {
@@ -96,6 +197,8 @@ private class DanmakuSpawnContext(
         activeDanmaku.clear()
         spawnedIds.clear()
         trackReleaseTimes.fill(0f)
+        topFixedReleaseTimes.fill(0f)
+        bottomFixedReleaseTimes.fill(0f)
         nextIndex = spawnIndexForPosition(items, positionMs)
     }
 
@@ -115,30 +218,57 @@ private class DanmakuSpawnContext(
         while (nextIndex < items.size && items[nextIndex].timeMs <= displayTimeMs + SpawnLookaheadMs) {
             val item = items[nextIndex]
             nextIndex++
-            trySpawn(item, displayTimeMs)
+            trySpawn(item, item.timeMs)
         }
     }
 
     private fun trySpawn(item: BiliDanmakuItem, animStartDisplayTimeMs: Long): Boolean {
         if (item.id in spawnedIds) return false
-        spawnedIds += item.id
+        if (!passesDensityGate(item, items)) return false
         val measured = measureDanmaku(item) ?: return false
         val mode = BiliDanmakuMode.from(item.mode) ?: BiliDanmakuMode.Scroll
-        val active = if (mode == BiliDanmakuMode.Bottom || mode == BiliDanmakuMode.Top) {
-            measured.copy(track = -1, animStartDisplayTimeMs = animStartDisplayTimeMs)
-        } else {
-            val durationSec = danmakuScrollDurationMs(item, speedMultiplier) / 1000f
-            val maxTracks = (scrollAreaHeightPx / measured.lineHeightPx)
-                .toInt()
-                .coerceIn(1, DANMAKU_TRACK_COUNT)
-            val track = assignDanmakuTrack(
-                trackReleaseTimes = trackReleaseTimes,
-                maxTracks = maxTracks,
-                currentTimeSec = animStartDisplayTimeMs / 1000f,
-                durationSec = durationSec,
-            )
-            measured.copy(track = track, animStartDisplayTimeMs = animStartDisplayTimeMs)
+        val currentTimeSec = animStartDisplayTimeMs / 1000f
+        val active = when (mode) {
+            BiliDanmakuMode.Bottom, BiliDanmakuMode.Top -> {
+                val maxRows = fixedDanmakuMaxRows(scrollAreaHeightPx, measured.lineHeightPx)
+                val releaseTimes = if (mode == BiliDanmakuMode.Top) {
+                    topFixedReleaseTimes
+                } else {
+                    bottomFixedReleaseTimes
+                }
+                val durationSec = FixedDanmakuDurationMs * speedMultiplier / 1000f
+                val row = assignFixedDanmakuRow(
+                    rowReleaseTimes = releaseTimes,
+                    maxRows = maxRows,
+                    currentTimeSec = currentTimeSec,
+                    durationSec = durationSec,
+                ) ?: return false
+                measured.copy(track = row, animStartDisplayTimeMs = animStartDisplayTimeMs)
+            }
+            BiliDanmakuMode.ReverseScroll, BiliDanmakuMode.Scroll -> {
+                val durationSec = danmakuScrollDurationMs(item, speedMultiplier) / 1000f
+                val maxTracks = (scrollAreaHeightPx / trackLineHeightPx)
+                    .toInt()
+                    .coerceIn(1, DANMAKU_TRACK_COUNT)
+                val reverse = mode == BiliDanmakuMode.ReverseScroll
+                val durationMs = danmakuScrollDurationMs(item, speedMultiplier)
+                val track = assignDanmakuTrack(
+                    activeDanmaku = activeDanmaku,
+                    displayTimeMs = animStartDisplayTimeMs,
+                    trackReleaseTimes = trackReleaseTimes,
+                    maxTracks = maxTracks,
+                    durationSec = durationSec,
+                    textWidthPx = measured.textWidthPx,
+                    durationMs = durationMs,
+                    screenWidthPx = screenWidthPx,
+                    gapPx = scrollGapPx,
+                    speedMultiplier = speedMultiplier,
+                    reverse = reverse,
+                ) ?: return false
+                measured.copy(track = track, animStartDisplayTimeMs = animStartDisplayTimeMs)
+            }
         }
+        spawnedIds += item.id
         activeDanmaku += active
         return true
     }
@@ -154,6 +284,11 @@ fun DanmakuOverlay(
     bottomReserve: Dp = 46.dp,
     enabled: Boolean,
     settings: DanmakuSettings = DanmakuSettings(),
+    trackLineHeight: Dp = DanmakuTrackLineHeightDp,
+    playbackKey: String? = null,
+    danmakuCid: Long = 0L,
+    onTimelineSnapshot: ((DanmakuTimelineSnapshot) -> Unit)? = null,
+    restoredTimeline: DanmakuTimelineSnapshot? = null,
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
@@ -163,6 +298,8 @@ fun DanmakuOverlay(
     val activeDanmaku = remember { mutableStateListOf<ActiveDanmaku>() }
     val spawnedIds = remember { mutableSetOf<Int>() }
     val trackReleaseTimes = remember { FloatArray(DANMAKU_TRACK_COUNT) }
+    val topFixedReleaseTimes = remember { FloatArray(FIXED_DANMAKU_ROW_COUNT) }
+    val bottomFixedReleaseTimes = remember { FloatArray(FIXED_DANMAKU_ROW_COUNT) }
     var displayTimeMs by remember { mutableLongStateOf(positionMs) }
     var anchorPositionMs by remember { mutableLongStateOf(positionMs) }
     var anchorRealtimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -184,6 +321,9 @@ fun DanmakuOverlay(
         val speedMultiplier = settings.speedLevel.durationMultiplier
         val videoHeightDp = maxHeight.value
         val maxTextWidth = widthPx.toInt().coerceAtLeast(1)
+
+        val scrollGapPx = with(density) { ScrollDanmakuGapDp.toPx() }
+        val trackLineHeightPx = with(density) { trackLineHeight.toPx() }
 
         fun measureDanmaku(item: BiliDanmakuItem): ActiveDanmaku? {
             val fontSize = danmakuFontSize(
@@ -214,17 +354,22 @@ fun DanmakuOverlay(
                 animStartDisplayTimeMs = 0L,
                 layout = layout,
                 textWidthPx = layout.size.width.toFloat(),
-                lineHeightPx = fontSize.value * density.density * 1.35f,
+                lineHeightPx = trackLineHeightPx,
             )
         }
 
-        val spawnContext = remember(items, scrollAreaHeightPx, speedMultiplier, settings.fontSizePercent, settings.opacityPercent) {
+        val spawnContext = remember(items, scrollAreaHeightPx, widthPx, scrollGapPx, trackLineHeightPx, speedMultiplier, settings.fontSizePercent, settings.opacityPercent) {
             DanmakuSpawnContext(
                 items = items,
                 activeDanmaku = activeDanmaku,
                 spawnedIds = spawnedIds,
                 trackReleaseTimes = trackReleaseTimes,
+                topFixedReleaseTimes = topFixedReleaseTimes,
+                bottomFixedReleaseTimes = bottomFixedReleaseTimes,
                 scrollAreaHeightPx = scrollAreaHeightPx,
+                screenWidthPx = widthPx,
+                scrollGapPx = scrollGapPx,
+                trackLineHeightPx = trackLineHeightPx,
                 speedMultiplier = speedMultiplier,
                 measureDanmaku = { item -> measureDanmaku(item) },
             )
@@ -238,25 +383,54 @@ fun DanmakuOverlay(
             }
         }
 
-        fun resetAndPrime(currentPositionMs: Long) {
+        fun resetAndPrime(currentPositionMs: Long, restoreSnapshot: DanmakuTimelineSnapshot? = null) {
             syncDisplayClock(currentPositionMs, isPlaying)
-            displayTimeMs = currentPositionMs
             spawnContext.resetTimeline(currentPositionMs)
-            spawnContext.primeUpcoming(currentPositionMs, currentPositionMs)
+            if (restoreSnapshot != null) {
+                displayTimeMs = restoreSnapshot.displayTimeMs
+                anchorPositionMs = restoreSnapshot.anchorPositionMs
+                anchorRealtimeMs = restoreSnapshot.anchorRealtimeMs
+                spawnedIds.clear()
+                spawnedIds.addAll(restoreSnapshot.spawnedIds)
+                spawnContext.nextIndex = restoreSnapshot.nextIndex
+                spawnContext.primeUpcoming(currentPositionMs, displayTimeMs, maxCount = ReopenPrimeMaxCount * 2)
+            } else {
+                displayTimeMs = currentPositionMs
+                spawnContext.primeUpcoming(currentPositionMs, currentPositionMs)
+            }
         }
 
-        LaunchedEffect(enabled, items) {
+        DisposableEffect(playbackKey, danmakuCid, enabled) {
+            onDispose {
+                if (!enabled || playbackKey.isNullOrBlank() || danmakuCid <= 0L) return@onDispose
+                onTimelineSnapshot?.invoke(
+                    DanmakuTimelineSnapshot(
+                        cid = danmakuCid,
+                        displayTimeMs = displayTimeMs,
+                        anchorPositionMs = anchorPositionMs,
+                        anchorRealtimeMs = anchorRealtimeMs,
+                        nextIndex = spawnContext.nextIndex,
+                        spawnedIds = spawnedIds.toSet(),
+                    ),
+                )
+            }
+        }
+
+        LaunchedEffect(enabled, items, restoredTimeline?.cid, restoredTimeline?.nextIndex) {
             if (!enabled || items.isEmpty()) {
                 activeDanmaku.clear()
                 spawnedIds.clear()
+                trackReleaseTimes.fill(0f)
+                topFixedReleaseTimes.fill(0f)
+                bottomFixedReleaseTimes.fill(0f)
                 return@LaunchedEffect
             }
-            resetAndPrime(positionMs)
+            resetAndPrime(positionMs, restoredTimeline)
         }
 
-        LaunchedEffect(settings, enabled) {
+        LaunchedEffect(settings, enabled, trackLineHeight) {
             if (!enabled || items.isEmpty()) return@LaunchedEffect
-            resetAndPrime(positionMs)
+            resetAndPrime(positionMs, restoredTimeline)
         }
 
         LaunchedEffect(positionMs, enabled) {
@@ -312,17 +486,23 @@ fun DanmakuOverlay(
 
             activeDanmaku.forEach { active ->
                 val item = active.item
-                val elapsed = (currentTimeMs - active.animStartDisplayTimeMs).coerceAtLeast(0L)
+                val elapsed = currentTimeMs - active.animStartDisplayTimeMs
+                if (elapsed < 0L) return@forEach
 
                 val mode = BiliDanmakuMode.from(item.mode) ?: BiliDanmakuMode.Scroll
                 val textHeightPx = active.layout.size.height.toFloat()
+                val rowGapPx = active.lineHeightPx
+                val fixedPaddingPx = with(density) { 4.dp.toPx() }
                 val yPx = when (mode) {
                     BiliDanmakuMode.Bottom -> {
-                        (heightPx - bottomReservePx - textHeightPx - with(density) { 4.dp.toPx() })
+                        (heightPx - bottomReservePx - textHeightPx - fixedPaddingPx -
+                            active.track * rowGapPx)
                             .coerceAtLeast(topInsetPx)
                     }
-                    BiliDanmakuMode.Top -> topInsetPx
-                    else -> topInsetPx + active.track * active.lineHeightPx
+                    BiliDanmakuMode.Top -> topInsetPx + active.track * rowGapPx +
+                        (rowGapPx - textHeightPx).coerceAtLeast(0f) / 2f
+                    else -> topInsetPx + active.track * rowGapPx +
+                        (rowGapPx - textHeightPx).coerceAtLeast(0f) / 2f
                 }
                 val xPx = when (mode) {
                     BiliDanmakuMode.Bottom, BiliDanmakuMode.Top ->
@@ -347,23 +527,69 @@ fun DanmakuOverlay(
     }
 }
 
-private const val DANMAKU_TRACK_COUNT = 18
+private fun fixedDanmakuMaxRows(scrollAreaHeightPx: Float, lineHeightPx: Float): Int {
+    if (lineHeightPx <= 0f) return 1
+    val rowsFromArea = (scrollAreaHeightPx * 0.35f / lineHeightPx).toInt()
+    return rowsFromArea.coerceIn(1, FIXED_DANMAKU_ROW_COUNT)
+}
 
-private fun assignDanmakuTrack(
-    trackReleaseTimes: FloatArray,
-    maxTracks: Int,
+private fun assignFixedDanmakuRow(
+    rowReleaseTimes: FloatArray,
+    maxRows: Int,
     currentTimeSec: Float,
     durationSec: Float,
-): Int {
-    val trackCount = maxTracks.coerceIn(1, trackReleaseTimes.size)
-    var bestTrack = 0
-    var earliestRelease = trackReleaseTimes[0]
-    for (index in 1 until trackCount) {
-        if (trackReleaseTimes[index] < earliestRelease) {
-            earliestRelease = trackReleaseTimes[index]
-            bestTrack = index
+): Int? {
+    val rowCount = maxRows.coerceIn(1, rowReleaseTimes.size)
+    val idleRows = (0 until rowCount).filter { rowReleaseTimes[it] <= currentTimeSec }
+    if (idleRows.isNotEmpty()) {
+        val row = idleRows[(currentTimeSec * 1000f).toLong().mod(idleRows.size.toLong()).toInt()]
+        rowReleaseTimes[row] = currentTimeSec + durationSec + TRACK_GAP_SEC
+        return row
+    }
+    var bestRow = 0
+    var earliestRelease = rowReleaseTimes[0]
+    for (index in 1 until rowCount) {
+        if (rowReleaseTimes[index] < earliestRelease) {
+            earliestRelease = rowReleaseTimes[index]
+            bestRow = index
         }
     }
-    trackReleaseTimes[bestTrack] = currentTimeSec + durationSec
-    return bestTrack
+    if (earliestRelease - currentTimeSec > 0.2f) return null
+    rowReleaseTimes[bestRow] = currentTimeSec + durationSec + TRACK_GAP_SEC
+    return bestRow
+}
+
+private fun assignDanmakuTrack(
+    activeDanmaku: List<ActiveDanmaku>,
+    displayTimeMs: Long,
+    trackReleaseTimes: FloatArray,
+    maxTracks: Int,
+    durationSec: Float,
+    textWidthPx: Float,
+    durationMs: Long,
+    screenWidthPx: Float,
+    gapPx: Float,
+    speedMultiplier: Float,
+    reverse: Boolean,
+): Int? {
+    val trackCount = maxTracks.coerceIn(1, trackReleaseTimes.size)
+    val currentTimeSec = displayTimeMs / 1000f
+    val availableTracks = (0 until trackCount).filter { track ->
+        trackReleaseTimes[track] <= currentTimeSec &&
+            canSpawnScrollOnTrack(
+            track = track,
+            activeDanmaku = activeDanmaku,
+            displayTimeMs = displayTimeMs,
+            screenWidthPx = screenWidthPx,
+            gapPx = gapPx,
+            speedMultiplier = speedMultiplier,
+            reverse = reverse,
+        )
+    }
+    if (availableTracks.isEmpty()) return null
+
+    val track = availableTracks[displayTimeMs.mod(availableTracks.size.toLong()).toInt()]
+    val entryBlockSec = scrollTrackEntryBlockSec(durationSec, textWidthPx, screenWidthPx, gapPx)
+    trackReleaseTimes[track] = maxOf(trackReleaseTimes[track], currentTimeSec) + entryBlockSec
+    return track
 }

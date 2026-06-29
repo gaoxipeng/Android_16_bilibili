@@ -106,6 +106,11 @@ data class BiliUserProfile(
         get() = topPhotos.ifEmpty { listOfNotNull(topPhoto.takeIf { it.isNotBlank() }) }
 }
 
+data class BiliUserWallet(
+    val bcoinBalance: Double = 0.0,
+    val coinCount: Long = 0L,
+)
+
 data class BiliVideoDetail(
     val video: BiliVideoItem,
     val publishTimeSeconds: Long = 0L,
@@ -114,6 +119,113 @@ data class BiliVideoDetail(
     val coinCount: Long = 0L,
     val favoriteCount: Long = 0L,
     val shareCount: Long = 0L,
+    val ugcSeason: BiliUgcSeason? = null,
+    val pages: List<BiliVideoPage> = emptyList(),
+    val userRelation: BiliVideoRelation = BiliVideoRelation(),
+)
+
+data class BiliVideoPage(
+    val page: Int,
+    val cid: Long,
+    val title: String,
+    val durationSeconds: Int = 0,
+)
+
+data class BiliUgcSeasonEpisode(
+    val id: Long,
+    val aid: Long,
+    val bvid: String,
+    val cid: Long,
+    val title: String,
+    val coverUrl: String = "",
+    val durationSeconds: Int = 0,
+) {
+    fun toVideoItem(authorName: String, authorMid: Long): BiliVideoItem =
+        BiliVideoItem(
+            bvid = bvid,
+            aid = aid,
+            cid = cid,
+            title = title,
+            coverUrl = coverUrl,
+            authorName = authorName,
+            authorMid = authorMid,
+            viewCount = 0,
+            danmakuCount = 0,
+            likeCount = 0,
+            durationSeconds = durationSeconds,
+        )
+}
+
+data class BiliUgcSeasonSection(
+    val id: Long,
+    val title: String,
+    val episodes: List<BiliUgcSeasonEpisode>,
+)
+
+data class BiliUgcSeason(
+    val id: Long,
+    val title: String,
+    val mid: Long = 0L,
+    val coverUrl: String = "",
+    val sections: List<BiliUgcSeasonSection>,
+    val apiEpCount: Int = 0,
+) {
+    val episodeCount: Int
+        get() {
+            val parsed = sections.sumOf { it.episodes.size }
+            return when {
+                parsed > 0 -> parsed
+                apiEpCount > 0 -> apiEpCount
+                else -> 0
+            }
+        }
+
+    val shouldDisplay: Boolean
+        get() = episodeCount > 1 || apiEpCount > 1
+
+    fun needsHydration(): Boolean {
+        val parsed = sections.sumOf { it.episodes.size }
+        if (apiEpCount <= 1) return parsed < 2
+        return parsed < apiEpCount
+    }
+
+    fun displayGroups(): List<BiliUgcSeasonDisplayGroup> {
+        val validSections = sections.filter { it.episodes.isNotEmpty() }
+        if (validSections.size <= 1) {
+            return listOf(BiliUgcSeasonDisplayGroup(title = title, sectionId = null))
+        }
+        return validSections.map { section ->
+            BiliUgcSeasonDisplayGroup(
+                title = section.title.ifBlank { title },
+                sectionId = section.id,
+            )
+        }
+    }
+
+    fun sectionsToShow(highlightSectionId: Long?): List<BiliUgcSeasonSection> {
+        val validSections = sections.filter { it.episodes.isNotEmpty() }
+        if (highlightSectionId == null) return validSections
+        return validSections.filter { it.id == highlightSectionId }.ifEmpty { validSections }
+    }
+
+    fun withHydratedEpisodes(episodes: List<BiliUgcSeasonEpisode>): BiliUgcSeason {
+        if (episodes.isEmpty()) return this
+        val sectionTitle = sections.firstOrNull()?.title.orEmpty()
+        return copy(
+            sections = listOf(
+                BiliUgcSeasonSection(
+                    id = sections.firstOrNull()?.id ?: 0L,
+                    title = sectionTitle,
+                    episodes = episodes,
+                ),
+            ),
+        )
+    }
+}
+
+data class BiliUgcSeasonDisplayGroup(
+    val title: String,
+    val sectionId: Long?,
 )
 
 data class BiliVideoRelation(
@@ -306,6 +418,8 @@ data class BiliHistoryItem(
     val bvid: String,
     val aid: Long,
     val cid: Long,
+    val page: Int = 0,
+    val partTitle: String = "",
     val title: String,
     val coverUrl: String,
     val authorName: String,
@@ -313,11 +427,31 @@ data class BiliHistoryItem(
     val viewAtSeconds: Long,
     val progressSeconds: Int,
     val durationSeconds: Int,
-)
+) {
+    fun toVideoItem(): BiliVideoItem = BiliVideoItem(
+        bvid = bvid,
+        aid = aid,
+        cid = cid,
+        title = title,
+        coverUrl = coverUrl,
+        authorName = authorName,
+        authorMid = authorMid,
+        viewCount = 0L,
+        danmakuCount = 0L,
+        likeCount = 0L,
+        durationSeconds = durationSeconds,
+    )
+}
 
 data class BiliHistoryPage(
     val items: List<BiliHistoryItem>,
     val cursor: BiliHistoryCursor?,
+)
+
+data class BiliFavoriteVideoPage(
+    val videos: List<BiliVideoItem>,
+    val page: Int,
+    val hasMore: Boolean,
 )
 
 data class BiliSearchResultPage<T>(

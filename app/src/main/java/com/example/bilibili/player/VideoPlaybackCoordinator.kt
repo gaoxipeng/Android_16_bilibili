@@ -19,12 +19,49 @@ class VideoPlaybackCoordinator(
     var fullscreenPortraitVideo by mutableStateOf<Boolean?>(null)
     var peekPlaybackKey by mutableStateOf<String?>(null)
     var pendingPeekHandoffKey by mutableStateOf<String?>(null)
+    var pendingFullscreenHandoffKey by mutableStateOf<String?>(null)
+    var pendingInlineHandoffKey by mutableStateOf<String?>(null)
     val positions = mutableStateMapOf<String, Long>()
     var danmakuVisible by mutableStateOf(initialDanmakuVisible)
         private set
     var danmakuSettings by mutableStateOf(initialDanmakuSettings)
         private set
     private val danmakuCache = mutableMapOf<Long, List<BiliDanmakuItem>>()
+    private val danmakuTimelineCache = mutableMapOf<String, DanmakuTimelineSnapshot>()
+
+    data class DanmakuTimelineSnapshot(
+        val cid: Long,
+        val displayTimeMs: Long,
+        val anchorPositionMs: Long,
+        val anchorRealtimeMs: Long,
+        val nextIndex: Int,
+        val spawnedIds: Set<Int>,
+    )
+
+    fun loadDanmakuTimeline(playbackKey: String, cid: Long): DanmakuTimelineSnapshot? {
+        val snapshot = danmakuTimelineCache[playbackKey] ?: return null
+        return snapshot.takeIf { it.cid == cid }
+    }
+
+    fun saveDanmakuTimeline(
+        playbackKey: String,
+        cid: Long,
+        displayTimeMs: Long,
+        anchorPositionMs: Long,
+        anchorRealtimeMs: Long,
+        nextIndex: Int,
+        spawnedIds: Set<Int>,
+    ) {
+        if (cid <= 0L) return
+        danmakuTimelineCache[playbackKey] = DanmakuTimelineSnapshot(
+            cid = cid,
+            displayTimeMs = displayTimeMs,
+            anchorPositionMs = anchorPositionMs,
+            anchorRealtimeMs = anchorRealtimeMs,
+            nextIndex = nextIndex,
+            spawnedIds = spawnedIds.toSet(),
+        )
+    }
 
     fun toggleDanmaku() {
         danmakuVisible = !danmakuVisible
@@ -52,6 +89,29 @@ class VideoPlaybackCoordinator(
     private var handoffKey: String? = null
     private val inlinePauseHandlers = mutableSetOf<() -> Unit>()
     private val peekPauseHandlers = mutableSetOf<() -> Unit>()
+    private val handoffPrepareHandlers = mutableSetOf<(String) -> Unit>()
+
+    fun registerHandoffPrepareHandler(handler: (String) -> Unit) {
+        handoffPrepareHandlers += handler
+    }
+
+    fun unregisterHandoffPrepareHandler(handler: (String) -> Unit) {
+        handoffPrepareHandlers -= handler
+    }
+
+    private fun prepareHandoff(key: String, pendingSetter: (String?) -> Unit) {
+        pendingSetter(key)
+        handoffPrepareHandlers.forEach { handler -> handler(key) }
+        pendingSetter(null)
+    }
+
+    fun prepareFullscreenHandoff(key: String) {
+        prepareHandoff(key) { pendingFullscreenHandoffKey = it }
+    }
+
+    fun prepareInlineHandoff(key: String) {
+        prepareHandoff(key) { pendingInlineHandoffKey = it }
+    }
 
     fun requestInlinePlayback(key: String) {
         pausePeek()
@@ -63,10 +123,10 @@ class VideoPlaybackCoordinator(
 
     fun openFullscreen(key: String, portraitVideo: Boolean? = null) {
         pausePeek()
-        pauseInlineOnly()
         activeKey = key
         fullscreenKey = key
         fullscreenPortraitVideo = portraitVideo
+        prepareFullscreenHandoff(key)
     }
 
     fun beginPeekHandoff(key: String) {
@@ -119,6 +179,10 @@ class VideoPlaybackCoordinator(
     }
 
     fun closeFullscreen() {
+        val key = fullscreenKey
+        if (key != null) {
+            prepareInlineHandoff(key)
+        }
         fullscreenKey = null
         fullscreenPortraitVideo = null
     }
@@ -159,7 +223,7 @@ class VideoPlaybackCoordinator(
         inlinePauseHandlers.forEach { it() }
     }
 
-    fun stashPlayer(key: String, player: ExoPlayer) {
+    fun stashPlayer(key: String, player: ExoPlayer, keepPlaying: Boolean = false) {
         if (handoffKey != key) {
             releaseHandoffPlayer()
         }
@@ -168,9 +232,13 @@ class VideoPlaybackCoordinator(
         if (fullscreenKey == key) {
             portraitVideoFromPlayer(player)?.let { fullscreenPortraitVideo = it }
         }
-        handoffPlayer = player.apply {
-            playWhenReady = false
-            pause()
+        handoffPlayer = if (keepPlaying) {
+            player
+        } else {
+            player.apply {
+                playWhenReady = false
+                pause()
+            }
         }
     }
 

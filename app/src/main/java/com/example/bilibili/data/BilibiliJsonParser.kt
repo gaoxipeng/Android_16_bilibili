@@ -39,7 +39,10 @@ object BilibiliJsonParser {
         val owner = data.optJSONObject("owner") ?: JSONObject()
         val stat = data.optJSONObject("stat") ?: JSONObject()
         val pages = data.optJSONArray("pages")
-        val cid = pages?.optJSONObject(0)?.optLong("cid") ?: 0L
+        val parsedPages = parseVideoPages(pages)
+        val cid = parsedPages.firstOrNull()?.cid
+            ?: pages?.optJSONObject(0)?.optLong("cid")
+            ?: 0L
         val dimension = data.optJSONObject("dimension")
         val bvid = data.optString("bvid")
         if (bvid.isBlank()) return null
@@ -66,15 +69,223 @@ object BilibiliJsonParser {
             coinCount = stat.optLong("coin"),
             favoriteCount = stat.optLong("favorite"),
             shareCount = stat.optLong("share"),
+            ugcSeason = parseUgcSeason(data) ?: parseUgcSeasonFromSeasonId(data),
+            pages = parsedPages,
+            userRelation = parseVideoReqUser(data),
+        )
+    }
+
+    private fun parseVideoPages(pages: org.json.JSONArray?): List<BiliVideoPage> {
+        if (pages == null || pages.length() <= 1) return emptyList()
+        return buildList {
+            for (index in 0 until pages.length()) {
+                val pageObj = pages.optJSONObject(index) ?: continue
+                val cid = pageObj.optLong("cid")
+                if (cid <= 0L) continue
+                add(
+                    BiliVideoPage(
+                        page = pageObj.optInt("page", index + 1),
+                        cid = cid,
+                        title = pageObj.optString("part"),
+                        durationSeconds = pageObj.optLong("duration").toInt(),
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun parseUgcSeasonFromSeasonId(data: JSONObject): BiliUgcSeason? {
+        if (!data.optBoolean("is_season_display", false)) return null
+        val seasonId = data.optLong("season_id")
+        if (seasonId <= 0L) return null
+        val ugcSeason = data.optJSONObject("ugc_season")
+        val title = ugcSeason?.optString("title").orEmpty().trim()
+        if (title.isBlank()) return null
+        val apiEpCount = ugcSeason?.optInt("ep_count") ?: 0
+        if (apiEpCount <= 1) return null
+        return BiliUgcSeason(
+            id = seasonId,
+            title = title,
+            mid = ugcSeason?.optLong("mid") ?: data.optJSONObject("owner")?.optLong("mid") ?: 0L,
+            coverUrl = normalizeImageUrl(ugcSeason?.optString("cover").orEmpty()),
+            sections = emptyList(),
+            apiEpCount = apiEpCount,
+        )
+    }
+
+    private fun parseUgcSeason(data: JSONObject): BiliUgcSeason? {
+        val season = data.optJSONObject("ugc_season") ?: return null
+        val id = season.optLong("id")
+        val title = season.optString("title").trim()
+        val apiEpCount = season.optInt("ep_count")
+        if (id <= 0L || title.isBlank()) return null
+        val sectionsArray = season.optJSONArray("sections")
+        val sections = if (sectionsArray != null) {
+            buildList {
+                for (index in 0 until sectionsArray.length()) {
+                    val sectionObj = sectionsArray.optJSONObject(index) ?: continue
+                    val sectionId = sectionObj.optLong("id").takeIf { it > 0L }
+                        ?: sectionObj.optLong("section_id")
+                    val episodes = parseUgcSeasonEpisodes(sectionObj.optJSONArray("episodes"))
+                    if (episodes.isNotEmpty()) {
+                        add(
+                            BiliUgcSeasonSection(
+                                id = sectionId,
+                                title = sectionObj.optString("title"),
+                                episodes = episodes,
+                            ),
+                        )
+                    }
+                }
+            }
+        } else {
+            emptyList()
+        }
+        val parsedCount = sections.sumOf { it.episodes.size }
+        if (parsedCount <= 1 && apiEpCount <= 1) return null
+        return BiliUgcSeason(
+            id = id,
+            title = title,
+            mid = season.optLong("mid"),
+            coverUrl = normalizeImageUrl(season.optString("cover")),
+            sections = sections,
+            apiEpCount = apiEpCount,
+        )
+    }
+
+    fun parseUgcSeasonArchives(json: JSONObject): BiliUgcSeason? {
+        val data = json.optJSONObject("data") ?: return null
+        val meta = data.optJSONObject("meta") ?: return null
+        val seasonId = meta.optLong("season_id")
+        val title = meta.optString("name").trim()
+        if (seasonId <= 0L || title.isBlank()) return null
+        val archives = data.optJSONArray("archives") ?: return null
+        val episodes = buildList {
+            for (index in 0 until archives.length()) {
+                val archive = archives.optJSONObject(index) ?: continue
+                val bvid = archive.optString("bvid")
+                val aid = archive.optLong("aid")
+                if (bvid.isBlank() && aid <= 0L) continue
+                val cid = archive.optLong("cid").takeIf { it > 0L }
+                    ?: archive.optJSONObject("page")?.optLong("cid")?.takeIf { it > 0L }
+                    ?: 0L
+                add(
+                    BiliUgcSeasonEpisode(
+                        id = aid,
+                        aid = aid,
+                        bvid = bvid,
+                        cid = cid,
+                        title = archive.optString("title"),
+                        coverUrl = normalizeImageUrl(archive.optString("pic")),
+                        durationSeconds = archive.optLong("duration").toInt(),
+                    ),
+                )
+            }
+        }
+        if (episodes.isEmpty()) return null
+        val page = data.optJSONObject("page")
+        return BiliUgcSeason(
+            id = seasonId,
+            title = title.removePrefix("合集·").trim(),
+            mid = meta.optLong("mid"),
+            coverUrl = normalizeImageUrl(meta.optString("cover")),
+            sections = listOf(
+                BiliUgcSeasonSection(
+                    id = 0L,
+                    title = "",
+                    episodes = episodes,
+                ),
+            ),
+            apiEpCount = page?.optInt("total")?.takeIf { it > 0 } ?: episodes.size,
+        )
+    }
+
+    fun mergeUgcSeasonArchives(base: BiliUgcSeason, page: BiliUgcSeason): BiliUgcSeason {
+        val mergedEpisodes = (base.sections.flatMap { it.episodes } + page.sections.flatMap { it.episodes })
+            .distinctBy { episode ->
+                when {
+                    episode.bvid.isNotBlank() -> "bvid:${episode.bvid}"
+                    episode.aid > 0L -> "aid:${episode.aid}"
+                    else -> "id:${episode.id}"
+                }
+            }
+        return base.withHydratedEpisodes(mergedEpisodes).copy(
+            title = base.title.ifBlank { page.title },
+            mid = base.mid.takeIf { it > 0L } ?: page.mid,
+            coverUrl = base.coverUrl.ifBlank { page.coverUrl },
+            apiEpCount = maxOf(base.apiEpCount, page.apiEpCount, mergedEpisodes.size),
+        )
+    }
+
+    private fun parseUgcSeasonEpisodes(array: org.json.JSONArray?): List<BiliUgcSeasonEpisode> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val episode = array.optJSONObject(index) ?: continue
+                val arc = episode.optJSONObject("arc")
+                val bvid = episode.optString("bvid").ifBlank { arc?.optString("bvid").orEmpty() }
+                val aid = episode.optLong("aid").takeIf { it > 0L } ?: arc?.optLong("aid") ?: 0L
+                if (bvid.isBlank() && aid <= 0L) continue
+                val cid = episode.optLong("cid").takeIf { it > 0L }
+                    ?: episode.optJSONObject("page")?.optLong("cid")
+                    ?: arc?.optJSONArray("pages")?.optJSONObject(0)?.optLong("cid")
+                    ?: 0L
+                add(
+                    BiliUgcSeasonEpisode(
+                        id = episode.optLong("id"),
+                        aid = aid,
+                        bvid = bvid,
+                        cid = cid,
+                        title = episode.optString("title").ifBlank { arc?.optString("title").orEmpty() },
+                        coverUrl = normalizeImageUrl(
+                            episode.optString("cover").ifBlank { arc?.optString("pic").orEmpty() },
+                        ),
+                        durationSeconds = arc?.optLong("duration")?.toInt()
+                            ?: episode.optLong("duration").toInt(),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun parseVideoReqUser(data: JSONObject): BiliVideoRelation {
+        val reqUser = data.optJSONObject("req_user") ?: return BiliVideoRelation()
+        return BiliVideoRelation(
+            liked = reqUser.optInt("like") == 1 || reqUser.optBoolean("like"),
+            favorited = reqUser.optInt("favorite") == 1 || reqUser.optBoolean("favorite"),
+            coinCount = reqUser.optInt("coin").coerceAtLeast(0),
         )
     }
 
     fun parseVideoArchiveRelation(json: JSONObject): BiliVideoRelation {
         val data = json.optJSONObject("data") ?: return BiliVideoRelation()
         return BiliVideoRelation(
-            liked = data.optInt("like") == 1,
-            favorited = data.optInt("favorite") == 1,
+            liked = data.optInt("like") == 1 || data.optBoolean("like"),
+            favorited = data.optInt("favorite") == 1 || data.optBoolean("favorite"),
             coinCount = data.optInt("coin").coerceAtLeast(0),
+        )
+    }
+
+    fun parseHasLike(json: JSONObject): Boolean {
+        return when (val data = json.opt("data")) {
+            is Number -> data.toInt() == 1
+            is Boolean -> data
+            is JSONObject -> data.optInt("like") == 1 || data.optBoolean("like")
+            else -> false
+        }
+    }
+
+    fun parseVideoFavoured(json: JSONObject): Boolean {
+        val data = json.optJSONObject("data") ?: return false
+        return data.optBoolean("favoured") || data.optInt("favoured") == 1
+    }
+
+    fun mergeVideoRelations(vararg relations: BiliVideoRelation): BiliVideoRelation {
+        if (relations.isEmpty()) return BiliVideoRelation()
+        return BiliVideoRelation(
+            liked = relations.any { it.liked },
+            favorited = relations.any { it.favorited },
+            coinCount = relations.maxOf { it.coinCount },
         )
     }
 
@@ -89,13 +300,62 @@ object BilibiliJsonParser {
 
     fun parseDefaultFavoriteFolderId(json: JSONObject): Long? {
         val list = json.optJSONObject("data")?.optJSONArray("list") ?: return null
-        for (index in 0 until list.length()) {
-            val item = list.optJSONObject(index) ?: continue
-            val id = item.optLong("id").takeIf { it > 0L }
-                ?: item.optLong("media_id").takeIf { it > 0L }
-            if (id != null) return id
+        val folders = buildList {
+            for (index in 0 until list.length()) {
+                val item = list.optJSONObject(index) ?: continue
+                val id = item.optLong("id").takeIf { it > 0L }
+                    ?: item.optLong("media_id").takeIf { it > 0L }
+                    ?: continue
+                add(item to id)
+            }
         }
-        return null
+        if (folders.isEmpty()) return null
+        return folders.firstOrNull { (item, _) -> item.optString("title") == "默认收藏夹" }?.second
+            ?: folders.maxByOrNull { (item, _) -> item.optInt("media_count") }?.second
+            ?: folders.first().second
+    }
+
+    fun parseFavoriteVideoPage(json: JSONObject, page: Int, pageSize: Int): BiliFavoriteVideoPage {
+        val data = json.optJSONObject("data")
+            ?: return BiliFavoriteVideoPage(emptyList(), page, false)
+        val medias = data.optJSONArray("medias") ?: org.json.JSONArray()
+        val videos = buildList(medias.length()) {
+            for (index in 0 until medias.length()) {
+                parseFavoriteMedia(medias.optJSONObject(index) ?: continue)?.let(::add)
+            }
+        }
+        val totalCount = data.optJSONObject("info")?.optInt("media_count") ?: videos.size
+        val hasMore = data.optBoolean("has_more") ||
+            (totalCount > 0 && page * pageSize < totalCount)
+        return BiliFavoriteVideoPage(
+            videos = videos,
+            page = page,
+            hasMore = hasMore,
+        )
+    }
+
+    private fun parseFavoriteMedia(item: JSONObject): BiliVideoItem? {
+        val mediaType = item.optInt("type")
+        if (mediaType != 0 && mediaType != 2) return null
+        var bvid = item.optString("bvid").ifBlank { item.optString("bv_id") }
+        if (bvid.isBlank()) {
+            bvid = extractBvidFromUrl(item.optString("link"))
+        }
+        if (bvid.isBlank()) return null
+        val upper = item.optJSONObject("upper") ?: JSONObject()
+        val cntInfo = item.optJSONObject("cnt_info") ?: JSONObject()
+        return BiliVideoItem(
+            bvid = bvid,
+            aid = item.optLong("id"),
+            title = item.optString("title"),
+            coverUrl = normalizeImageUrl(item.optString("cover")),
+            authorName = upper.optString("name"),
+            authorMid = upper.optLong("mid"),
+            viewCount = cntInfo.optLong("play"),
+            danmakuCount = cntInfo.optLong("danmaku"),
+            likeCount = 0L,
+            durationSeconds = item.optInt("duration"),
+        )
     }
 
     fun isPlausibleIpLocation(value: String): Boolean {
@@ -441,6 +701,19 @@ object BilibiliJsonParser {
             face = normalizeImageUrl(data.optString("face")),
             sign = data.optString("sign"),
             level = data.optInt("level"),
+        )
+    }
+
+    fun parseUserWallet(json: JSONObject): BiliUserWallet? {
+        val data = json.optJSONObject("data") ?: return null
+        if (!data.optBoolean("isLogin", data.optInt("mid") > 0)) return null
+        val wallet = data.optJSONObject("wallet")
+        val bcoinBalance = wallet?.optDouble("bcoin_balance")
+            ?: data.optDouble("bcoin_balance")
+        val coinCount = data.optLong("money")
+        return BiliUserWallet(
+            bcoinBalance = bcoinBalance,
+            coinCount = coinCount.coerceAtLeast(0L),
         )
     }
 
@@ -1322,6 +1595,8 @@ object BilibiliJsonParser {
             bvid = bvid,
             aid = aid,
             cid = history.optLong("cid"),
+            page = history.optInt("page"),
+            partTitle = history.optString("part"),
             title = title,
             coverUrl = normalizeImageUrl(cover),
             authorName = item.optString("author_name"),

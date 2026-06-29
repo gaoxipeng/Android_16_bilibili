@@ -132,6 +132,7 @@ fun BilibiliVideoSurface(
     }
 
     var player by remember(playbackKey) { mutableStateOf<ExoPlayer?>(null) }
+    var playerHandedOff by remember(playbackKey) { mutableStateOf(false) }
     var isPortraitPlayback by remember(playbackKey) { mutableStateOf(portraitVideo) }
     var playerSizeKnown by remember(playbackKey) { mutableStateOf(false) }
 
@@ -158,52 +159,87 @@ fun BilibiliVideoSurface(
         portraitVideo = fullscreenPortraitOrientation,
     )
 
-    LaunchedEffect(playbackKey, stream, isPeekPlayback, isFullscreen, playbackEnabled) {
-        val existing = player
-        if (existing != null) {
-            if (existing.mediaItemCount > 0) return@LaunchedEffect
-            runCatching { existing.release() }
+    var boundStreamToken by remember(playbackKey) { mutableStateOf<String?>(null) }
+
+    DisposableEffect(playbackKey, isFullscreen, isPeekPlayback) {
+        val handoffHandler: (String) -> Unit = handoffHandler@{ requestedKey ->
+            if (requestedKey != playbackKey || isPeekPlayback) return@handoffHandler
+            val currentPlayer = player ?: return@handoffHandler
+            coordinator.stashPlayer(playbackKey, currentPlayer, keepPlaying = true)
             player = null
+            playerHandedOff = true
         }
-        val waitForHandoff = isPeekPlayback || isFullscreen
-        val maxAttempts = if (waitForHandoff) 16 else 1
-        repeat(maxAttempts) { attempt ->
+        coordinator.registerHandoffPrepareHandler(handoffHandler)
+        onDispose {
+            coordinator.unregisterHandoffPrepareHandler(handoffHandler)
+        }
+    }
+
+    LaunchedEffect(playbackKey, stream.cid, stream.videoUrl, stream.audioUrl, isPeekPlayback, playbackEnabled) {
+        val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
+        if (player != null && boundStreamToken == streamToken) return@LaunchedEffect
+
+        val streamChanged = boundStreamToken != null && boundStreamToken != streamToken
+        if (streamChanged) {
+            coordinator.releaseHandoffPlayer()
+        }
+
+        player?.let { runCatching { it.release() } }
+        player = null
+        playerHandedOff = false
+        boundStreamToken = streamToken
+
+        fun bindHandoffPlayer(handedOff: ExoPlayer) {
+            if (playbackEnabled) {
+                handedOff.playWhenReady = true
+                if (handedOff.playbackState == Player.STATE_IDLE) {
+                    handedOff.prepare()
+                }
+                handedOff.play()
+            } else {
+                coordinator.savePlaybackPosition(playbackKey, handedOff.currentPosition)
+                handedOff.playWhenReady = false
+                handedOff.pause()
+            }
+            positionMs = handedOff.currentPosition.coerceAtLeast(0L)
+            durationMs = handedOff.duration.coerceAtLeast(0L)
+            isBuffering = handedOff.playbackState == Player.STATE_BUFFERING
+            handedOff.videoSize.let { videoSize ->
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    playerSizeKnown = true
+                    val portrait = isPortraitVideoSize(
+                        width = videoSize.width,
+                        height = videoSize.height,
+                        rotationDegrees = videoSize.unappliedRotationDegrees,
+                    )
+                    isPortraitPlayback = portrait
+                    if (isFullscreen) {
+                        coordinator.updateFullscreenPortrait(portrait)
+                    }
+                }
+            }
+            player = handedOff
+            playerHandedOff = false
+        }
+
+        coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
+            bindHandoffPlayer(handedOff)
+            return@LaunchedEffect
+        }
+
+        val waitForHandoff = isPeekPlayback || isFullscreen || coordinator.hasHandoffPlayer(playbackKey)
+        if (waitForHandoff) {
+        repeat(96) { attempt ->
             coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
-                if (playbackEnabled) {
-                    handedOff.playWhenReady = true
-                    if (handedOff.playbackState == Player.STATE_IDLE) {
-                        handedOff.prepare()
-                    }
-                    handedOff.play()
-                } else {
-                    coordinator.savePlaybackPosition(playbackKey, handedOff.currentPosition)
-                    handedOff.playWhenReady = false
-                    handedOff.pause()
-                }
-                positionMs = handedOff.currentPosition.coerceAtLeast(0L)
-                durationMs = handedOff.duration.coerceAtLeast(0L)
-                isBuffering = handedOff.playbackState == Player.STATE_BUFFERING
-                handedOff.videoSize.let { videoSize ->
-                    if (videoSize.width > 0 && videoSize.height > 0) {
-                        playerSizeKnown = true
-                        val portrait = isPortraitVideoSize(
-                            width = videoSize.width,
-                            height = videoSize.height,
-                            rotationDegrees = videoSize.unappliedRotationDegrees,
-                        )
-                        isPortraitPlayback = portrait
-                        if (isFullscreen) {
-                            coordinator.updateFullscreenPortrait(portrait)
-                        }
-                    }
-                }
-                player = handedOff
+                bindHandoffPlayer(handedOff)
                 return@LaunchedEffect
             }
-            if (attempt < maxAttempts - 1) {
+            if (attempt < 95) {
                 delay(32)
             }
         }
+        }
+        if (player != null) return@LaunchedEffect
         val startPositionMs = coordinator.getPlaybackPosition(playbackKey)
         player = createExoPlayer(
             context = context,
@@ -214,6 +250,7 @@ fun BilibiliVideoSurface(
         }.also {
             it.playWhenReady = playbackEnabled
             positionMs = startPositionMs
+            playerHandedOff = false
             if (!playbackEnabled) {
                 it.pause()
             }
@@ -243,11 +280,13 @@ fun BilibiliVideoSurface(
             modifier = modifier.background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            CircularProgressIndicator(
-                color = Color.White,
-                modifier = Modifier.size(28.dp),
-                strokeWidth = 2.dp,
-            )
+            if (!coordinator.hasHandoffPlayer(playbackKey)) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.size(28.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
         }
         return
     }
@@ -255,6 +294,7 @@ fun BilibiliVideoSurface(
     WatchHistoryEffect(stream = stream, player = activePlayer)
 
     DisposableEffect(activePlayer, playbackKey, isFullscreen, isPeekPlayback) {
+        val streamTokenAtMount = boundStreamToken
         val pauseHandler = {
             coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
             activePlayer.playWhenReady = false
@@ -331,17 +371,23 @@ fun BilibiliVideoSurface(
             } else if (!isFullscreen) {
                 coordinator.unregisterInlinePauseHandler(pauseHandler)
             }
+            if (playerHandedOff) return@onDispose
             val handoffToPeekFullscreen = isPeekPlayback &&
                 !isFullscreen &&
                 videoPeekController.isFullscreenMode &&
                 videoPeekController.activeRequest != null
+            val streamStillCurrent = streamTokenAtMount != null && streamTokenAtMount == boundStreamToken
             when {
                 handoffToPeekFullscreen -> Unit
+                !streamStillCurrent -> {
+                    coordinator.releaseHandoffPlayer()
+                    runCatching { activePlayer.release() }
+                }
                 !isFullscreen && coordinator.fullscreenKey == playbackKey -> {
-                    coordinator.stashPlayer(playbackKey, activePlayer)
+                    coordinator.stashPlayer(playbackKey, activePlayer, keepPlaying = true)
                 }
                 isFullscreen && coordinator.fullscreenKey == null && coordinator.activeKey == playbackKey -> {
-                    coordinator.stashPlayer(playbackKey, activePlayer)
+                    coordinator.stashPlayer(playbackKey, activePlayer, keepPlaying = true)
                 }
                 !isFullscreen && coordinator.activeKey == playbackKey -> {
                     coordinator.stashPlayer(playbackKey, activePlayer)
@@ -509,6 +555,7 @@ fun BilibiliVideoSurface(
             val danmakuBottomReserve = VideoControlBarHeight +
                 VideoControlBarBottomGap +
                 if (isFullscreen) 40.dp else 8.dp
+            val restoredDanmakuTimeline = coordinator.loadDanmakuTimeline(playbackKey, danmakuCid)
             DanmakuOverlay(
                 items = danmakuItems,
                 positionMs = positionMs,
@@ -518,6 +565,25 @@ fun BilibiliVideoSurface(
                 bottomReserve = danmakuBottomReserve,
                 enabled = danmakuVisible,
                 settings = danmakuSettings,
+                trackLineHeight = if (isFullscreen) {
+                    DanmakuTrackLineHeightDp
+                } else {
+                    DanmakuCompactTrackLineHeightDp
+                },
+                playbackKey = playbackKey,
+                danmakuCid = danmakuCid,
+                restoredTimeline = restoredDanmakuTimeline,
+                onTimelineSnapshot = { snapshot ->
+                    coordinator.saveDanmakuTimeline(
+                        playbackKey = playbackKey,
+                        cid = snapshot.cid,
+                        displayTimeMs = snapshot.displayTimeMs,
+                        anchorPositionMs = snapshot.anchorPositionMs,
+                        anchorRealtimeMs = snapshot.anchorRealtimeMs,
+                        nextIndex = snapshot.nextIndex,
+                        spawnedIds = snapshot.spawnedIds,
+                    )
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(3f),

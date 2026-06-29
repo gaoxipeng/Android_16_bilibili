@@ -1,24 +1,14 @@
 package com.example.bilibili.ui.screens
 
 import android.widget.Toast
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.AnchoredDraggableState
-import androidx.compose.foundation.gestures.DraggableAnchors
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.animateTo
-import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,11 +23,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -45,23 +45,24 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -71,23 +72,43 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliHistoryCursor
 import com.example.bilibili.data.BiliHistoryItem
+import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.FeedLayoutStore
+import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.ui.BindFeedTabReselectEffect
+import com.example.bilibili.ui.FeedTabReselectHandler
+import com.example.bilibili.ui.isScrolledToTop
 import com.example.bilibili.ui.LocalFeedTabReselectController
 import com.example.bilibili.ui.MainTab
+import com.example.bilibili.ui.components.ActionMenuDestructiveColor
+import com.example.bilibili.ui.components.ActionMenuOverlay
+import com.example.bilibili.ui.components.ActionMenuRequest
+import com.example.bilibili.ui.components.ActionMenuOneRowHeight
+import com.example.bilibili.ui.components.ActionMenuRow
+import com.example.bilibili.ui.components.ObserveListNearEnd
+import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
 import com.example.bilibili.ui.components.RemoteImage
+import com.example.bilibili.ui.components.SlidingTextTabs
 import com.example.bilibili.ui.components.UpAuthorBadge
 import com.example.bilibili.ui.components.VideoCoverBottomScrim
 import com.example.bilibili.ui.components.VideoCoverOverlayText
+import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.ui.format.formatBiliHistorySectionLabel
 import com.example.bilibili.ui.format.formatBiliHistoryViewTime
 import com.example.bilibili.ui.format.formatHistoryDurationBadge
+import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
+
+private enum class HistoryContentTab(val label: String) {
+    History("历史"),
+    Favorites("收藏"),
+}
 
 private data class HistoryEntry(
     val item: BiliHistoryItem,
@@ -95,10 +116,6 @@ private data class HistoryEntry(
     val showSectionHeader: Boolean,
 )
 
-private enum class HistorySwipeAnchor { Closed, Open }
-
-private val HistoryDeleteActionColor = Color(0xFFE35D5B)
-private val HistoryDeleteActionWidth = 72.dp
 private val HistorySectionHeaderHeight = 32.dp
 private val HistoryCoverWidth = 136.dp
 private val HistoryCoverHeight = 77.dp
@@ -144,6 +161,80 @@ private fun resolveStickyHistorySectionLabel(
     return if (showSticky) sectionLabel else null
 }
 
+internal data class HistoryActionMenuRequest(
+    val kid: String,
+    val anchorBoundsInRoot: Rect,
+)
+
+class HistoryMenuController {
+    internal var request by mutableStateOf<HistoryActionMenuRequest?>(null)
+    internal var visible by mutableStateOf(false)
+    internal var onDelete: ((String) -> Unit)? = null
+    internal var openGeneration by mutableStateOf(0)
+
+    fun open(
+        kid: String,
+        anchorBoundsInRoot: Rect,
+        onDelete: (String) -> Unit,
+    ) {
+        if (anchorBoundsInRoot.width <= 0f || anchorBoundsInRoot.height <= 0f) return
+        if (visible && request?.kid == kid) {
+            dismiss()
+            return
+        }
+        request = HistoryActionMenuRequest(kid, anchorBoundsInRoot)
+        this.onDelete = onDelete
+        openGeneration++
+        visible = true
+    }
+
+    fun dismiss() {
+        visible = false
+    }
+
+    fun dismissIfShowing(kid: String) {
+        if (visible && request?.kid == kid) {
+            dismiss()
+        }
+    }
+}
+
+@Composable
+fun rememberHistoryMenuController(): HistoryMenuController = remember { HistoryMenuController() }
+
+@Composable
+fun HistoryMenuOverlay(
+    controller: HistoryMenuController,
+    backdrop: Backdrop,
+    modifier: Modifier = Modifier,
+) {
+    ActionMenuOverlay(
+        activeRequest = controller.request?.let {
+            ActionMenuRequest(anchorBoundsInRoot = it.anchorBoundsInRoot)
+        },
+        menuVisible = controller.visible,
+        menuRevealKey = controller.openGeneration,
+        menuHeight = ActionMenuOneRowHeight,
+        menuLabels = listOf("删除"),
+        onDismiss = { controller.dismiss() },
+        backdrop = backdrop,
+        useFeedCardAlignment = false,
+        menuContainerColor = ActionMenuDestructiveColor,
+        zIndex = 50f,
+        modifier = modifier,
+    ) {
+        ActionMenuRow(
+            label = "删除",
+            destructive = true,
+            onClick = {
+                val kid = controller.request?.kid ?: return@ActionMenuRow
+                controller.dismiss()
+                controller.onDelete?.invoke(kid)
+            },
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -151,28 +242,54 @@ fun HistoryScreen(
     credential: BilibiliCredential?,
     loggedIn: Boolean,
     onLoginClick: () -> Unit,
-    onVideoClick: (BiliVideoItem, progressSeconds: Int) -> Unit,
+    onHistoryItemClick: (BiliHistoryItem) -> Unit,
+    onVideoClick: (BiliVideoItem) -> Unit,
+    playUrls: Map<String, BiliPlayStream>,
+    coordinator: VideoPlaybackCoordinator,
+    onEnsurePlayStream: (BiliVideoItem) -> Unit,
+    onAuthorClick: (Long) -> Unit = {},
+    menuController: HistoryMenuController,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
     pullRefreshState: PullToRefreshState = rememberPullToRefreshState(),
     showEmbeddedPullRefreshIndicator: Boolean = false,
     onPullRefreshingChange: (Boolean) -> Unit = {},
+    feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val listState = rememberLazyListState()
+    val historyListState = rememberLazyListState()
+    val favoritesListState = rememberLazyListState()
+    val favoritesGridState = rememberLazyStaggeredGridState()
+    val useSingleColumnFavorites = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
     val sectionHeaderHeightPx = remember(density) {
         with(density) { HistorySectionHeaderHeight.roundToPx() }
     }
 
-    var items by remember { mutableStateOf<List<BiliHistoryItem>>(emptyList()) }
-    var cursor by remember { mutableStateOf<BiliHistoryCursor?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var loadingMore by remember { mutableStateOf(false) }
+    val pagerState = rememberPagerState(
+        initialPage = 0,
+        pageCount = { HistoryContentTab.entries.size },
+    )
+    val tabScrollPosition by remember {
+        derivedStateOf { pagerState.currentPage + pagerState.currentPageOffsetFraction }
+    }
+
+    var historyItems by remember { mutableStateOf<List<BiliHistoryItem>>(emptyList()) }
+    var historyCursor by remember { mutableStateOf<BiliHistoryCursor?>(null) }
+    var historyLoading by remember { mutableStateOf(false) }
+    var historyLoadingMore by remember { mutableStateOf(false) }
+    var historyError by remember { mutableStateOf<String?>(null) }
+
+    var favoriteVideos by remember { mutableStateOf<List<BiliVideoItem>>(emptyList()) }
+    var favoritePage by remember { mutableStateOf(1) }
+    var favoriteHasMore by remember { mutableStateOf(true) }
+    var favoriteLoading by remember { mutableStateOf(false) }
+    var favoriteLoadingMore by remember { mutableStateOf(false) }
+    var favoriteError by remember { mutableStateOf<String?>(null) }
+    var favoritesLoaded by remember { mutableStateOf(false) }
+
     var refreshing by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var openedSwipeKid by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(refreshing) {
         onPullRefreshingChange(refreshing)
@@ -181,62 +298,122 @@ fun HistoryScreen(
     suspend fun loadHistory(reset: Boolean, scrollToTopWhenDone: Boolean = false) {
         val cred = credential ?: return
         if (reset) {
-            loading = true
-            error = null
-            openedSwipeKid = null
+            historyLoading = true
+            historyError = null
         } else {
-            if (loadingMore || cursor?.hasMore != true) return
-            loadingMore = true
+            if (historyLoadingMore || historyCursor?.hasMore != true) return
+            historyLoadingMore = true
         }
         try {
             val page = api.getWatchHistory(
                 credential = cred,
-                max = if (reset) 0L else cursor?.max ?: 0L,
-                viewAt = if (reset) 0L else cursor?.viewAt ?: 0L,
-                business = if (reset) "" else cursor?.business.orEmpty(),
+                max = if (reset) 0L else historyCursor?.max ?: 0L,
+                viewAt = if (reset) 0L else historyCursor?.viewAt ?: 0L,
+                business = if (reset) "" else historyCursor?.business.orEmpty(),
             )
             if (reset) {
-                items = page.items
+                historyItems = page.items
             } else {
-                items = (items + page.items).distinctBy { it.kid }
+                historyItems = (historyItems + page.items).distinctBy { it.kid }
             }
-            cursor = page.cursor
+            historyCursor = page.cursor
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             if (reset) {
-                error = e.message ?: "加载失败"
-                items = emptyList()
+                historyError = e.message ?: "加载失败"
+                historyItems = emptyList()
             }
         } finally {
-            loading = false
-            loadingMore = false
-            refreshing = false
+            historyLoading = false
+            historyLoadingMore = false
             if (scrollToTopWhenDone) {
-                listState.animateScrollToItem(0)
+                historyListState.animateScrollToItem(0)
             }
         }
     }
 
-    fun triggerPullRefresh() {
-        refreshing = true
-        scope.launch { loadHistory(reset = true, scrollToTopWhenDone = true) }
+    suspend fun loadFavorites(reset: Boolean, scrollToTopWhenDone: Boolean = false) {
+        val cred = credential ?: return
+        if (reset) {
+            favoriteLoading = true
+            favoriteError = null
+            favoritePage = 1
+            favoriteHasMore = true
+        } else {
+            if (favoriteLoadingMore || !favoriteHasMore) return
+            favoriteLoadingMore = true
+        }
+        try {
+            val nextPage = if (reset) 1 else favoritePage + 1
+            val page = api.getFavoriteVideoPage(credential = cred, page = nextPage)
+            favoriteVideos = if (reset) {
+                page.videos
+            } else {
+                (favoriteVideos + page.videos).distinctBy { it.bvid }
+            }
+            favoritePage = nextPage
+            favoriteHasMore = page.hasMore && page.videos.isNotEmpty()
+            favoritesLoaded = true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (reset) {
+                favoriteError = e.message ?: "加载失败"
+                favoriteVideos = emptyList()
+            }
+        } finally {
+            favoriteLoading = false
+            favoriteLoadingMore = false
+            if (scrollToTopWhenDone) {
+                if (useSingleColumnFavorites) {
+                    favoritesListState.animateScrollToItem(0)
+                } else {
+                    favoritesGridState.animateScrollToItem(0)
+                }
+            }
+        }
+    }
+
+    fun refreshCurrentTab(scrollToTopWhenDone: Boolean = false) {
+        scope.launch {
+            refreshing = true
+            try {
+                when (HistoryContentTab.entries[pagerState.currentPage]) {
+                    HistoryContentTab.History -> loadHistory(reset = true, scrollToTopWhenDone = scrollToTopWhenDone)
+                    HistoryContentTab.Favorites -> loadFavorites(reset = true, scrollToTopWhenDone = scrollToTopWhenDone)
+                }
+            } finally {
+                refreshing = false
+            }
+        }
     }
 
     LaunchedEffect(loggedIn, credential?.dedeUserId) {
         if (loggedIn && credential != null) {
             loadHistory(reset = true)
+            favoritesLoaded = false
+            favoriteVideos = emptyList()
         } else {
-            items = emptyList()
-            cursor = null
-            openedSwipeKid = null
+            historyItems = emptyList()
+            historyCursor = null
+            favoriteVideos = emptyList()
+            favoritesLoaded = false
+            favoriteHasMore = true
         }
     }
 
-    LaunchedEffect(listState, cursor?.hasMore, loggedIn) {
-        if (!loggedIn) return@LaunchedEffect
+    LaunchedEffect(pagerState.currentPage, loggedIn, credential?.dedeUserId) {
+        if (!loggedIn || credential == null) return@LaunchedEffect
+        if (pagerState.currentPage == HistoryContentTab.Favorites.ordinal && !favoritesLoaded && !favoriteLoading) {
+            loadFavorites(reset = true)
+        }
+    }
+
+    LaunchedEffect(historyListState, historyCursor?.hasMore, loggedIn) {
+        if (!loggedIn || pagerState.currentPage != HistoryContentTab.History.ordinal) return@LaunchedEffect
         snapshotFlow {
-            val info = listState.layoutInfo
+            val info = historyListState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
             val total = info.totalItemsCount
             if (total <= 0 || last < total - 4) null else last
@@ -244,6 +421,65 @@ fun HistoryScreen(
             .distinctUntilChanged()
             .filterNotNull()
             .collect { loadHistory(reset = false) }
+    }
+
+    ObserveListNearEnd(
+        listState = favoritesListState,
+        enabled = loggedIn &&
+            useSingleColumnFavorites &&
+            pagerState.currentPage == HistoryContentTab.Favorites.ordinal &&
+            favoriteHasMore &&
+            !favoriteLoadingMore,
+        onNearEnd = { scope.launch { loadFavorites(reset = false) } },
+    )
+    ObserveStaggeredGridNearEnd(
+        gridState = favoritesGridState,
+        enabled = loggedIn &&
+            !useSingleColumnFavorites &&
+            pagerState.currentPage == HistoryContentTab.Favorites.ordinal &&
+            favoriteHasMore &&
+            !favoriteLoadingMore,
+        onNearEnd = { scope.launch { loadFavorites(reset = false) } },
+    )
+
+    val feedTabReselectController = LocalFeedTabReselectController.current
+    if (feedTabReselectController != null) {
+        DisposableEffect(
+            feedTabReselectController,
+            historyListState,
+            favoritesListState,
+            favoritesGridState,
+            useSingleColumnFavorites,
+            pagerState,
+        ) {
+            feedTabReselectController.register(
+                MainTab.History,
+                FeedTabReselectHandler(
+                    isAtTop = {
+                        when (HistoryContentTab.entries[pagerState.currentPage]) {
+                            HistoryContentTab.History -> historyListState.isScrolledToTop()
+                            HistoryContentTab.Favorites -> if (useSingleColumnFavorites) {
+                                favoritesListState.isScrolledToTop()
+                            } else {
+                                favoritesGridState.isScrolledToTop()
+                            }
+                        }
+                    },
+                    scrollToTop = {
+                        when (HistoryContentTab.entries[pagerState.currentPage]) {
+                            HistoryContentTab.History -> historyListState.animateScrollToItem(0)
+                            HistoryContentTab.Favorites -> if (useSingleColumnFavorites) {
+                                favoritesListState.animateScrollToItem(0)
+                            } else {
+                                favoritesGridState.animateScrollToItem(0)
+                            }
+                        }
+                    },
+                    refresh = { refreshCurrentTab(scrollToTopWhenDone = true) },
+                ),
+            )
+            onDispose { feedTabReselectController.unregister(MainTab.History) }
+        }
     }
 
     if (!loggedIn) {
@@ -254,7 +490,7 @@ fun HistoryScreen(
             contentAlignment = Alignment.Center,
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("登录后查看观看历史", style = MaterialTheme.typography.titleMedium)
+                Text("登录后查看历史与收藏", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onLoginClick) {
                     Text("打开哔哩哔哩登录")
@@ -264,27 +500,18 @@ fun HistoryScreen(
         return
     }
 
-    val entries = remember(items) { buildHistoryEntries(items) }
-    val stickySection by remember(entries, listState, sectionHeaderHeightPx) {
+    val historyEntries = remember(historyItems) { buildHistoryEntries(historyItems) }
+    val stickySection by remember(historyEntries, historyListState, sectionHeaderHeightPx) {
         derivedStateOf {
-            resolveStickyHistorySectionLabel(listState, entries, sectionHeaderHeightPx)
+            resolveStickyHistorySectionLabel(historyListState, historyEntries, sectionHeaderHeightPx)
         }
     }
     val listTopInset = contentPadding.calculateTopPadding()
-    val feedTabReselectController = LocalFeedTabReselectController.current
-
-    if (feedTabReselectController != null) {
-        BindFeedTabReselectEffect(
-            tab = MainTab.History,
-            controller = feedTabReselectController,
-            listState = listState,
-            onRefresh = ::triggerPullRefresh,
-        )
-    }
+    val listBottomInset = contentPadding.calculateBottomPadding() + 88.dp
 
     PullToRefreshBox(
         isRefreshing = refreshing,
-        onRefresh = ::triggerPullRefresh,
+        onRefresh = { refreshCurrentTab(scrollToTopWhenDone = true) },
         state = pullRefreshState,
         indicator = {
             if (showEmbeddedPullRefreshIndicator) {
@@ -299,110 +526,254 @@ fun HistoryScreen(
         },
         modifier = modifier.fillMaxSize(),
     ) {
-        when {
-            loading && items.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-            error != null && items.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
-                }
-            }
-            items.isEmpty() && !loading -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "暂无观看历史",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            else -> {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        state = listState,
-                        contentPadding = PaddingValues(
-                            top = listTopInset,
-                            bottom = contentPadding.calculateBottomPadding() + 88.dp,
-                        ),
-                    ) {
-                        items(
-                            items = entries,
-                            key = { it.item.kid },
-                        ) { entry ->
-                            Column(
-                                modifier = Modifier.animateItem(
-                                    placementSpec = spring(
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMedium,
-                                    ),
-                                ),
-                            ) {
-                                if (entry.showSectionHeader) {
-                                    HistorySectionHeader(entry.sectionLabel)
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+                    .padding(top = listTopInset),
+            ) {
+                HistoryContentTabBar(
+                    scrollPosition = tabScrollPosition,
+                    onTabSelected = { tab ->
+                        val sameTab = tab == HistoryContentTab.entries[pagerState.currentPage]
+                        if (sameTab) {
+                            scope.launch {
+                                when (tab) {
+                                    HistoryContentTab.History -> historyListState.animateScrollToItem(0)
+                                    HistoryContentTab.Favorites -> if (useSingleColumnFavorites) {
+                                        favoritesListState.animateScrollToItem(0)
+                                    } else {
+                                        favoritesGridState.animateScrollToItem(0)
+                                    }
                                 }
-                                HistorySwipeItemRow(
-                                    item = entry.item,
-                                    openedSwipeKid = openedSwipeKid,
-                                    onOpenedSwipeKidChange = { openedSwipeKid = it },
-                                    onClick = {
-                                        onVideoClick(entry.item.toVideoItem(), entry.item.progressSeconds)
-                                    },
-                                    onDelete = {
-                                        val cred = credential ?: return@HistorySwipeItemRow false
-                                        val deleted = api.deleteWatchHistory(entry.item.kid, cred)
-                                        if (deleted) {
-                                            items = items.filterNot { it.kid == entry.item.kid }
-                                            if (openedSwipeKid == entry.item.kid) {
-                                                openedSwipeKid = null
-                                            }
-                                        } else {
-                                            Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
-                                        }
-                                        deleted
-                                    },
-                                )
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(start = 16.dp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f),
-                                )
+                            }
+                        } else {
+                            scope.launch {
+                                pagerState.animateScrollToPage(HistoryContentTab.entries.indexOf(tab))
                             }
                         }
-                        if (loadingMore) {
-                            item(key = "history-loading-more") {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 16.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    },
+                )
+            }
+
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                beyondViewportPageCount = 1,
+            ) { page ->
+                when (HistoryContentTab.entries[page]) {
+                    HistoryContentTab.History -> {
+                        when {
+                            historyLoading && historyItems.isEmpty() -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator()
+                                }
+                            }
+                            historyError != null && historyItems.isEmpty() -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(historyError.orEmpty(), color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            historyItems.isEmpty() && !historyLoading -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "暂无观看历史",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            else -> {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    LazyColumn(
+                                        state = historyListState,
+                                        contentPadding = PaddingValues(bottom = listBottomInset),
+                                    ) {
+                                        items(
+                                            items = historyEntries,
+                                            key = { it.item.kid },
+                                        ) { entry ->
+                                            Column(
+                                                modifier = Modifier.animateItem(
+                                                    placementSpec = spring(
+                                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                                        stiffness = Spring.StiffnessMedium,
+                                                    ),
+                                                ),
+                                            ) {
+                                                if (entry.showSectionHeader) {
+                                                    HistorySectionHeader(entry.sectionLabel)
+                                                }
+                                                HistoryItemRow(
+                                                    item = entry.item,
+                                                    onClick = {
+                                                        onHistoryItemClick(entry.item)
+                                                    },
+                                                    onMoreClick = { anchor ->
+                                                        menuController.open(entry.item.kid, anchor) { kid ->
+                                                            val cred = credential ?: return@open
+                                                            scope.launch {
+                                                                val deleted = api.deleteWatchHistory(kid, cred)
+                                                                if (deleted) {
+                                                                    menuController.dismissIfShowing(kid)
+                                                                    historyItems = historyItems.filterNot { it.kid == kid }
+                                                                } else {
+                                                                    Toast.makeText(
+                                                                        context,
+                                                                        "删除失败",
+                                                                        Toast.LENGTH_SHORT,
+                                                                    ).show()
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                )
+                                                HorizontalDivider(
+                                                    modifier = Modifier.padding(start = 16.dp),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f),
+                                                )
+                                            }
+                                        }
+                                        if (historyLoadingMore) {
+                                            item(key = "history-loading-more") {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 16.dp),
+                                                    contentAlignment = Alignment.Center,
+                                                ) {
+                                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    stickySection?.let { label ->
+                                        HistoryStickySectionHeader(
+                                            label = label,
+                                            modifier = Modifier.align(Alignment.TopStart),
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .fillMaxWidth()
-                            .height(listTopInset)
-                            .background(Color.White)
-                            .zIndex(1f),
-                    )
-                    stickySection?.let { label ->
-                        HistoryStickySectionHeader(
-                            label = label,
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(top = listTopInset)
-                                .zIndex(1f),
-                        )
+                    HistoryContentTab.Favorites -> {
+                        when {
+                            favoriteLoading && favoriteVideos.isEmpty() -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator()
+                                }
+                            }
+                            favoriteError != null && favoriteVideos.isEmpty() -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(favoriteError.orEmpty(), color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            favoriteVideos.isEmpty() && !favoriteLoading -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "暂无收藏视频",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            useSingleColumnFavorites -> {
+                                LazyColumn(
+                                    state = favoritesListState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(
+                                        start = HomeFeedSingleColumnHorizontalPadding,
+                                        end = HomeFeedSingleColumnHorizontalPadding,
+                                        bottom = listBottomInset,
+                                    ),
+                                    verticalArrangement = Arrangement.spacedBy(HomeFeedSingleColumnSpacing),
+                                ) {
+                                    items(favoriteVideos, key = { it.bvid }) { video ->
+                                        VideoFeedCard(
+                                            video = video,
+                                            playStream = playUrls[video.bvid],
+                                            coordinator = coordinator,
+                                            onClick = { onVideoClick(video) },
+                                            onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                            onAuthorClick = onAuthorClick,
+                                            overlayMetaOnCover = true,
+                                        )
+                                    }
+                                    if (favoriteLoadingMore) {
+                                        item(key = "favorites-loading-more") {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 16.dp),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            else -> {
+                                LazyVerticalStaggeredGrid(
+                                    columns = StaggeredGridCells.Fixed(2),
+                                    state = favoritesGridState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(
+                                        start = HomeFeedGridHorizontalPadding,
+                                        end = HomeFeedGridHorizontalPadding,
+                                        bottom = listBottomInset,
+                                    ),
+                                    horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                                    verticalItemSpacing = HomeFeedGridSpacing,
+                                ) {
+                                    items(favoriteVideos, key = { it.bvid }) { video ->
+                                        VideoFeedCard(
+                                            video = video,
+                                            playStream = playUrls[video.bvid],
+                                            coordinator = coordinator,
+                                            onClick = { onVideoClick(video) },
+                                            onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                            onAuthorClick = onAuthorClick,
+                                            gridStyle = true,
+                                        )
+                                    }
+                                    if (favoriteLoadingMore) {
+                                        item(key = "favorites-loading-more", span = StaggeredGridItemSpan.FullLine) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 16.dp),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
+
+}
+
+@Composable
+private fun HistoryContentTabBar(
+    scrollPosition: Float,
+    onTabSelected: (HistoryContentTab) -> Unit,
+) {
+    val tabs = HistoryContentTab.entries
+    SlidingTextTabs(
+        labels = tabs.map { it.label },
+        scrollPosition = scrollPosition,
+        onTabSelected = { index -> onTabSelected(tabs[index]) },
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable
@@ -434,163 +805,39 @@ private fun HistoryStickySectionHeader(
     )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HistorySwipeItemRow(
+private fun HistoryItemRow(
     item: BiliHistoryItem,
-    openedSwipeKid: String?,
-    onOpenedSwipeKidChange: (String?) -> Unit,
     onClick: () -> Unit,
-    onDelete: suspend () -> Boolean,
+    onMoreClick: (Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val density = LocalDensity.current
-    val deleteActionWidthPx = remember(density) {
-        with(density) { HistoryDeleteActionWidth.toPx() }
-    }
-    val scope = rememberCoroutineScope()
-    var rowWidthPx by remember(item.kid) { mutableFloatStateOf(0f) }
-    var deleting by remember(item.kid) { mutableStateOf(false) }
-    val dismissOffset = remember(item.kid) { Animatable(0f) }
-    val dragState = remember(item.kid, deleteActionWidthPx, density) {
-        AnchoredDraggableState(
-            initialValue = HistorySwipeAnchor.Closed,
-            anchors = DraggableAnchors {
-                HistorySwipeAnchor.Closed at 0f
-                HistorySwipeAnchor.Open at -deleteActionWidthPx
-            },
-            positionalThreshold = { distance -> distance * 0.35f },
-            velocityThreshold = { with(density) { 120.dp.toPx() } },
-            snapAnimationSpec = spring(
-                dampingRatio = 0.82f,
-                stiffness = Spring.StiffnessMedium,
-            ),
-            decayAnimationSpec = exponentialDecay(),
-        )
-    }
-    val currentOpenedSwipeKid by rememberUpdatedState(openedSwipeKid)
-    LaunchedEffect(openedSwipeKid, item.kid) {
-        if (openedSwipeKid != item.kid && dragState.currentValue != HistorySwipeAnchor.Closed) {
-            dragState.animateTo(HistorySwipeAnchor.Closed)
-        }
-    }
-    LaunchedEffect(dragState, item.kid) {
-        snapshotFlow { dragState.currentValue }
-            .distinctUntilChanged()
-            .collect { value ->
-                when (value) {
-                    HistorySwipeAnchor.Open -> {
-                        if (currentOpenedSwipeKid != item.kid) {
-                            onOpenedSwipeKidChange(item.kid)
-                        }
-                    }
-                    HistorySwipeAnchor.Closed -> {
-                        if (currentOpenedSwipeKid == item.kid) {
-                            onOpenedSwipeKidChange(null)
-                        }
-                    }
-                }
-            }
-    }
-    LaunchedEffect(dragState, item.kid) {
-        snapshotFlow {
-            dragState.requireOffset() to dragState.isAnimationRunning
-        }
-            .distinctUntilChanged()
-            .collect { (offset, animating) ->
-                if (
-                    !animating &&
-                    offset < 0f &&
-                    currentOpenedSwipeKid != null &&
-                    currentOpenedSwipeKid != item.kid
-                ) {
-                    onOpenedSwipeKidChange(item.kid)
-                }
-            }
-    }
-    val swipeOffsetPx = if (deleting) dismissOffset.value else dragState.requireOffset()
-    val isRevealed = dragState.currentValue == HistorySwipeAnchor.Open
-    val canOpenVideo = !deleting && !isRevealed && swipeOffsetPx == 0f
-
-    Box(
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Max)
-            .onSizeChanged { rowWidthPx = it.width.toFloat() },
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        Box(
+        HistoryThumbnail(
+            coverUrl = item.coverUrl,
+            progressSeconds = item.progressSeconds,
+            durationSeconds = item.durationSeconds,
             modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .width(HistoryDeleteActionWidth)
-                .fillMaxHeight()
-                .background(HistoryDeleteActionColor)
-                .clickable(
-                    enabled = !deleting,
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {
-                        if (rowWidthPx <= 0f) return@clickable
-                        scope.launch {
-                            deleting = true
-                            dismissOffset.snapTo(dragState.requireOffset())
-                            dismissOffset.animateTo(
-                                targetValue = -rowWidthPx,
-                                animationSpec = tween(durationMillis = 260),
-                            )
-                            val deleted = onDelete()
-                            if (!deleted) {
-                                dismissOffset.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = tween(durationMillis = 200),
-                                )
-                                deleting = false
-                            }
-                        }
-                    },
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "删除",
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-        Row(
+                .width(HistoryCoverWidth)
+                .height(HistoryCoverHeight)
+                .clickable(onClick = onClick),
+        )
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer {
-                    translationX = swipeOffsetPx
-                    clip = true
-                }
-                .anchoredDraggable(
-                    state = dragState,
-                    orientation = Orientation.Horizontal,
-                    enabled = !deleting,
-                )
-                .background(Color.White)
-                .clickable(
-                    enabled = canOpenVideo,
-                    onClick = onClick,
-                )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.Top,
+                .weight(1f)
+                .padding(start = 12.dp)
+                .height(HistoryCoverHeight),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            HistoryThumbnail(
-                coverUrl = item.coverUrl,
-                progressSeconds = item.progressSeconds,
-                durationSeconds = item.durationSeconds,
-                modifier = Modifier
-                    .width(HistoryCoverWidth)
-                    .height(HistoryCoverHeight),
-            )
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 12.dp)
-                    .height(HistoryCoverHeight),
-                verticalArrangement = Arrangement.SpaceBetween,
+                    .fillMaxWidth()
+                    .clickable(onClick = onClick),
             ) {
                 Text(
                     text = item.title.ifBlank { "未命名视频" },
@@ -601,31 +848,60 @@ private fun HistorySwipeItemRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    if (item.authorName.isNotBlank()) {
-                        Row(
-                            modifier = Modifier.height(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            UpAuthorBadge()
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = item.authorName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                if (item.authorName.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Row(
+                        modifier = Modifier.height(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        UpAuthorBadge()
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = item.authorName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
-                    Text(
-                        text = formatBiliHistoryViewTime(item.viewAtSeconds),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
                 }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = formatBiliHistoryViewTime(item.viewAtSeconds),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = onClick),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                var menuCoordinates by remember(item.kid) { mutableStateOf<LayoutCoordinates?>(null) }
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "更多",
+                    modifier = Modifier
+                        .size(24.dp)
+                        .onGloballyPositioned { coordinates ->
+                            if (coordinates.isAttached) {
+                                menuCoordinates = coordinates
+                            }
+                        }
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                            onClick = {
+                                val coordinates = menuCoordinates?.takeIf { it.isAttached } ?: return@clickable
+                                onMoreClick(coordinates.boundsInRoot())
+                            },
+                        )
+                        .padding(3.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -683,18 +959,3 @@ private fun HistoryThumbnail(
         )
     }
 }
-
-private fun BiliHistoryItem.toVideoItem(): BiliVideoItem =
-    BiliVideoItem(
-        bvid = bvid,
-        aid = aid,
-        cid = cid,
-        title = title,
-        coverUrl = coverUrl,
-        authorName = authorName,
-        authorMid = authorMid,
-        viewCount = 0L,
-        danmakuCount = 0L,
-        likeCount = 0L,
-        durationSeconds = durationSeconds,
-    )

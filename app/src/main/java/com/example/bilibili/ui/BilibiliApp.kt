@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.example.bilibili.data.BiliHistoryItem
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.BiliDynamicItem
@@ -63,7 +64,9 @@ import com.example.bilibili.ui.LocalFeedTabForReselect
 import com.example.bilibili.ui.LocalFeedTabReselectController
 import com.example.bilibili.ui.rememberFeedTabReselectController
 import com.example.bilibili.ui.screens.FollowingScreen
+import com.example.bilibili.ui.screens.HistoryMenuOverlay
 import com.example.bilibili.ui.screens.HistoryScreen
+import com.example.bilibili.ui.screens.rememberHistoryMenuController
 import com.example.bilibili.ui.screens.HomeScreen
 import com.example.bilibili.ui.screens.HomeSearchCapsule
 import com.example.bilibili.ui.screens.HotScreen
@@ -72,6 +75,7 @@ import com.example.bilibili.ui.screens.SearchScreen
 import com.example.bilibili.ui.screens.UserProfileScreen
 import com.example.bilibili.ui.screens.UserRelationListScreen
 import com.example.bilibili.ui.screens.DynamicDetailScreen
+import com.example.bilibili.data.BiliVideoPage
 import com.example.bilibili.ui.screens.VideoDetailScreen
 import com.example.bilibili.ui.screens.MineScreen
 import com.example.bilibili.ui.liquidglass.LocalLiquidMenuBackdrop
@@ -81,6 +85,9 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.example.bilibili.ui.navigation.AppNavController
 import com.example.bilibili.ui.navigation.AppNavEntry
 import com.example.bilibili.ui.navigation.findVideoDetail
@@ -100,6 +107,9 @@ fun BilibiliApp() {
     val playerPreferences = remember { BilibiliPlayerPreferences(context) }
     val feedLayoutStore = remember { FeedLayoutStore(context) }
     var feedColumnCount by remember { mutableIntStateOf(feedLayoutStore.readColumnCount()) }
+    var backgroundPlaybackEnabled by remember {
+        mutableStateOf(playerPreferences.readBackgroundPlaybackEnabled())
+    }
     val webSession = remember { BilibiliWebSession(context) }
     val coordinator = remember(playerPreferences) {
         VideoPlaybackCoordinator(
@@ -157,6 +167,7 @@ fun BilibiliApp() {
     var feedSearchVisible by remember { mutableStateOf(true) }
 
     val bottomBarBackdrop = rememberLayerBackdrop()
+    val historyMenuController = rememberHistoryMenuController()
     val homePullRefreshState = rememberPullToRefreshState()
     val followPullRefreshState = rememberPullToRefreshState()
     val hotPullRefreshState = rememberPullToRefreshState()
@@ -165,6 +176,17 @@ fun BilibiliApp() {
     val watchHistoryReporter = remember(api) { WatchHistoryReporter(api) }
     val feedTabReselectController = rememberFeedTabReselectController()
     val imageSaveHintController = remember { BiliImageSaveHintController() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner, backgroundPlaybackEnabled) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && !backgroundPlaybackEnabled) {
+                coordinator.pauseForOverlay()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     fun handleBottomTabClick(tab: MainTab) {
         if (tab == selectedTab && tab in FeedTabReselectController.FEED_RESELECT_TABS) {
@@ -178,28 +200,126 @@ fun BilibiliApp() {
     fun credential() = activeAccount?.credential
 
     suspend fun resolvePlayUrl(video: BiliVideoItem): BiliPlayStream? = runCatching {
+        val targetCid = video.cid.takeIf { it > 0L }
         playUrls[video.bvid]?.let { cached ->
-            if (cached.aid > 0L && cached.cid > 0L) return@runCatching cached
+            if (cached.aid > 0L && cached.cid > 0L && (targetCid == null || cached.cid == targetCid)) {
+                return@runCatching cached
+            }
         }
         val detail = api.getVideoView(video.bvid, credential()) ?: return@runCatching null
-        val cid = detail.cid.takeIf { it > 0L } ?: return@runCatching null
+        val cid = targetCid ?: detail.cid.takeIf { it > 0L } ?: return@runCatching null
+        val aid = video.aid.takeIf { it > 0L } ?: detail.aid
         val stream = api.getPlayUrl(video.bvid, cid, credential()) ?: return@runCatching null
-        val resolved = stream.copy(aid = detail.aid, cid = cid)
+        val resolved = stream.copy(aid = aid, cid = cid)
         playUrls[video.bvid] = resolved
         resolved
     }.getOrNull()
 
-    fun openVideoDetail(video: BiliVideoItem, progressSeconds: Int = 0) {
-        navController.push(AppNavEntry.VideoDetail(video, progressSeconds))
+    suspend fun seedVideoPartPage(video: BiliVideoItem, partPage: Int): BiliVideoItem {
+        val identified = if (video.bvid.isBlank() && video.aid > 0L) {
+            api.getVideoDetailByAid(video.aid, credential())?.video?.let { view ->
+                video.copy(
+                    bvid = view.bvid,
+                    aid = view.aid,
+                    title = video.title.ifBlank { view.title },
+                    coverUrl = video.coverUrl.ifBlank { view.coverUrl },
+                    authorName = video.authorName.ifBlank { view.authorName },
+                    authorMid = video.authorMid.takeIf { it > 0L } ?: view.authorMid,
+                )
+            } ?: video
+        } else {
+            video
+        }
+        if (partPage <= 0 || identified.bvid.isBlank() || identified.cid > 0L) return identified
+        val detail = api.getVideoDetail(identified.bvid, credential()) ?: return identified
+        val cid = detail.pages.find { it.page == partPage }?.cid
+            ?: detail.pages.getOrNull(partPage - 1)?.cid
+            ?: return video
+        return video.copy(
+            cid = cid,
+            aid = identified.aid.takeIf { it > 0L } ?: detail.video.aid,
+            bvid = identified.bvid,
+            title = identified.title.ifBlank { detail.video.title },
+            coverUrl = identified.coverUrl.ifBlank { detail.video.coverUrl },
+            authorName = identified.authorName.ifBlank { detail.video.authorName },
+            authorMid = identified.authorMid.takeIf { it > 0L } ?: detail.video.authorMid,
+            durationSeconds = identified.durationSeconds.takeIf { it > 0 }
+                ?: detail.pages.find { it.cid == cid }?.durationSeconds
+                ?: detail.video.durationSeconds,
+        )
+    }
+
+    fun openVideoDetail(
+        video: BiliVideoItem,
+        progressSeconds: Int = 0,
+        partPage: Int = 0,
+    ) {
         scope.launch {
-            coordinator.stopPlayback()
+            val seededVideo = seedVideoPartPage(video, partPage)
+            val resolvedVideo = api.resolveVideoForPlayback(seededVideo, credential())
+            val playStream = resolvePlayUrl(resolvedVideo)
+            val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
+            navController.push(AppNavEntry.VideoDetail(resolvedVideo, progressSeconds))
+            if (replacingVideoDetail) {
+                coordinator.pauseInlineOnly()
+            } else {
+                coordinator.stopPlayback()
+            }
             if (progressSeconds > 0) {
                 coordinator.savePlaybackPosition(
-                    videoPlaybackKey(video.bvid, ownerId = "detail"),
+                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
                     progressSeconds * 1000L,
                 )
             }
-            resolvePlayUrl(video)
+            if (playStream != null || replacingVideoDetail) {
+                coordinator.requestInlinePlayback(
+                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
+                )
+            }
+        }
+    }
+
+    fun openHistoryVideo(item: BiliHistoryItem) {
+        scope.launch {
+            val resolvedVideo = api.resolveHistoryVideo(item, credential())
+            resolvePlayUrl(resolvedVideo)
+            val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
+            navController.push(AppNavEntry.VideoDetail(resolvedVideo, item.progressSeconds))
+            if (replacingVideoDetail) {
+                coordinator.pauseInlineOnly()
+            } else {
+                coordinator.stopPlayback()
+            }
+            if (item.progressSeconds > 0) {
+                coordinator.savePlaybackPosition(
+                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
+                    item.progressSeconds * 1000L,
+                )
+            }
+            if (replacingVideoDetail) {
+                coordinator.requestInlinePlayback(
+                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
+                )
+            }
+        }
+    }
+
+    fun switchVideoPart(video: BiliVideoItem, page: BiliVideoPage, stream: BiliPlayStream? = null) {
+        val applyStream: (BiliPlayStream) -> Unit = { resolved ->
+            playUrls[video.bvid] = resolved
+            coordinator.requestInlinePlayback(
+                videoPlaybackKey(video.bvid, ownerId = "detail"),
+            )
+        }
+        stream?.copy(aid = video.aid, cid = page.cid)?.let {
+            applyStream(it)
+            return
+        }
+        scope.launch {
+            val resolved = api.getPlayUrl(video.bvid, page.cid, credential())
+                ?.copy(aid = video.aid, cid = page.cid)
+                ?: return@launch
+            applyStream(resolved)
         }
     }
 
@@ -635,19 +755,26 @@ fun BilibiliApp() {
                 }
                 MainTab.History -> FeedTabReselectScope(MainTab.History, feedTabReselectController) {
                     HistoryScreen(
-                    api = api,
-                    credential = credential(),
-                    loggedIn = activeAccount != null,
-                    onLoginClick = {
-                        showLoginSheet = true
-                    },
-                    onVideoClick = { video, progressSeconds ->
-                        openVideoDetail(video, progressSeconds)
-                    },
-                    contentPadding = padding,
-                    pullRefreshState = historyPullRefreshState,
-                    showEmbeddedPullRefreshIndicator = false,
-                    onPullRefreshingChange = { historyPullRefreshing = it },
+                        api = api,
+                        credential = credential(),
+                        loggedIn = activeAccount != null,
+                        onLoginClick = {
+                            showLoginSheet = true
+                        },
+                        onHistoryItemClick = { item ->
+                            openHistoryVideo(item)
+                        },
+                        onVideoClick = { video -> openVideoDetail(video) },
+                        playUrls = playUrls,
+                        coordinator = coordinator,
+                        onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
+                        onAuthorClick = { mid -> openUserProfile(mid) },
+                        contentPadding = padding,
+                        pullRefreshState = historyPullRefreshState,
+                        showEmbeddedPullRefreshIndicator = false,
+                        onPullRefreshingChange = { historyPullRefreshing = it },
+                        feedColumnCount = feedColumnCount,
+                        menuController = historyMenuController,
                     )
                 }
                 MainTab.Mine -> {
@@ -674,10 +801,15 @@ fun BilibiliApp() {
                             feedColumnCount = count
                             feedLayoutStore.writeColumnCount(count)
                         },
+                        backgroundPlaybackEnabled = backgroundPlaybackEnabled,
+                        onBackgroundPlaybackChange = { enabled ->
+                            backgroundPlaybackEnabled = enabled
+                            playerPreferences.writeBackgroundPlaybackEnabled(enabled)
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-            }
+                }
             }
 
             AppNavStackLayers(
@@ -695,6 +827,10 @@ fun BilibiliApp() {
                 contentPadding = padding,
                 onPopNav = ::popNavEntry,
                 onOpenVideo = ::openVideoDetail,
+                onOpenDescriptionVideo = { video, partPage ->
+                    openVideoDetail(video, progressSeconds = 0, partPage = partPage)
+                },
+                onSwitchVideoPart = ::switchVideoPart,
                 onOpenProfile = ::openUserProfile,
                 onOpenDynamic = ::openDynamicDetail,
                 onOpenRelationList = ::openUserRelationList,
@@ -759,6 +895,14 @@ fun BilibiliApp() {
                             else -> 565f
                         },
                     ),
+                )
+            }
+
+            if (selectedTab == MainTab.History && !navOverlayOpen) {
+                HistoryMenuOverlay(
+                    controller = historyMenuController,
+                    backdrop = bottomBarBackdrop,
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
 
@@ -844,6 +988,8 @@ private fun AppNavStackLayers(
     contentPadding: PaddingValues,
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
+    onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
+    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
     onOpenDynamic: (BiliDynamicItem) -> Unit,
     onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
@@ -871,6 +1017,8 @@ private fun AppNavStackLayers(
                     contentPadding = contentPadding,
                     onPopNav = onPopNav,
                     onOpenVideo = onOpenVideo,
+                    onOpenDescriptionVideo = onOpenDescriptionVideo,
+                    onSwitchVideoPart = onSwitchVideoPart,
                     onOpenProfile = onOpenProfile,
                     onOpenDynamic = onOpenDynamic,
                     onOpenRelationList = onOpenRelationList,
@@ -896,6 +1044,8 @@ private fun AppNavEntryContent(
     contentPadding: PaddingValues,
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
+    onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
+    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
     onOpenDynamic: (BiliDynamicItem) -> Unit,
     onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
@@ -930,6 +1080,13 @@ private fun AppNavEntryContent(
                 onAuthorClick = { profile ->
                     onOpenProfile(profile.mid, profile.name, profile.face)
                 },
+                onSwitchVideoPart = { page, stream ->
+                    onSwitchVideoPart(entry.video, page, stream)
+                },
+                onOpenUgcEpisode = { video ->
+                    onOpenVideo(video, 0)
+                },
+                onOpenDescriptionVideo = onOpenDescriptionVideo,
                 playbackActive = isActive,
                 modifier = Modifier.fillMaxSize(),
             )

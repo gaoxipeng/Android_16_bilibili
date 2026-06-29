@@ -38,8 +38,16 @@ class BilibiliPlayerPreferences(context: Context) {
             .apply()
     }
 
+    fun readBackgroundPlaybackEnabled(): Boolean =
+        prefs.getBoolean(KEY_BACKGROUND_PLAYBACK, false)
+
+    fun writeBackgroundPlaybackEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BACKGROUND_PLAYBACK, enabled).apply()
+    }
+
     private companion object {
         private const val PREFS_NAME = "bilibili_player_prefs"
+        private const val KEY_BACKGROUND_PLAYBACK = "background_playback_enabled"
         private const val KEY_DANMAKU_VISIBLE = "danmaku_visible"
         private const val KEY_DANMAKU_DISPLAY_AREA = "danmaku_display_area"
         private const val KEY_DANMAKU_OPACITY = "danmaku_opacity"

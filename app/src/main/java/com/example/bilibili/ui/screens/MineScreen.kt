@@ -40,6 +40,8 @@ fun MineScreen(
     contentPadding: PaddingValues,
     feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
     onFeedColumnCountChange: (Int) -> Unit = {},
+    backgroundPlaybackEnabled: Boolean = false,
+    onBackgroundPlaybackChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (!loggedIn) {
@@ -80,6 +82,8 @@ fun MineScreen(
         cacheProfile = true,
         feedColumnCount = feedColumnCount,
         onFeedColumnCountChange = onFeedColumnCountChange,
+        backgroundPlaybackEnabled = backgroundPlaybackEnabled,
+        onBackgroundPlaybackChange = onBackgroundPlaybackChange,
         modifier = modifier,
     )
 }

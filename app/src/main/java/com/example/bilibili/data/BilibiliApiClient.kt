@@ -3,6 +3,7 @@ package com.example.bilibili.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -103,9 +104,149 @@ class BilibiliApiClient {
                     url = BilibiliEndpoints.VIDEO_VIEW,
                     params = mapOf("bvid" to bvid),
                     credential = credential,
+                    referer = "https://www.bilibili.com/video/$bvid",
                 ).let(BilibiliJsonParser::parseVideoDetail)
             }.getOrNull()
         }
+
+    suspend fun getVideoDetailByAid(aid: Long, credential: BilibiliCredential? = null): BiliVideoDetail? =
+        withContext(Dispatchers.IO) {
+            if (aid <= 0L) return@withContext null
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.VIDEO_VIEW,
+                    params = mapOf("aid" to aid.toString()),
+                    credential = credential,
+                    referer = "https://www.bilibili.com/video/av$aid",
+                ).let(BilibiliJsonParser::parseVideoDetail)
+            }.getOrNull()
+        }
+
+    suspend fun resolveVideoForPlayback(
+        video: BiliVideoItem,
+        credential: BilibiliCredential? = null,
+    ): BiliVideoItem {
+        val detail = getVideoDetail(video.bvid, credential) ?: return video
+        val targetCid = resolveTargetCid(video.cid, detail.pages)
+            ?: detail.video.cid.takeIf { it > 0L }
+            ?: detail.pages.firstOrNull()?.cid?.takeIf { it > 0L }
+            ?: return video.copy(
+                aid = video.aid.takeIf { it > 0L } ?: detail.video.aid,
+            )
+        val resolvedVideo = video.copy(
+            cid = targetCid,
+            aid = video.aid.takeIf { it > 0L } ?: detail.video.aid,
+        )
+        if (detail.pages.any { it.cid == targetCid }) return resolvedVideo
+        if (detail.video.cid == targetCid) return resolvedVideo
+
+        val season = hydrateVideoUgcSeason(detail, credential).ugcSeason ?: return resolvedVideo
+        val episode = season.sections.asSequence()
+            .flatMap { it.episodes.asSequence() }
+            .firstOrNull { episode ->
+                when {
+                    video.cid > 0L -> episode.cid == video.cid
+                    video.bvid.isNotBlank() -> episode.bvid == video.bvid
+                    video.aid > 0L -> episode.aid == video.aid
+                    else -> false
+                }
+            }
+            ?: return resolvedVideo
+        if (episode.bvid == resolvedVideo.bvid && episode.aid == resolvedVideo.aid) return resolvedVideo
+
+        return episode.toVideoItem(resolvedVideo.authorName, resolvedVideo.authorMid).copy(
+            title = episode.title.ifBlank { resolvedVideo.title },
+            coverUrl = episode.coverUrl.ifBlank { resolvedVideo.coverUrl },
+            durationSeconds = episode.durationSeconds.takeIf { it > 0 } ?: resolvedVideo.durationSeconds,
+            cid = episode.cid.takeIf { it > 0L } ?: targetCid,
+        )
+    }
+
+    suspend fun resolveHistoryVideo(
+        item: BiliHistoryItem,
+        credential: BilibiliCredential? = null,
+    ): BiliVideoItem {
+        val detail = getVideoDetail(item.bvid, credential)
+        val targetCid = resolveTargetCid(
+            explicitCid = item.cid,
+            pages = detail?.pages.orEmpty(),
+            partPage = item.page,
+        )
+        val base = item.toVideoItem().let { video ->
+            if (targetCid != null) {
+                video.copy(
+                    cid = targetCid,
+                    aid = video.aid.takeIf { it > 0L } ?: item.aid,
+                )
+            } else {
+                video
+            }
+        }
+        return resolveVideoForPlayback(base, credential)
+    }
+
+    private fun resolveTargetCid(
+        explicitCid: Long,
+        pages: List<BiliVideoPage>,
+        partPage: Int = 0,
+    ): Long? {
+        explicitCid.takeIf { it > 0L }?.let { return it }
+        if (partPage > 0) {
+            pages.find { it.page == partPage }?.cid?.takeIf { it > 0L }?.let { return it }
+            pages.getOrNull(partPage - 1)?.cid?.takeIf { it > 0L }?.let { return it }
+        }
+        return null
+    }
+
+    suspend fun getUgcSeasonArchives(
+        mid: Long,
+        seasonId: Long,
+        credential: BilibiliCredential? = null,
+        pageSize: Int = 30,
+    ): BiliUgcSeason? = withContext(Dispatchers.IO) {
+        if (mid <= 0L || seasonId <= 0L) return@withContext null
+        runCatching {
+            var merged: BiliUgcSeason? = null
+            var pageNum = 1
+            var totalPages = 1
+            while (pageNum <= totalPages) {
+                val page = getJson(
+                    url = BilibiliEndpoints.UGC_SEASON_ARCHIVES,
+                    params = mapOf(
+                        "mid" to mid.toString(),
+                        "season_id" to seasonId.toString(),
+                        "page_num" to pageNum.toString(),
+                        "page_size" to pageSize.coerceIn(1, 100).toString(),
+                        "sort_reverse" to "false",
+                    ),
+                    credential = credential,
+                    referer = "https://space.bilibili.com/$mid",
+                ).let(BilibiliJsonParser::parseUgcSeasonArchives) ?: break
+                merged = if (merged == null) page else BilibiliJsonParser.mergeUgcSeasonArchives(merged, page)
+                val total = page.apiEpCount.coerceAtLeast(page.episodeCount)
+                totalPages = ((total + pageSize - 1) / pageSize).coerceAtLeast(1)
+                if (page.sections.sumOf { it.episodes.size } < pageSize) break
+                pageNum += 1
+            }
+            merged
+        }.getOrNull()
+    }
+
+    suspend fun hydrateVideoUgcSeason(
+        detail: BiliVideoDetail,
+        credential: BilibiliCredential? = null,
+    ): BiliVideoDetail {
+        val season = detail.ugcSeason ?: return detail
+        if (!season.needsHydration()) return detail
+        val mid = season.mid.takeIf { it > 0L } ?: detail.video.authorMid
+        val hydrated = getUgcSeasonArchives(
+            mid = mid,
+            seasonId = season.id,
+            credential = credential,
+        ) ?: return detail
+        val merged = BilibiliJsonParser.mergeUgcSeasonArchives(season, hydrated)
+        return detail.copy(ugcSeason = merged)
+    }
 
     suspend fun getVideoArchiveRelation(
         bvid: String,
@@ -113,18 +254,59 @@ class BilibiliApiClient {
         credential: BilibiliCredential? = null,
     ): BiliVideoRelation = withContext(Dispatchers.IO) {
         if (bvid.isBlank() && aid <= 0L) return@withContext BiliVideoRelation()
-        runCatching {
-            val params = buildMap {
-                if (bvid.isNotBlank()) put("bvid", bvid)
-                if (aid > 0L) put("aid", aid.toString())
+        val params = buildMap {
+            if (bvid.isNotBlank()) put("bvid", bvid)
+            if (aid > 0L) put("aid", aid.toString())
+        }
+        val referer = "https://www.bilibili.com/video/$bvid"
+        coroutineScope {
+            val relationDeferred = async {
+                runCatching {
+                    getJson(
+                        url = BilibiliEndpoints.VIDEO_ARCHIVE_RELATION,
+                        params = params,
+                        credential = credential,
+                        referer = referer,
+                    ).let(BilibiliJsonParser::parseVideoArchiveRelation)
+                }.getOrDefault(BiliVideoRelation())
             }
-            getJson(
-                url = BilibiliEndpoints.VIDEO_ARCHIVE_RELATION,
-                params = params,
-                credential = credential,
-                referer = "https://www.bilibili.com/video/$bvid",
-            ).let(BilibiliJsonParser::parseVideoArchiveRelation)
-        }.getOrDefault(BiliVideoRelation())
+            if (credential == null) {
+                return@coroutineScope relationDeferred.await()
+            }
+            val likeDeferred = async {
+                runCatching {
+                    getJson(
+                        url = BilibiliEndpoints.VIDEO_HAS_LIKE,
+                        params = params,
+                        credential = credential,
+                        referer = referer,
+                    ).let(BilibiliJsonParser::parseHasLike)
+                }.getOrDefault(false)
+            }
+            val favouredParams = when {
+                aid > 0L -> mapOf("aid" to aid.toString())
+                bvid.isNotBlank() -> mapOf("aid" to bvid)
+                else -> emptyMap()
+            }
+            val favDeferred = async {
+                if (favouredParams.isEmpty()) return@async false
+                runCatching {
+                    getJson(
+                        url = BilibiliEndpoints.VIDEO_FAVOURED,
+                        params = favouredParams,
+                        credential = credential,
+                        referer = referer,
+                    ).let(BilibiliJsonParser::parseVideoFavoured)
+                }.getOrDefault(false)
+            }
+            BilibiliJsonParser.mergeVideoRelations(
+                relationDeferred.await(),
+                BiliVideoRelation(
+                    liked = likeDeferred.await(),
+                    favorited = favDeferred.await(),
+                ),
+            )
+        }
     }
 
     suspend fun likeVideo(
@@ -279,11 +461,38 @@ class BilibiliApiClient {
         runCatching {
             getJson(
                 url = BilibiliEndpoints.FAV_FOLDER_LIST,
-                params = mapOf("up_mid" to credential.dedeUserId),
+                params = mapOf(
+                    "up_mid" to credential.dedeUserId,
+                    "type" to "2",
+                ),
                 credential = credential,
                 referer = BilibiliEndpoints.HOME,
             ).let(BilibiliJsonParser::parseDefaultFavoriteFolderId)
         }.getOrNull()
+
+    suspend fun getFavoriteVideoPage(
+        credential: BilibiliCredential,
+        page: Int = 1,
+        pageSize: Int = 20,
+    ): BiliFavoriteVideoPage = withContext(Dispatchers.IO) {
+        val folderId = getDefaultFavoriteFolderId(credential)
+            ?: error("未找到收藏夹")
+        val safePage = page.coerceAtLeast(1)
+        val safePageSize = pageSize.coerceIn(1, 20)
+        getJson(
+            url = BilibiliEndpoints.FAV_RESOURCE_LIST,
+            params = mapOf(
+                "media_id" to folderId.toString(),
+                "platform" to "web",
+                "type" to "0",
+                "order" to "mtime",
+                "pn" to safePage.toString(),
+                "ps" to safePageSize.toString(),
+            ),
+            credential = credential,
+            referer = BilibiliEndpoints.HOME,
+        ).let { BilibiliJsonParser.parseFavoriteVideoPage(it, safePage, safePageSize) }
+    }
 
     suspend fun getVideoOnlineCount(
         bvid: String,
@@ -580,6 +789,14 @@ class BilibiliApiClient {
         withContext(Dispatchers.IO) {
             getJson(BilibiliEndpoints.MY_INFO, emptyMap(), credential)
                 .let(BilibiliJsonParser::parseMyInfo)
+        }
+
+    suspend fun getUserWallet(credential: BilibiliCredential): BiliUserWallet? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(BilibiliEndpoints.NAV, emptyMap(), credential)
+                    .let(BilibiliJsonParser::parseUserWallet)
+            }.getOrNull()
         }
 
     suspend fun getUserFollowerCount(mid: Long, credential: BilibiliCredential? = null): Long =

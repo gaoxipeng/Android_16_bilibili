@@ -6,27 +6,19 @@ import com.kyant.backdrop.Backdrop
 import dev.chrisbanes.haze.HazeState
 
 @Composable
-fun VideoCoinChoiceDialog(
+fun VideoDetailMoreMenu(
     visible: Boolean,
     anchorBoundsInRoot: Rect,
-    canCoinTwo: Boolean,
     onDismiss: () -> Unit,
-    onCoinOne: () -> Unit,
-    onCoinTwo: () -> Unit,
+    onOpenOfficialApp: () -> Unit,
     backdrop: Backdrop? = null,
     hazeState: HazeState? = null,
 ) {
-    val menuHeight = if (canCoinTwo) ActionMenuTwoRowHeight else ActionMenuOneRowHeight
-    val menuLabels = if (canCoinTwo) {
-        listOf("1 硬币", "2 硬币")
-    } else {
-        listOf("再投 1 硬币")
-    }
     ActionMenuOverlay(
         activeRequest = if (visible) ActionMenuRequest(anchorBoundsInRoot) else null,
         menuVisible = visible,
-        menuHeight = menuHeight,
-        menuLabels = menuLabels,
+        menuHeight = ActionMenuOneRowHeight,
+        menuLabels = listOf("跳转到哔哩哔哩客户端"),
         onDismiss = onDismiss,
         useFeedCardAlignment = false,
         backdrop = backdrop,
@@ -34,14 +26,8 @@ fun VideoCoinChoiceDialog(
         zIndex = 1000f,
     ) {
         ActionMenuRow(
-            label = if (canCoinTwo) "1 硬币" else "再投 1 硬币",
-            onClick = onCoinOne,
+            label = "跳转到哔哩哔哩客户端",
+            onClick = onOpenOfficialApp,
         )
-        if (canCoinTwo) {
-            ActionMenuRow(
-                label = "2 硬币",
-                onClick = onCoinTwo,
-            )
-        }
     }
 }

@@ -10,6 +10,15 @@ fun formatBiliCount(count: Long): String = when {
     else -> count.toString()
 }
 
+fun formatBiliCoinBalance(balance: Double): String {
+    if (balance <= 0.0) return "0"
+    return if (kotlin.math.abs(balance % 1.0) < 0.05) {
+        balance.toLong().toString()
+    } else {
+        String.format(Locale.getDefault(), "%.1f", balance)
+    }
+}
+
 fun formatBiliPublishTime(seconds: Long): String {
     if (seconds <= 0L) return "刚刚"
     val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())

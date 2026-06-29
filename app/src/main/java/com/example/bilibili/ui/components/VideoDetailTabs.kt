@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,7 +28,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
@@ -52,6 +57,7 @@ fun VideoDetailTabBar(
     commentSort: BiliCommentSort,
     onCommentSortToggle: () -> Unit,
     onTabSelected: (VideoDetailTab) -> Unit,
+    onMoreClick: (anchorBounds: Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val accent = BiliPink
@@ -60,6 +66,7 @@ fun VideoDetailTabBar(
     var tabOffsets by remember { mutableStateOf(List(VideoDetailTab.entries.size) { 0.dp }) }
     val layoutReady = tabWidths.all { it > 0.dp }
     val showCommentSort = scrollPosition.roundToInt() == VideoDetailTab.Comments.ordinal
+    val showMoreMenu = !showCommentSort
 
     val indicatorWidth = remember(scrollPosition, tabWidths) {
         val left = scrollPosition.toInt().coerceIn(0, VideoDetailTab.entries.lastIndex)
@@ -152,7 +159,39 @@ fun VideoDetailTabBar(
                     selected = commentSort,
                     onToggle = onCommentSortToggle,
                 )
+            } else if (showMoreMenu) {
+                VideoDetailMoreChevron(onClick = onMoreClick)
             }
         }
+    }
+}
+
+@Composable
+private fun VideoDetailMoreChevron(
+    onClick: (Rect) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var boundsInRoot by remember { mutableStateOf(Rect.Zero) }
+    val metaColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.52f)
+    Box(
+        modifier = modifier
+            .onGloballyPositioned { coordinates ->
+                boundsInRoot = coordinates.boundsInRoot()
+            }
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = { onClick(boundsInRoot) },
+            )
+            .padding(4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.KeyboardArrowDown,
+            contentDescription = "更多",
+            tint = metaColor,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
