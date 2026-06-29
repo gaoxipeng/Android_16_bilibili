@@ -39,8 +39,8 @@ private const val FixedDanmakuDurationMs = 4_000L
 private const val ScrollBaseDurationMs = 7_000L
 private const val ScrollPerCharDurationMs = 120L
 private const val SpawnLookaheadMs = 120L
-private const val ReopenPrimeMaxCount = 24
-private const val ReopenPrimeMaxAheadMs = 12_000L
+private const val SpawnBacklogSkipMs = 900L
+private const val MaxSpawnInspectionsPerFrame = 80
 private const val DANMAKU_TRACK_COUNT = 18
 private const val FIXED_DANMAKU_ROW_COUNT = 8
 private const val TRACK_GAP_SEC = 0.15f
@@ -202,22 +202,22 @@ private class DanmakuSpawnContext(
         nextIndex = spawnIndexForPosition(items, positionMs)
     }
 
-    fun primeUpcoming(positionMs: Long, displayTimeMs: Long, maxCount: Int = ReopenPrimeMaxCount) {
-        var primed = 0
-        while (nextIndex < items.size && primed < maxCount) {
-            val item = items[nextIndex]
-            if (item.timeMs > positionMs + ReopenPrimeMaxAheadMs) break
-            if (trySpawn(item, displayTimeMs)) {
-                primed++
-            }
-            nextIndex++
+    fun spawnDue(displayTimeMs: Long, maxInspections: Int = MaxSpawnInspectionsPerFrame) {
+        if (
+            nextIndex < items.size &&
+            items[nextIndex].timeMs < displayTimeMs - SpawnBacklogSkipMs
+        ) {
+            nextIndex = spawnIndexForPosition(items, displayTimeMs - SpawnLookaheadMs)
         }
-    }
-
-    fun spawnDue(displayTimeMs: Long) {
-        while (nextIndex < items.size && items[nextIndex].timeMs <= displayTimeMs + SpawnLookaheadMs) {
+        var inspected = 0
+        while (
+            nextIndex < items.size &&
+            items[nextIndex].timeMs <= displayTimeMs + SpawnLookaheadMs &&
+            inspected < maxInspections
+        ) {
             val item = items[nextIndex]
             nextIndex++
+            inspected++
             trySpawn(item, item.timeMs)
         }
     }
@@ -303,6 +303,7 @@ fun DanmakuOverlay(
     var displayTimeMs by remember { mutableLongStateOf(positionMs) }
     var anchorPositionMs by remember { mutableLongStateOf(positionMs) }
     var anchorRealtimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var lastObservedPositionMs by remember { mutableLongStateOf(positionMs) }
     var frameTick by remember { mutableIntStateOf(0) }
 
     BoxWithConstraints(
@@ -378,12 +379,21 @@ fun DanmakuOverlay(
         fun syncDisplayClock(currentPositionMs: Long, playing: Boolean) {
             anchorPositionMs = currentPositionMs
             anchorRealtimeMs = System.currentTimeMillis()
+            lastObservedPositionMs = currentPositionMs
             if (!playing) {
                 displayTimeMs = currentPositionMs
             }
         }
 
-        fun resetAndPrime(currentPositionMs: Long, restoreSnapshot: DanmakuTimelineSnapshot? = null) {
+        fun reanchorDisplayClock(playing: Boolean) {
+            anchorPositionMs = displayTimeMs
+            anchorRealtimeMs = System.currentTimeMillis()
+            if (!playing) {
+                displayTimeMs = anchorPositionMs
+            }
+        }
+
+        fun resetTimeline(currentPositionMs: Long, restoreSnapshot: DanmakuTimelineSnapshot? = null) {
             syncDisplayClock(currentPositionMs, isPlaying)
             spawnContext.resetTimeline(currentPositionMs)
             if (restoreSnapshot != null) {
@@ -393,10 +403,8 @@ fun DanmakuOverlay(
                 spawnedIds.clear()
                 spawnedIds.addAll(restoreSnapshot.spawnedIds)
                 spawnContext.nextIndex = restoreSnapshot.nextIndex
-                spawnContext.primeUpcoming(currentPositionMs, displayTimeMs, maxCount = ReopenPrimeMaxCount * 2)
             } else {
                 displayTimeMs = currentPositionMs
-                spawnContext.primeUpcoming(currentPositionMs, currentPositionMs)
             }
         }
 
@@ -425,19 +433,26 @@ fun DanmakuOverlay(
                 bottomFixedReleaseTimes.fill(0f)
                 return@LaunchedEffect
             }
-            resetAndPrime(positionMs, restoredTimeline)
+            resetTimeline(positionMs, restoredTimeline)
         }
 
         LaunchedEffect(settings, enabled, trackLineHeight) {
             if (!enabled || items.isEmpty()) return@LaunchedEffect
-            resetAndPrime(positionMs, restoredTimeline)
+            resetTimeline(positionMs, restoredTimeline)
+        }
+
+        LaunchedEffect(playbackSpeed, enabled) {
+            if (!enabled || items.isEmpty()) return@LaunchedEffect
+            reanchorDisplayClock(isPlaying)
         }
 
         LaunchedEffect(positionMs, enabled) {
             if (!enabled || items.isEmpty()) return@LaunchedEffect
-            if (abs(positionMs - anchorPositionMs) > 1_500L) {
-                resetAndPrime(positionMs)
-            } else {
+            val positionJumped = abs(positionMs - lastObservedPositionMs) > 1_500L
+            lastObservedPositionMs = positionMs
+            if (positionJumped) {
+                resetTimeline(positionMs)
+            } else if (!isPlaying) {
                 syncDisplayClock(positionMs, isPlaying)
             }
         }

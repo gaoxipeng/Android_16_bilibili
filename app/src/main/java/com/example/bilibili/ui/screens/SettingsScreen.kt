@@ -53,10 +53,9 @@ private const val AppVersionName = "0.0.1"
 private val SettingsBottomBarInset = 96.dp
 private val SettingsPageBackground = Color.White
 private val SettingsCardBackground = Color(0xFFF5F5F5)
-private val SettingsAboutIconSize = 52.dp
-private val SettingsAboutIconCornerRadius = 14.dp
-private val SettingsAboutIconTvPadding = 13.dp
-private val BiliBrandBlue = Color(0xFF00A1D6)
+private val SettingsAboutIconSize = 58.dp
+private val SettingsAboutIconCornerRadius = 13.dp
+private const val SettingsAboutIconCropScale = 1.14f
 
 private data class HelpSection(
     val title: String,
@@ -219,16 +218,19 @@ private fun SettingsAboutAppIcon(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(SettingsAboutIconCornerRadius))
-            .background(BiliBrandBlue),
+            .background(Color.Transparent),
         contentAlignment = Alignment.Center,
     ) {
         Image(
-            painter = painterResource(R.drawable.ic_launcher_image),
+            painter = painterResource(R.drawable.ic_launcher_preview),
             contentDescription = null,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(SettingsAboutIconTvPadding),
-            contentScale = ContentScale.Fit,
+                .graphicsLayer {
+                    scaleX = SettingsAboutIconCropScale
+                    scaleY = SettingsAboutIconCropScale
+                },
+            contentScale = ContentScale.Crop,
         )
     }
 }

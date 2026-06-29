@@ -1,6 +1,7 @@
 package com.example.bilibili.player
 
 import android.view.LayoutInflater
+import android.graphics.Color as AndroidColor
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -118,6 +119,9 @@ fun BilibiliVideoSurface(
     var controlsHideSignal by remember(playbackKey) { mutableIntStateOf(0) }
     var isScrubbing by remember(playbackKey) { mutableStateOf(false) }
     var danmakuItems by remember(playbackKey) { mutableStateOf<List<BiliDanmakuItem>>(emptyList()) }
+    var fullscreenDanmakuMountAllowed by remember(playbackKey, isFullscreen) {
+        mutableStateOf(!isFullscreen)
+    }
     var showDanmakuSettings by remember(playbackKey) { mutableStateOf(false) }
     val showDanmakuFeature = danmakuEnabled && danmakuCid > 0L && loadDanmaku != null
     val danmakuVisible = coordinator.danmakuVisible
@@ -258,6 +262,18 @@ fun BilibiliVideoSurface(
     }
 
     val activePlayer = player
+    LaunchedEffect(showDanmakuFeature, danmakuVisible, isFullscreen, activePlayer) {
+        if (!showDanmakuFeature || !danmakuVisible || activePlayer == null) {
+            fullscreenDanmakuMountAllowed = false
+            return@LaunchedEffect
+        }
+        if (isFullscreen) {
+            fullscreenDanmakuMountAllowed = false
+            delay(500)
+        }
+        fullscreenDanmakuMountAllowed = true
+    }
+
     LaunchedEffect(playbackEnabled, activePlayer) {
         val playerRef = activePlayer ?: return@LaunchedEffect
         if (playbackEnabled) {
@@ -536,8 +552,12 @@ fun BilibiliVideoSurface(
         ) {
             AndroidView(
                 factory = { ctx ->
-                    LayoutInflater.from(ctx).inflate(R.layout.view_video_player, null, false)
+                    val playerView = LayoutInflater.from(ctx).inflate(R.layout.view_video_player, null, false)
                         as androidx.media3.ui.PlayerView
+                    playerView.apply {
+                        setKeepContentOnPlayerReset(true)
+                        setShutterBackgroundColor(AndroidColor.TRANSPARENT)
+                    }
                 },
                 update = { playerView ->
                     playerView.player = activePlayer
@@ -551,11 +571,10 @@ fun BilibiliVideoSurface(
             )
         }
 
-        if (showDanmakuFeature) {
+        if (showDanmakuFeature && fullscreenDanmakuMountAllowed) {
             val danmakuBottomReserve = VideoControlBarHeight +
                 VideoControlBarBottomGap +
                 if (isFullscreen) 40.dp else 8.dp
-            val restoredDanmakuTimeline = coordinator.loadDanmakuTimeline(playbackKey, danmakuCid)
             DanmakuOverlay(
                 items = danmakuItems,
                 positionMs = positionMs,
@@ -570,23 +589,9 @@ fun BilibiliVideoSurface(
                 } else {
                     DanmakuCompactTrackLineHeightDp
                 },
-                playbackKey = playbackKey,
-                danmakuCid = danmakuCid,
-                restoredTimeline = restoredDanmakuTimeline,
-                onTimelineSnapshot = { snapshot ->
-                    coordinator.saveDanmakuTimeline(
-                        playbackKey = playbackKey,
-                        cid = snapshot.cid,
-                        displayTimeMs = snapshot.displayTimeMs,
-                        anchorPositionMs = snapshot.anchorPositionMs,
-                        anchorRealtimeMs = snapshot.anchorRealtimeMs,
-                        nextIndex = snapshot.nextIndex,
-                        spawnedIds = snapshot.spawnedIds,
-                    )
-                },
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(3f),
+                    .zIndex(1f),
             )
         }
 
@@ -616,7 +621,9 @@ fun BilibiliVideoSurface(
                 visible = controlsVisible,
                 enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { -it },
                 exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
-                modifier = Modifier.align(Alignment.TopStart),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .zIndex(10f),
             ) {
                 VideoOverlayTextButton(
                     text = "关闭",
@@ -632,7 +639,9 @@ fun BilibiliVideoSurface(
                 visible = controlsVisible,
                 enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { -it },
                 exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
-                modifier = Modifier.align(Alignment.TopEnd),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .zIndex(10f),
             ) {
                 VideoOverlayTextButton(
                     text = "全屏",
@@ -651,6 +660,7 @@ fun BilibiliVideoSurface(
             exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { it },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .zIndex(10f)
                 .padding(start = 6.dp, end = 6.dp, bottom = if (isFullscreen) 40.dp else 8.dp)
                 .fillMaxWidth(),
         ) {
