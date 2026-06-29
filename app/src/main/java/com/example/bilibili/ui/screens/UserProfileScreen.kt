@@ -51,6 +51,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -79,6 +80,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliAuthorRelation
+import com.example.bilibili.data.BiliDynamicIpWebResolver
 import com.example.bilibili.data.BiliDynamicItem
 import com.example.bilibili.data.BiliDynamicLink
 import com.example.bilibili.data.BiliDynamicOrigin
@@ -90,6 +92,7 @@ import com.example.bilibili.data.BiliUserVideoSort
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.data.UserProfileSessionCache
 import com.example.bilibili.data.UserProfileUiState
@@ -112,6 +115,8 @@ import com.example.bilibili.ui.format.formatBiliPublishTime
 import com.example.bilibili.ui.format.formatVideoDurationLabel
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.theme.BiliPink
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -122,6 +127,11 @@ private enum class UserProfileContentTab(val label: String) {
     Posts("投稿"),
     Dynamics("动态"),
 }
+
+private fun resolveProfileIpFromDynamics(dynamics: List<BiliDynamicItem>): String? =
+    dynamics.firstNotNullOfOrNull { item ->
+        BilibiliJsonParser.normalizeIpLocation(item.ipLocation)
+    }
 
 private fun mergeProfileOnRefresh(
     previous: BiliUserProfile,
@@ -142,6 +152,8 @@ private fun mergeProfileOnRefresh(
         ?: previous.videoCount,
     topPhoto = loaded.topPhoto.ifBlank { previous.topPhoto },
     topPhotos = loaded.topPhotos.ifEmpty { previous.topPhotos },
+    ipLocation = BilibiliJsonParser.normalizeIpLocation(loaded.ipLocation)
+        ?: BilibiliJsonParser.normalizeIpLocation(previous.ipLocation),
 )
 
 private val ProfileHeaderAvatarSize = 72.dp
@@ -154,6 +166,12 @@ private val ProfileHeaderCardBorderWidth = 0.5.dp
 private val ProfileHeaderCardBorderColor = Color(0xFFE8E8E8)
 private val DynamicFeedPageBackground = Color(0xFFF5F5F5)
 private val DynamicFeedCardBackground = Color.White
+private val DynamicFeedCardInset = 12.dp
+
+private val DynamicFeedMetaTextColor @Composable get() =
+    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+private val DynamicFeedActionTextColor @Composable get() =
+    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
 private val ProfileHeaderCardContentInset = 6.dp
 private val ProfileCompactAvatarSize = 32.dp
 private val ProfileCompactBarStartPadding = 16.dp
@@ -200,6 +218,66 @@ fun UserProfileScreen(
         pageCount = { UserProfileContentTab.entries.size },
     )
     val coroutineScope = rememberCoroutineScope()
+    var dynamicsIpEnrichJob by remember(mid) { mutableStateOf<Job?>(null) }
+
+    DisposableEffect(mid) {
+        onDispose { dynamicsIpEnrichJob?.cancel() }
+    }
+
+    fun applyProfileIpLocation(ipLocation: String?) {
+        val normalized = BilibiliJsonParser.normalizeIpLocation(ipLocation) ?: return
+        val current = BilibiliJsonParser.normalizeIpLocation(uiState.profile.ipLocation)
+        if (current != null) return
+        uiState.profile = uiState.profile.copy(ipLocation = normalized)
+    }
+
+    fun applyDynamicsIpEnrichment(baseItems: List<BiliDynamicItem>) {
+        if (baseItems.none { BilibiliJsonParser.normalizeIpLocation(it.ipLocation) == null }) return
+        dynamicsIpEnrichJob?.cancel()
+        dynamicsIpEnrichJob = coroutineScope.launch {
+            runCatching {
+                val enriched = api.enrichDynamicIpLocations(
+                    items = baseItems,
+                    credential = credential,
+                )
+                val enrichedById = enriched.associateBy { it.id }
+                uiState.dynamics = uiState.dynamics.map { dynamic ->
+                    enrichedById[dynamic.id]?.let { enrichedItem ->
+                        val normalizedIp = BilibiliJsonParser.normalizeIpLocation(enrichedItem.ipLocation)
+                        when {
+                            normalizedIp != null -> dynamic.copy(ipLocation = normalizedIp)
+                            enrichedItem.ipLocation.isNullOrBlank() && !dynamic.ipLocation.isNullOrBlank() ->
+                                dynamic.copy(ipLocation = null)
+                            else -> dynamic
+                        }
+                    } ?: dynamic
+                }
+                applyProfileIpLocation(resolveProfileIpFromDynamics(uiState.dynamics))
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+            }
+        }
+    }
+
+    suspend fun refreshProfileIpLocation() {
+        if (BilibiliJsonParser.normalizeIpLocation(uiState.profile.ipLocation) != null) return
+        val latestDynamic = api.getUserSpaceDynamics(
+            mid = mid,
+            offset = null,
+            credential = credential,
+        ).items.firstOrNull() ?: return
+        val ipLocation = BilibiliJsonParser.normalizeIpLocation(latestDynamic.ipLocation)
+            ?: BilibiliJsonParser.normalizeIpLocation(
+                api.getDynamicAuthorIpLocation(latestDynamic.id, credential),
+            )
+            ?: BilibiliJsonParser.normalizeIpLocation(
+                api.getDynamicDetail(latestDynamic.id, credential)?.ipLocation,
+            )
+            ?: BilibiliJsonParser.normalizeIpLocation(
+                BiliDynamicIpWebResolver.resolve(context, latestDynamic.id, credential),
+            )
+        applyProfileIpLocation(ipLocation)
+    }
 
     suspend fun loadProfile(resetLists: Boolean) {
         if (resetLists) {
@@ -246,6 +324,9 @@ fun UserProfileScreen(
             relationDeferred.await()
             videosDeferred.await()
         }
+        coroutineScope.launch {
+            runCatching { refreshProfileIpLocation() }
+        }
     }
 
     suspend fun loadDynamics(reset: Boolean) {
@@ -259,10 +340,17 @@ fun UserProfileScreen(
             offset = if (reset) null else uiState.dynamicsOffset,
             credential = credential,
         )
-        uiState.dynamics = if (reset) page.items else uiState.dynamics + page.items
+        val baseItems = page.items
+        uiState.dynamics = if (reset) {
+            baseItems
+        } else {
+            (uiState.dynamics + baseItems).distinctBy { it.id }
+        }
         uiState.dynamicsOffset = page.nextOffset
         uiState.dynamicsHasMore = page.hasMore
         uiState.dynamicsLoaded = true
+        applyProfileIpLocation(resolveProfileIpFromDynamics(baseItems))
+        applyDynamicsIpEnrichment(baseItems)
     }
 
     fun refresh(keepContent: Boolean = false) {
@@ -270,6 +358,7 @@ fun UserProfileScreen(
             if (keepContent) uiState.refreshing = true else uiState.loading = true
             uiState.loadError = null
             runCatching {
+                dynamicsIpEnrichJob?.cancel()
                 loadProfile(resetLists = true)
                 if (pagerState.currentPage == UserProfileContentTab.Dynamics.ordinal || uiState.dynamicsLoaded) {
                     loadDynamics(reset = true)
@@ -761,7 +850,12 @@ fun UserProfileScreen(
                                                 }
                                             }
                                             item(key = "posts-scroll-fill") {
-                                                Spacer(Modifier.fillParentMaxHeight())
+                                                val fillHeight = uiState.profileHeaderHeight.coerceAtLeast(320.dp)
+                                                Spacer(
+                                                    Modifier
+                                                        .fillMaxWidth()
+                                                        .height(fillHeight),
+                                                )
                                             }
                                         }
                                     } else {
@@ -872,7 +966,12 @@ fun UserProfileScreen(
                                             }
                                         }
                                         item(key = "dynamics-scroll-fill") {
-                                            Spacer(Modifier.fillParentMaxHeight())
+                                            val fillHeight = uiState.profileHeaderHeight.coerceAtLeast(320.dp)
+                                            Spacer(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .height(fillHeight),
+                                            )
                                         }
                                     }
                                 }
@@ -987,6 +1086,20 @@ private fun UserProfileHeader(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
                                 Spacer(Modifier.height(ProfileHeaderAvatarFrameSize - avatarExposeAboveCard))
+                                val profileIp = BilibiliJsonParser.normalizeIpLocation(profile.ipLocation)
+                                if (profileIp != null) {
+                                    Text(
+                                        text = "IP属地：$profileIp",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 4.dp),
+                                    )
+                                }
                             }
                     Column(
                         modifier = Modifier
@@ -1088,7 +1201,6 @@ private fun ProfileCoverBanner(
     var viewerOpen by remember { mutableStateOf(false) }
     var viewerIndex by remember { mutableStateOf(0) }
     val coverPagerState = rememberPagerState(pageCount = { coverImages.size.coerceAtLeast(1) })
-    val statusBarTopInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     Box(modifier = modifier) {
         if (coverImages.isNotEmpty()) {
@@ -1153,22 +1265,6 @@ private fun ProfileCoverBanner(
                 }
             }
         }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(statusBarTopInset + 28.dp)
-                .align(Alignment.TopCenter)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.82f),
-                            Color.White.copy(alpha = 0.35f),
-                            Color.Transparent,
-                        ),
-                    ),
-                ),
-        )
 
         if (onOpenSettings != null) {
             IconButton(
@@ -1299,7 +1395,7 @@ private fun DynamicFeedCard(
                     Modifier
                 },
             )
-            .padding(12.dp),
+            .padding(DynamicFeedCardInset),
     ) {
         if (item.text.isNotBlank()) {
             BiliCommentText(
@@ -1338,7 +1434,9 @@ private fun DynamicFeedCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DynamicFeedMetaRow(item = item)
+        val metaVideo = item.video ?: item.origin?.video
+        DynamicFeedContentMetaRow(item = item, video = metaVideo)
+        DynamicFeedInteractionRow(item = item)
     }
 }
 
@@ -1482,18 +1580,6 @@ private fun DynamicVideoCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        val metaParts = buildList {
-            if (video.viewCount > 0L) add("${formatBiliCount(video.viewCount)}播放")
-            if (video.danmakuCount > 0L) add("${formatBiliCount(video.danmakuCount)}弹幕")
-        }
-        if (metaParts.isNotEmpty()) {
-            Text(
-                text = metaParts.joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
     }
 }
 
@@ -1548,49 +1634,122 @@ private fun DynamicLinkCard(
 }
 
 @Composable
-private fun DynamicFeedMetaRow(item: BiliDynamicItem) {
+private fun DynamicFeedContentMetaRow(
+    item: BiliDynamicItem,
+    video: BiliVideoItem?,
+) {
+    val hasPlayStats = video != null && (video.viewCount > 0L || video.danmakuCount > 0L)
+    val timeText = item.publishTimeSeconds.takeIf { it > 0L }?.let(::formatBiliPublishTime)
+    val ipText = BilibiliJsonParser.normalizeIpLocation(item.ipLocation)?.let { "IP属地：$it" }
+    val hasTrailingMeta = !timeText.isNullOrBlank() || !ipText.isNullOrBlank()
+    if (!hasPlayStats && !hasTrailingMeta) return
+
+    val metaStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(top = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (item.publishTimeSeconds > 0L) {
-            Text(
-                text = formatBiliPublishTime(item.publishTimeSeconds),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (video != null && video.viewCount > 0L) {
+                Text(
+                    text = "播放 ${formatBiliCount(video.viewCount)}",
+                    style = metaStyle,
+                    color = DynamicFeedMetaTextColor,
+                )
+            }
+            if (video != null && video.danmakuCount > 0L) {
+                Text(
+                    text = "弹幕 ${formatBiliCount(video.danmakuCount)}",
+                    style = metaStyle,
+                    color = DynamicFeedMetaTextColor,
+                )
+            }
         }
-        if (!item.ipLocation.isNullOrBlank()) {
-            Text(
-                text = "IP 属地：${item.ipLocation}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Spacer(modifier = Modifier.weight(1f))
+        if (hasTrailingMeta) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!timeText.isNullOrBlank()) {
+                    Text(
+                        text = timeText,
+                        style = metaStyle,
+                        color = DynamicFeedMetaTextColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (!ipText.isNullOrBlank()) {
+                    Text(
+                        text = ipText,
+                        style = metaStyle,
+                        color = DynamicFeedMetaTextColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
-        if (item.likeCount > 0L) {
-            Text(
-                text = "${formatBiliCount(item.likeCount)}赞",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (item.commentCount > 0L) {
-            Text(
-                text = "${formatBiliCount(item.commentCount)}评论",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (item.repostCount > 0L) {
-            Text(
-                text = "${formatBiliCount(item.repostCount)}转发",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    }
+}
+
+@Composable
+private fun DynamicFeedInteractionRow(item: BiliDynamicItem) {
+    val actionStyle = MaterialTheme.typography.bodySmall.copy(
+        fontSize = 11.sp,
+        lineHeight = 15.sp,
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DynamicFeedActionItem(
+            label = "转发",
+            count = item.repostCount,
+            textStyle = actionStyle,
+            modifier = Modifier.weight(1f),
+        )
+        DynamicFeedActionItem(
+            label = "评论",
+            count = item.commentCount,
+            textStyle = actionStyle,
+            modifier = Modifier.weight(1f),
+        )
+        DynamicFeedActionItem(
+            label = "赞",
+            count = item.likeCount,
+            textStyle = actionStyle,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun DynamicFeedActionItem(
+    label: String,
+    count: Long,
+    textStyle: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "$label ${formatBiliCount(count)}",
+            style = textStyle,
+            color = DynamicFeedActionTextColor,
+            maxLines = 1,
+        )
     }
 }
 
@@ -1600,19 +1759,35 @@ private fun ProfileAuthorNameRow(
     level: Int,
     nameStyle: androidx.compose.ui.text.TextStyle,
     modifier: Modifier = Modifier,
+    ipLocation: String? = null,
 ) {
     Row(
-        modifier = modifier,
+        modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = name,
-            style = nameStyle,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (level > 0) {
-            BiliUserLevelIcon(level = level)
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = name,
+                style = nameStyle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (level > 0) {
+                BiliUserLevelIcon(level = level)
+            }
+        }
+        if (!ipLocation.isNullOrBlank()) {
+            Text(
+                text = "IP属地：$ipLocation",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 8.dp),
+            )
         }
     }
 }

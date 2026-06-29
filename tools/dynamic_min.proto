@@ -1,0 +1,37 @@
+syntax = "proto3";
+package bilibili.app.dynamic.v2;
+
+service Dynamic {
+  rpc DynDetail(DynDetailReq) returns (DynDetailReply);
+}
+
+message DynDetailReq {
+  int64 uid = 1;
+  string dynamic_id = 2;
+  int32 local_time = 10;
+}
+
+message DynDetailReply {
+  DynamicItem item = 1;
+}
+
+message DynamicItem {
+  repeated Module modules = 5;
+  Extend extend = 6;
+  string card_type = 7;
+}
+
+message Module {
+  string module_type = 1;
+  ModuleAuthor module_author = 2;
+}
+
+message ModuleAuthor {
+  int64 mid = 1;
+  string ptime_label_text = 2;
+  string ptime_location_text = 14;
+}
+
+message Extend {
+  string dyn_id_str = 1;
+}

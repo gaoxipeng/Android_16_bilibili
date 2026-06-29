@@ -71,6 +71,8 @@ class BilibiliAccountStore(context: Context) {
                     biliJct = credentialJson.optString("bili_jct"),
                     buvid3 = credentialJson.optString("buvid3"),
                     buvid4 = credentialJson.optString("buvid4"),
+                    accessKey = credentialJson.optString("access_key"),
+                    refreshToken = credentialJson.optString("refresh_token"),
                 )
                 add(
                     StoredBilibiliAccount(
@@ -99,7 +101,9 @@ class BilibiliAccountStore(context: Context) {
                                 .put("sessdata", account.credential.sessdata)
                                 .put("bili_jct", account.credential.biliJct)
                                 .put("buvid3", account.credential.buvid3)
-                                .put("buvid4", account.credential.buvid4),
+                                .put("buvid4", account.credential.buvid4)
+                                .put("access_key", account.credential.accessKey)
+                                .put("refresh_token", account.credential.refreshToken),
                         ),
                 )
             }

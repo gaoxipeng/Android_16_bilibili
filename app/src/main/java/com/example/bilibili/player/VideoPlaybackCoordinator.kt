@@ -16,6 +16,7 @@ class VideoPlaybackCoordinator(
 ) {
     var activeKey by mutableStateOf<String?>(null)
     var fullscreenKey by mutableStateOf<String?>(null)
+    var fullscreenPortraitVideo by mutableStateOf<Boolean?>(null)
     var peekPlaybackKey by mutableStateOf<String?>(null)
     var pendingPeekHandoffKey by mutableStateOf<String?>(null)
     val positions = mutableStateMapOf<String, Long>()
@@ -57,13 +58,15 @@ class VideoPlaybackCoordinator(
         pauseInlineOnly()
         activeKey = key
         fullscreenKey = null
+        fullscreenPortraitVideo = null
     }
 
-    fun openFullscreen(key: String) {
+    fun openFullscreen(key: String, portraitVideo: Boolean? = null) {
         pausePeek()
         pauseInlineOnly()
         activeKey = key
         fullscreenKey = key
+        fullscreenPortraitVideo = portraitVideo
     }
 
     fun beginPeekHandoff(key: String) {
@@ -109,6 +112,7 @@ class VideoPlaybackCoordinator(
         }
         activeKey = null
         fullscreenKey = null
+        fullscreenPortraitVideo = null
         peekPlaybackKey = null
         pendingPeekHandoffKey = null
         releaseHandoffPlayer()
@@ -116,6 +120,12 @@ class VideoPlaybackCoordinator(
 
     fun closeFullscreen() {
         fullscreenKey = null
+        fullscreenPortraitVideo = null
+    }
+
+    fun updateFullscreenPortrait(portraitVideo: Boolean) {
+        if (fullscreenKey == null) return
+        fullscreenPortraitVideo = portraitVideo
     }
 
     fun getPlaybackPosition(playbackKey: String): Long =
@@ -155,10 +165,23 @@ class VideoPlaybackCoordinator(
         }
         handoffKey = key
         savePlaybackPosition(key, player.currentPosition)
+        if (fullscreenKey == key) {
+            portraitVideoFromPlayer(player)?.let { fullscreenPortraitVideo = it }
+        }
         handoffPlayer = player.apply {
             playWhenReady = false
             pause()
         }
+    }
+
+    private fun portraitVideoFromPlayer(player: ExoPlayer): Boolean? {
+        val videoSize = player.videoSize
+        if (videoSize.width <= 0 || videoSize.height <= 0) return null
+        return isPortraitVideoSize(
+            width = videoSize.width,
+            height = videoSize.height,
+            rotationDegrees = videoSize.unappliedRotationDegrees,
+        )
     }
 
     fun consumeHandoffPlayer(key: String): ExoPlayer? {

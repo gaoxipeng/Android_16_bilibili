@@ -358,6 +358,7 @@ fun VideoPeekOverlay(
                     },
                     onPlaybackEnded = onPlaybackEnded,
                     modifier = Modifier.fillMaxSize(),
+                    portraitVideo = video.isPortraitVideo,
                 )
             }
         }

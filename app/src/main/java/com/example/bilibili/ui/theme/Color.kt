@@ -4,6 +4,8 @@ import androidx.compose.ui.graphics.Color
 
 val BiliPink = Color(0xFFFB7299)
 val BiliPinkDark = Color(0xFFFF85A8)
+val BiliBlue = Color(0xFF00AEEC)
+val BiliVideoActionInactive = Color(0xFF999999)
 
 val TabAccentLight = BiliPink
 val TabAccentDark = BiliPinkDark

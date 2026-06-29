@@ -249,9 +249,18 @@ fun InlineVideoCard(
                     isFullscreen = false,
                     coordinator = coordinator,
                     backdrop = coverBackdrop,
-                    onFullscreen = { coordinator.openFullscreen(playbackKey) },
+                    onFullscreen = {
+                        coordinator.openFullscreen(
+                            playbackKey,
+                            portraitVideo = knownPortraitVideoHint(
+                                video.videoWidth,
+                                video.videoHeight,
+                            ),
+                        )
+                    },
                     onCloseFullscreen = { coordinator.closeFullscreen() },
                     modifier = Modifier.fillMaxSize(),
+                    portraitVideo = video.isPortraitVideo,
                 )
             } else {
                 Box(

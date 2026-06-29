@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bilibili.data.BiliCommentItem
 import com.example.bilibili.data.BiliCommentSort
+import com.example.bilibili.data.BiliDynamicIpWebResolver
 import com.example.bilibili.data.BiliDynamicItem
 import com.example.bilibili.data.BiliUserProfile
 import com.example.bilibili.data.BiliViewerImage
@@ -78,6 +79,7 @@ import com.example.bilibili.ui.format.formatBiliPublishTime
 import com.example.bilibili.ui.theme.BiliPink
 import com.example.bilibili.player.StatusBarIconsEffect
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -111,14 +113,17 @@ fun DynamicDetailScreen(
     var commentsLoadingMore by remember(item.id) { mutableStateOf(false) }
     var commentsNextCursor by remember(item.id) { mutableStateOf<String?>(null) }
     var commentsEnd by remember(item.id) { mutableStateOf(true) }
+    var commentsLastRequestedCursor by remember(item.id, commentSort) { mutableStateOf<String?>(null) }
     var expandedCommentRoots by remember(item.id) { mutableStateOf(setOf<Long>()) }
     var loadedSubReplies by remember(item.id) { mutableStateOf(mapOf<Long, List<BiliCommentItem>>()) }
     var subRepliesLoading by remember(item.id) { mutableStateOf(setOf<Long>()) }
     var subRepliesEnd by remember(item.id) { mutableStateOf(setOf<Long>()) }
     var commentImageViewer by remember(item.id) { mutableStateOf<DynamicCommentImageViewerRequest?>(null) }
+    var detailItem by remember(item.id) { mutableStateOf(item) }
 
     val listState = rememberLazyListState()
     val commentsLoadMutex = remember(item.id) { Mutex() }
+    var commentsNearEndLoaded by remember(item.id, commentSort) { mutableStateOf(false) }
 
     suspend fun loadComments(reset: Boolean) {
         if (item.commentOid <= 0L || item.commentType <= 0) return
@@ -127,19 +132,27 @@ fun DynamicDetailScreen(
                 commentsLoading = true
                 commentsNextCursor = null
                 commentsEnd = false
+                commentsNearEndLoaded = false
+                commentsLastRequestedCursor = null
                 expandedCommentRoots = emptySet()
                 loadedSubReplies = emptyMap()
                 subRepliesLoading = emptySet()
                 subRepliesEnd = emptySet()
             } else {
                 if (commentsEnd || commentsLoadingMore || comments.isEmpty() || commentsLoading) return@withLock
-                if (commentsNextCursor.isNullOrBlank()) {
+                val cursor = commentsNextCursor
+                if (cursor.isNullOrBlank()) {
                     commentsEnd = true
                     return@withLock
                 }
+                if (cursor == commentsLastRequestedCursor) {
+                    return@withLock
+                }
                 commentsLoadingMore = true
+                commentsLastRequestedCursor = cursor
             }
             val previousCount = if (reset) 0 else comments.size
+            val requestedCursor = if (reset) null else commentsNextCursor
             try {
                 runCatching {
                     api.getSubjectComments(
@@ -164,6 +177,16 @@ fun DynamicDetailScreen(
                         previousCount = previousCount,
                         expectedTotal = commentCount,
                     )
+                    if (!reset) {
+                        val normalizedNext = page.nextCursor?.trim().orEmpty()
+                        val normalizedReq = requestedCursor?.trim().orEmpty()
+                        if (mergedComments.size == previousCount &&
+                            (page.comments.isEmpty() || normalizedNext == normalizedReq)
+                        ) {
+                            commentsEnd = true
+                            commentsNextCursor = null
+                        }
+                    }
                     if (reset) {
                         commentCount = when {
                             page.totalCount > 0L -> page.totalCount
@@ -229,7 +252,18 @@ fun DynamicDetailScreen(
     }
 
     LaunchedEffect(item.id, item.commentOid, item.commentType, commentSort) {
+        commentsNearEndLoaded = false
         loadComments(reset = true)
+    }
+
+    LaunchedEffect(item.id, credential?.sessdata) {
+        if (!detailItem.ipLocation.isNullOrBlank()) return@LaunchedEffect
+        val ipLocation = runCatching {
+            credential?.let { api.getDynamicAuthorIpLocation(item.id, it) }
+                ?: api.getDynamicDetail(item.id, credential)?.ipLocation?.takeIf { !it.isNullOrBlank() }
+                ?: BiliDynamicIpWebResolver.resolve(context, item.id, credential)
+        }.getOrNull()?.takeIf { !it.isNullOrBlank() } ?: return@LaunchedEffect
+        detailItem = detailItem.copy(ipLocation = ipLocation)
     }
 
     val commentEntries by remember {
@@ -245,36 +279,41 @@ fun DynamicDetailScreen(
     }
 
     LaunchedEffect(listState, commentEntries) {
-        snapshotFlow { listState.layoutInfo to commentEntries }
-            .collect { (layoutInfo, entries) ->
-                findAutoLoadSubReplyRootId(entries, layoutInfo)?.let { rootId ->
-                    if (rootId !in subRepliesLoading && rootId !in subRepliesEnd) {
-                        loadSubReplies(rootId, reset = false)
-                    }
+        snapshotFlow {
+            findAutoLoadSubReplyRootId(commentEntries, listState.layoutInfo)
+        }
+            .distinctUntilChanged()
+            .collect { rootId ->
+                if (rootId != null && rootId !in subRepliesLoading && rootId !in subRepliesEnd) {
+                    loadSubReplies(rootId, reset = false)
                 }
             }
     }
 
-    LaunchedEffect(
-        listState,
-        commentsEnd,
-        commentsLoading,
-        commentsLoadingMore,
-        commentsNextCursor,
-        comments.size,
-        commentEntries.size,
-    ) {
+    LaunchedEffect(listState, commentsEnd, commentsLoading, commentsNextCursor, commentSort, item.id) {
         snapshotFlow {
-            listState.layoutInfo to listState.isScrollInProgress
-        }.collect { (layoutInfo, _) ->
-            if (comments.isEmpty() || commentsEnd || commentsLoading || commentsLoadingMore) return@collect
-            if (commentsNextCursor.isNullOrBlank()) return@collect
+            val layoutInfo = listState.layoutInfo
             val total = layoutInfo.totalItemsCount
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            if (total > 0 && lastVisible >= total - 2) {
+            val nearEnd = total > 0 && lastVisible >= total - 2
+            listState.isScrollInProgress to nearEnd
+        }
+            .distinctUntilChanged()
+            .collect { (scrolling, nearEnd) ->
+                if (scrolling) {
+                    commentsNearEndLoaded = false
+                    return@collect
+                }
+                if (!nearEnd) {
+                    commentsNearEndLoaded = false
+                    return@collect
+                }
+                if (commentsNearEndLoaded) return@collect
+                if (comments.isEmpty() || commentsEnd || commentsLoading || commentsLoadingMore) return@collect
+                if (commentsNextCursor.isNullOrBlank()) return@collect
+                commentsNearEndLoaded = true
                 loadComments(reset = false)
             }
-        }
     }
 
     BackHandler(onBack = onBack)
@@ -307,32 +346,32 @@ fun DynamicDetailScreen(
             ) {
                 item(key = "dynamic-author") {
                     DynamicDetailAuthorSection(
-                        item = item,
+                        item = detailItem,
                         onAuthorClick = onAuthorClick,
                     )
                 }
-                if (item.text.isNotBlank()) {
+                if (detailItem.text.isNotBlank()) {
                     item(key = "dynamic-text") {
                         BiliCommentText(
-                            text = item.text,
-                            emoticons = item.emoticons,
+                            text = detailItem.text,
+                            emoticons = detailItem.emoticons,
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 2.dp),
                         )
                     }
                 }
-                if (item.imageUrls.isNotEmpty()) {
+                if (detailItem.imageUrls.isNotEmpty()) {
                     item(key = "dynamic-images") {
                         BiliImageGrid(
-                            images = item.imageUrls.map(BiliViewerImage::fromUrl),
+                            images = detailItem.imageUrls.map(BiliViewerImage::fromUrl),
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         )
                     }
                 }
-                if (!item.ipLocation.isNullOrBlank()) {
+                if (!detailItem.ipLocation.isNullOrBlank()) {
                     item(key = "dynamic-ip") {
                         Text(
-                            text = "IP 属地：${item.ipLocation}",
+                            text = "IP 属地：${detailItem.ipLocation}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

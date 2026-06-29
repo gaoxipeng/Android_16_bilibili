@@ -1,5 +1,6 @@
 package com.example.bilibili.ui.screens
 
+import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,6 +63,7 @@ import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliUserProfile
 import com.example.bilibili.data.BiliVideoDetail
 import com.example.bilibili.data.BiliVideoItem
+import com.example.bilibili.data.BiliVideoRelation
 import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
@@ -69,6 +71,7 @@ import com.example.bilibili.player.BilibiliVideoSurface
 import com.example.bilibili.player.LightContentStatusBarEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.player.rememberVideoControlBackdrop
+import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.BiliCommentImageStrip
 import com.example.bilibili.ui.components.BiliCommentText
@@ -76,6 +79,8 @@ import com.example.bilibili.ui.components.BiliUserLevelIcon
 import com.example.bilibili.ui.components.BiliVideoDanmakuCountIcon
 import com.example.bilibili.ui.components.BiliVideoPlayCountIcon
 import com.example.bilibili.ui.components.BilibiliFollowButton
+import com.example.bilibili.ui.components.VideoCoinChoiceDialog
+import com.example.bilibili.ui.components.VideoDetailActionBar
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoDetailTab
 import com.example.bilibili.ui.components.VideoDetailTabBar
@@ -238,6 +243,10 @@ fun VideoDetailScreen(
     var subRepliesLoading by remember(seedVideo.bvid) { mutableStateOf(setOf<Long>()) }
     var subRepliesEnd by remember(seedVideo.bvid) { mutableStateOf(setOf<Long>()) }
     var commentImageViewer by remember(seedVideo.bvid) { mutableStateOf<CommentImageViewerRequest?>(null) }
+    var videoRelation by remember(seedVideo.bvid) { mutableStateOf(BiliVideoRelation()) }
+    var videoActionLoading by remember(seedVideo.bvid) { mutableStateOf(false) }
+    var showCoinDialog by remember(seedVideo.bvid) { mutableStateOf(false) }
+    var coinMenuAnchor by remember(seedVideo.bvid) { mutableStateOf(Rect.Zero) }
 
     val pagerState = rememberPagerState(initialPage = 0) { VideoDetailTab.entries.size }
     val tabScrollPosition by remember {
@@ -412,6 +421,11 @@ fun VideoDetailScreen(
                 val loadedDetail = detailDeferred.await() ?: error("无法加载视频详情")
                 detail = loadedDetail
                 commentCount = loadedDetail.replyCount
+                videoRelation = api.getVideoArchiveRelation(
+                    bvid = loadedDetail.video.bvid,
+                    aid = loadedDetail.video.aid,
+                    credential = credential,
+                )
 
                 val video = loadedDetail.video
                 launch {
@@ -545,7 +559,15 @@ fun VideoDetailScreen(
                             isFullscreen = false,
                             coordinator = coordinator,
                             backdrop = controlBackdrop,
-                            onFullscreen = { coordinator.openFullscreen(playbackKey) },
+                            onFullscreen = {
+                                coordinator.openFullscreen(
+                                    playbackKey,
+                                    portraitVideo = knownPortraitVideoHint(
+                                        currentVideo.videoWidth,
+                                        currentVideo.videoHeight,
+                                    ),
+                                )
+                            },
                             onCloseFullscreen = { coordinator.closeFullscreen() },
                             modifier = Modifier.fillMaxSize(),
                             danmakuEnabled = true,
@@ -560,6 +582,7 @@ fun VideoDetailScreen(
                                 )
                             },
                             playbackEnabled = playbackActive,
+                            portraitVideo = currentVideo.isPortraitVideo,
                         )
                     } else if (currentStream != null) {
                         Box(Modifier.fillMaxSize())
@@ -695,6 +718,170 @@ fun VideoDetailScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        item(key = "intro-actions") {
+                            VideoDetailActionBar(
+                                likeCount = currentVideo.likeCount,
+                                coinCount = currentDetail?.coinCount ?: 0L,
+                                favoriteCount = currentDetail?.favoriteCount ?: 0L,
+                                shareCount = currentDetail?.shareCount ?: 0L,
+                                liked = videoRelation.liked,
+                                coined = videoRelation.coinCount > 0,
+                                favorited = videoRelation.favorited,
+                                enabled = !videoActionLoading,
+                                onLikeClick = {
+                                    val cred = credential ?: run {
+                                        onLoginRequired()
+                                        return@VideoDetailActionBar
+                                    }
+                                    if (videoActionLoading) return@VideoDetailActionBar
+                                    scope.launch {
+                                        videoActionLoading = true
+                                        val targetLike = !videoRelation.liked
+                                        runCatching {
+                                            api.likeVideo(
+                                                bvid = currentVideo.bvid,
+                                                aid = currentVideo.aid,
+                                                like = targetLike,
+                                                credential = cred,
+                                            ).getOrThrow()
+                                            videoRelation = videoRelation.copy(liked = targetLike)
+                                            detail = detail?.let { loaded ->
+                                                val delta = if (targetLike) 1L else -1L
+                                                loaded.copy(
+                                                    video = loaded.video.copy(
+                                                        likeCount = (loaded.video.likeCount + delta)
+                                                            .coerceAtLeast(0L),
+                                                    ),
+                                                )
+                                            }
+                                        }.onFailure {
+                                            Toast.makeText(
+                                                context,
+                                                it.message ?: "点赞失败",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                        videoActionLoading = false
+                                    }
+                                },
+                                onTripleClick = {
+                                    val cred = credential ?: run {
+                                        onLoginRequired()
+                                        return@VideoDetailActionBar
+                                    }
+                                    if (videoActionLoading) return@VideoDetailActionBar
+                                    scope.launch {
+                                        videoActionLoading = true
+                                        runCatching {
+                                            val result = api.tripleVideo(
+                                                bvid = currentVideo.bvid,
+                                                aid = currentVideo.aid,
+                                                credential = cred,
+                                            ).getOrThrow()
+                                            videoRelation = BiliVideoRelation(
+                                                liked = result.liked || videoRelation.liked,
+                                                favorited = result.favorited || videoRelation.favorited,
+                                                coinCount = when {
+                                                    result.coined -> 2
+                                                    videoRelation.coinCount > 0 -> videoRelation.coinCount
+                                                    else -> 0
+                                                },
+                                            )
+                                            api.getVideoDetail(currentVideo.bvid, cred)?.let { refreshed ->
+                                                detail = refreshed
+                                            }
+                                        }.onFailure {
+                                            Toast.makeText(
+                                                context,
+                                                it.message ?: "一键三连失败",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                        videoActionLoading = false
+                                    }
+                                },
+                                onCoinClick = { anchorBounds ->
+                                    if (credential == null) {
+                                        onLoginRequired()
+                                        return@VideoDetailActionBar
+                                    }
+                                    if (videoRelation.coinCount >= 2) {
+                                        Toast.makeText(context, "已经投过币了", Toast.LENGTH_SHORT).show()
+                                        return@VideoDetailActionBar
+                                    }
+                                    if (videoActionLoading) return@VideoDetailActionBar
+                                    coinMenuAnchor = anchorBounds
+                                    showCoinDialog = true
+                                },
+                                onFavoriteClick = {
+                                    val cred = credential ?: run {
+                                        onLoginRequired()
+                                        return@VideoDetailActionBar
+                                    }
+                                    if (videoActionLoading) return@VideoDetailActionBar
+                                    scope.launch {
+                                        videoActionLoading = true
+                                        val targetFavorite = !videoRelation.favorited
+                                        runCatching {
+                                            api.modifyVideoFavorite(
+                                                bvid = currentVideo.bvid,
+                                                aid = currentVideo.aid,
+                                                add = targetFavorite,
+                                                credential = cred,
+                                            ).getOrThrow()
+                                            videoRelation = videoRelation.copy(favorited = targetFavorite)
+                                            detail = detail?.let { loaded ->
+                                                val delta = if (targetFavorite) 1L else -1L
+                                                loaded.copy(
+                                                    favoriteCount = (loaded.favoriteCount + delta)
+                                                        .coerceAtLeast(0L),
+                                                )
+                                            }
+                                        }.onFailure {
+                                            Toast.makeText(
+                                                context,
+                                                it.message ?: "收藏失败",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                        videoActionLoading = false
+                                    }
+                                },
+                                onShareClick = {
+                                    if (videoActionLoading) return@VideoDetailActionBar
+                                    scope.launch {
+                                        videoActionLoading = true
+                                        runCatching {
+                                            api.shareVideo(
+                                                bvid = currentVideo.bvid,
+                                                aid = currentVideo.aid,
+                                                credential = credential,
+                                            )
+                                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(
+                                                    Intent.EXTRA_TEXT,
+                                                    "https://www.bilibili.com/video/${currentVideo.bvid}",
+                                                )
+                                            }
+                                            context.startActivity(
+                                                Intent.createChooser(shareIntent, "分享视频"),
+                                            )
+                                            detail = detail?.copy(
+                                                shareCount = (detail?.shareCount ?: 0L) + 1L,
+                                            )
+                                        }.onFailure {
+                                            Toast.makeText(
+                                                context,
+                                                it.message ?: "分享失败",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                        videoActionLoading = false
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
                 VideoDetailTab.Comments -> {
@@ -813,6 +1000,58 @@ fun VideoDetailScreen(
             }
         }
     }
+    VideoCoinChoiceDialog(
+        visible = showCoinDialog,
+        anchorBoundsInRoot = coinMenuAnchor,
+        canCoinTwo = videoRelation.coinCount == 0,
+        onDismiss = { showCoinDialog = false },
+            onCoinOne = {
+                showCoinDialog = false
+                val cred = credential ?: return@VideoCoinChoiceDialog
+                scope.launch {
+                    videoActionLoading = true
+                    runCatching {
+                        api.coinVideo(
+                            bvid = currentVideo.bvid,
+                            aid = currentVideo.aid,
+                            multiply = 1,
+                            credential = cred,
+                        ).getOrThrow()
+                        videoRelation = videoRelation.copy(
+                            coinCount = (videoRelation.coinCount + 1).coerceAtMost(2),
+                        )
+                        detail = detail?.copy(
+                            coinCount = (detail?.coinCount ?: 0L) + 1L,
+                        )
+                    }.onFailure {
+                        Toast.makeText(context, it.message ?: "投币失败", Toast.LENGTH_SHORT).show()
+                    }
+                    videoActionLoading = false
+                }
+            },
+            onCoinTwo = {
+                showCoinDialog = false
+                val cred = credential ?: return@VideoCoinChoiceDialog
+                scope.launch {
+                    videoActionLoading = true
+                    runCatching {
+                        api.coinVideo(
+                            bvid = currentVideo.bvid,
+                            aid = currentVideo.aid,
+                            multiply = 2,
+                            credential = cred,
+                        ).getOrThrow()
+                        videoRelation = videoRelation.copy(coinCount = 2)
+                        detail = detail?.copy(
+                            coinCount = (detail?.coinCount ?: 0L) + 2L,
+                        )
+                    }.onFailure {
+                        Toast.makeText(context, it.message ?: "投币失败", Toast.LENGTH_SHORT).show()
+                    }
+                    videoActionLoading = false
+                }
+            },
+        )
     commentImageViewer?.let { request ->
         BiliFullscreenImageViewer(
             images = request.images,

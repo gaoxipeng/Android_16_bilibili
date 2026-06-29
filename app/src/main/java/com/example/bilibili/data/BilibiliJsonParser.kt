@@ -40,6 +40,7 @@ object BilibiliJsonParser {
         val stat = data.optJSONObject("stat") ?: JSONObject()
         val pages = data.optJSONArray("pages")
         val cid = pages?.optJSONObject(0)?.optLong("cid") ?: 0L
+        val dimension = data.optJSONObject("dimension")
         val bvid = data.optString("bvid")
         if (bvid.isBlank()) return null
         val video = BiliVideoItem(
@@ -55,21 +56,85 @@ object BilibiliJsonParser {
             durationSeconds = data.optLong("duration").toInt(),
             description = data.optString("desc"),
             cid = cid,
+            videoWidth = dimension?.optLong("width")?.toInt() ?: 0,
+            videoHeight = dimension?.optLong("height")?.toInt() ?: 0,
         )
         return BiliVideoDetail(
             video = video,
             publishTimeSeconds = data.optLong("pubdate"),
             replyCount = stat.optLong("reply"),
+            coinCount = stat.optLong("coin"),
+            favoriteCount = stat.optLong("favorite"),
+            shareCount = stat.optLong("share"),
         )
+    }
+
+    fun parseVideoArchiveRelation(json: JSONObject): BiliVideoRelation {
+        val data = json.optJSONObject("data") ?: return BiliVideoRelation()
+        return BiliVideoRelation(
+            liked = data.optInt("like") == 1,
+            favorited = data.optInt("favorite") == 1,
+            coinCount = data.optInt("coin").coerceAtLeast(0),
+        )
+    }
+
+    fun parseVideoTripleResult(json: JSONObject): BiliVideoTripleResult {
+        val data = json.optJSONObject("data") ?: return BiliVideoTripleResult()
+        return BiliVideoTripleResult(
+            liked = data.optInt("like") == 1 || data.optBoolean("like"),
+            coined = data.optInt("coin") == 1 || data.optBoolean("coin"),
+            favorited = data.optInt("fav") == 1 || data.optBoolean("fav"),
+        )
+    }
+
+    fun parseDefaultFavoriteFolderId(json: JSONObject): Long? {
+        val list = json.optJSONObject("data")?.optJSONArray("list") ?: return null
+        for (index in 0 until list.length()) {
+            val item = list.optJSONObject(index) ?: continue
+            val id = item.optLong("id").takeIf { it > 0L }
+                ?: item.optLong("media_id").takeIf { it > 0L }
+            if (id != null) return id
+        }
+        return null
+    }
+
+    fun isPlausibleIpLocation(value: String): Boolean {
+        if (value.isBlank() || value == "未知") return false
+        if (value.contains("浏览") || value.contains("播放") || value.contains("弹幕")) return false
+        if (value.contains("转发") || value.contains("评论") || value.contains("赞")) return false
+        if (value.contains("IP属地")) return false
+        if (value.any { it.isDigit() }) return false
+        if (value.length !in 2..12) return false
+        return value.any { it in '\u4e00'..'\u9fff' }
     }
 
     fun normalizeIpLocation(raw: String?): String? {
         if (raw.isNullOrBlank() || raw == "未知") return null
-        return raw
+        var value = raw
             .removePrefix("IP属地：")
             .removePrefix("IP属地:")
             .trim()
-            .takeIf { it.isNotBlank() && it != "未知" }
+        if (value.contains("IP属地")) {
+            value = value
+                .substringAfterLast("IP属地：")
+                .substringAfterLast("IP属地:")
+                .trim()
+        }
+        if (value.isBlank() || value == "未知") return null
+        return value.takeIf { isPlausibleIpLocation(it) }
+    }
+
+    fun parseAuthorIpLocation(author: org.json.JSONObject?): String? {
+        if (author == null) return null
+        return normalizeIpLocation(
+            author.optString("pub_location_text").takeIf { it.isNotBlank() }
+                ?: author.optString("ptime_location_text").takeIf { it.isNotBlank() },
+        )
+    }
+
+    fun parseDynamicDetail(json: JSONObject): BiliDynamicItem? {
+        val item = json.optJSONObject("data")?.optJSONObject("item") ?: return null
+        return parseSpaceDynamicItem(item)
     }
 
     fun parseOnlineCount(json: JSONObject): Long {
@@ -212,14 +277,18 @@ object BilibiliJsonParser {
         }
         val legacyNext = cursor?.optLong("next")?.takeIf { it > 0L } ?: return null
         val mode = cursor?.optInt("mode") ?: 3
-        return if (mode == 2) {
-            JSONObject()
+        return when (mode) {
+            2 -> JSONObject()
+                .put("type", 1)
+                .put("direction", 1)
+                .put("data", JSONObject().put("cursor", legacyNext))
+                .toString()
+            3 -> JSONObject()
                 .put("type", 3)
                 .put("direction", 1)
                 .put("Data", JSONObject().put("cursor", legacyNext))
                 .toString()
-        } else {
-            JSONObject()
+            else -> JSONObject()
                 .put("type", 1)
                 .put("direction", 1)
                 .put("data", JSONObject().put("cursor", legacyNext))
@@ -597,7 +666,7 @@ object BilibiliJsonParser {
             authorLevel = author?.optJSONObject("badge")?.optInt("level")
                 ?: author?.optInt("level")
                 ?: 0,
-            ipLocation = normalizeIpLocation(author?.optString("pub_location_text")),
+            ipLocation = parseAuthorIpLocation(author),
             commentOid = commentOid,
             commentType = commentType,
             dynamicType = dynamicType,

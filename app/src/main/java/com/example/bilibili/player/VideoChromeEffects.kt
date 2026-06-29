@@ -64,13 +64,20 @@ fun ImmersiveVideoChromeEffect(enabled: Boolean) {
 }
 
 @Composable
-fun FullscreenLandscapeEffect(enabled: Boolean) {
+fun FullscreenOrientationEffect(
+    enabled: Boolean,
+    portraitVideo: Boolean?,
+) {
     val context = LocalContext.current
     val activity = context as? Activity
-    DisposableEffect(enabled, activity) {
-        if (!enabled || activity == null) return@DisposableEffect onDispose {}
+    DisposableEffect(enabled, portraitVideo, activity) {
+        if (!enabled || activity == null || portraitVideo == null) return@DisposableEffect onDispose {}
         val previous = activity.requestedOrientation
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        activity.requestedOrientation = if (portraitVideo) {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
         onDispose {
             activity.requestedOrientation = previous
         }

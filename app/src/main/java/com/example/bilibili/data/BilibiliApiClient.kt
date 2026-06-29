@@ -1,6 +1,8 @@
 package com.example.bilibili.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -12,6 +14,8 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 class BilibiliApiClient {
+    var onAccessKeyUpdated: ((BilibiliCredential) -> Unit)? = null
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -59,22 +63,21 @@ class BilibiliApiClient {
     ): BiliFollowingFeedPage =
         withContext(Dispatchers.IO) {
             val params = buildMap {
-                put("timezone_offset", "-480")
-                put("type", "video")
-                put("platform", "web")
-                put("web_location", "333.1365")
-                put(
-                    "features",
-                    "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete",
-                )
+            put("timezone_offset", "-480")
+            put("type", "video")
+            put("platform", "web")
+            put("gaia_source", "main_web")
+            put("web_location", "333.1365")
+                put("features", BilibiliEndpoints.DYNAMIC_FEED_FEATURES)
                 if (!offset.isNullOrBlank()) {
                     put("offset", offset)
                 }
             }
-            getJson(
+            getDynamicJson(
                 url = BilibiliEndpoints.FOLLOWING_FEED,
                 params = params,
                 credential = credential,
+                referer = "https://t.bilibili.com/",
             ).let(BilibiliJsonParser::parseFollowingVideoFeed)
         }
 
@@ -103,6 +106,184 @@ class BilibiliApiClient {
                 ).let(BilibiliJsonParser::parseVideoDetail)
             }.getOrNull()
         }
+
+    suspend fun getVideoArchiveRelation(
+        bvid: String,
+        aid: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliVideoRelation = withContext(Dispatchers.IO) {
+        if (bvid.isBlank() && aid <= 0L) return@withContext BiliVideoRelation()
+        runCatching {
+            val params = buildMap {
+                if (bvid.isNotBlank()) put("bvid", bvid)
+                if (aid > 0L) put("aid", aid.toString())
+            }
+            getJson(
+                url = BilibiliEndpoints.VIDEO_ARCHIVE_RELATION,
+                params = params,
+                credential = credential,
+                referer = "https://www.bilibili.com/video/$bvid",
+            ).let(BilibiliJsonParser::parseVideoArchiveRelation)
+        }.getOrDefault(BiliVideoRelation())
+    }
+
+    suspend fun likeVideo(
+        bvid: String,
+        aid: Long,
+        like: Boolean,
+        credential: BilibiliCredential,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (credential.biliJct.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("登录凭证无效，请重新登录"))
+        }
+        runCatching {
+            postForm(
+                url = BilibiliEndpoints.VIDEO_LIKE,
+                form = buildMap {
+                    if (bvid.isNotBlank()) put("bvid", bvid)
+                    if (aid > 0L) put("aid", aid.toString())
+                    put("like", if (like) "1" else "2")
+                    put("csrf", credential.biliJct)
+                    put("eab_x", "2")
+                    put("ramval", "0")
+                    put("source", "web_normal")
+                    put("ga", "1")
+                    put("dyn", "2")
+                },
+                credential = credential,
+                referer = "https://www.bilibili.com/video/$bvid",
+            )
+            Unit
+        }
+    }
+
+    suspend fun coinVideo(
+        bvid: String,
+        aid: Long,
+        multiply: Int = 1,
+        credential: BilibiliCredential,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (credential.biliJct.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("登录凭证无效，请重新登录"))
+        }
+        runCatching {
+            postForm(
+                url = BilibiliEndpoints.VIDEO_COIN,
+                form = buildMap {
+                    if (bvid.isNotBlank()) put("bvid", bvid)
+                    if (aid > 0L) put("aid", aid.toString())
+                    put("multiply", multiply.coerceIn(1, 2).toString())
+                    put("select_like", "0")
+                    put("csrf", credential.biliJct)
+                    put("eab_x", "2")
+                    put("ramval", "0")
+                    put("source", "web_normal")
+                    put("ga", "1")
+                    put("dyn", "2")
+                },
+                credential = credential,
+                referer = "https://www.bilibili.com/video/$bvid",
+            )
+            Unit
+        }
+    }
+
+    suspend fun tripleVideo(
+        bvid: String,
+        aid: Long,
+        credential: BilibiliCredential,
+    ): Result<BiliVideoTripleResult> = withContext(Dispatchers.IO) {
+        if (credential.biliJct.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("登录凭证无效，请重新登录"))
+        }
+        runCatching {
+            postForm(
+                url = BilibiliEndpoints.VIDEO_TRIPLE,
+                form = buildMap {
+                    if (bvid.isNotBlank()) put("bvid", bvid)
+                    if (aid > 0L) put("aid", aid.toString())
+                    put("csrf", credential.biliJct)
+                    put("eab_x", "2")
+                    put("ramval", "0")
+                    put("source", "web_normal")
+                    put("ga", "1")
+                    put("dyn", "2")
+                },
+                credential = credential,
+                referer = "https://www.bilibili.com/video/$bvid",
+            ).let(BilibiliJsonParser::parseVideoTripleResult)
+        }
+    }
+
+    suspend fun shareVideo(
+        bvid: String,
+        aid: Long,
+        credential: BilibiliCredential? = null,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (credential?.biliJct?.isNotBlank() == true) {
+                postForm(
+                    url = BilibiliEndpoints.VIDEO_SHARE,
+                    form = buildMap {
+                        if (bvid.isNotBlank()) put("bvid", bvid)
+                        if (aid > 0L) put("aid", aid.toString())
+                        put("csrf", credential.biliJct)
+                        put("eab_x", "2")
+                        put("ramval", "0")
+                        put("source", "web_normal")
+                        put("ga", "1")
+                        put("dyn", "2")
+                    },
+                    credential = credential,
+                    referer = "https://www.bilibili.com/video/$bvid",
+                )
+            }
+            Unit
+        }
+    }
+
+    suspend fun modifyVideoFavorite(
+        bvid: String,
+        aid: Long,
+        add: Boolean,
+        credential: BilibiliCredential,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (credential.biliJct.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("登录凭证无效，请重新登录"))
+        }
+        runCatching {
+            val folderId = getDefaultFavoriteFolderId(credential)
+                ?: error("未找到收藏夹")
+            postForm(
+                url = BilibiliEndpoints.FAV_RESOURCE_DEAL,
+                form = buildMap {
+                    put("rid", aid.toString())
+                    put("type", "2")
+                    if (add) {
+                        put("add_media_ids", folderId.toString())
+                        put("del_media_ids", "")
+                    } else {
+                        put("add_media_ids", "")
+                        put("del_media_ids", folderId.toString())
+                    }
+                    put("csrf", credential.biliJct)
+                },
+                credential = credential,
+                referer = "https://www.bilibili.com/video/$bvid",
+            )
+            Unit
+        }
+    }
+
+    private suspend fun getDefaultFavoriteFolderId(credential: BilibiliCredential): Long? =
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.FAV_FOLDER_LIST,
+                params = mapOf("up_mid" to credential.dedeUserId),
+                credential = credential,
+                referer = BilibiliEndpoints.HOME,
+            ).let(BilibiliJsonParser::parseDefaultFavoriteFolderId)
+        }.getOrNull()
 
     suspend fun getVideoOnlineCount(
         bvid: String,
@@ -541,16 +722,97 @@ class BilibiliApiClient {
             put("host_mid", mid.toString())
             put("timezone_offset", "-480")
             put("platform", "web")
-            put("features", "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete")
+            put("gaia_source", "main_web")
+            put("features", BilibiliEndpoints.DYNAMIC_FEED_FEATURES)
             put("web_location", "333.1365")
             if (!offset.isNullOrBlank()) put("offset", offset)
         }
-        getJson(
+        getDynamicJson(
             url = BilibiliEndpoints.USER_SPACE_DYNAMIC,
             params = params,
             credential = credential,
             referer = "https://space.bilibili.com/$mid/dynamic",
         ).let(BilibiliJsonParser::parseSpaceDynamicFeed)
+    }
+
+    suspend fun exchangeAccessKey(credential: BilibiliCredential): BilibiliCredential =
+        withContext(Dispatchers.IO) {
+            if (credential.accessKey.isNotBlank()) return@withContext credential
+            val updated = BiliAccessKeyExchange.exchange(credential) ?: return@withContext credential
+            if (updated.accessKey.isNotBlank()) {
+                onAccessKeyUpdated?.invoke(updated)
+            }
+            updated
+        }
+
+    suspend fun getDynamicAuthorIpLocation(
+        dynamicId: String,
+        credential: BilibiliCredential?,
+    ): String? = withContext(Dispatchers.IO) {
+        if (dynamicId.isBlank() || credential == null) return@withContext null
+        val resolvedCredential = exchangeAccessKey(credential)
+        if (resolvedCredential.accessKey.isBlank()) return@withContext null
+        BiliDynamicGrpcClient.fetchAuthorIpLocation(dynamicId, resolvedCredential)
+    }
+
+    suspend fun getDynamicDetail(
+        dynamicId: String,
+        credential: BilibiliCredential? = null,
+    ): BiliDynamicItem? = withContext(Dispatchers.IO) {
+        if (dynamicId.isBlank()) return@withContext null
+        runCatching {
+            val params = mutableMapOf(
+                "id" to dynamicId,
+                "timezone_offset" to "-480",
+                "platform" to "web",
+                "gaia_source" to "main_web",
+                "features" to BilibiliEndpoints.DYNAMIC_DETAIL_FEATURES,
+                "web_location" to "333.1368",
+            )
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.DYNAMIC_DETAIL,
+                params = params,
+                credential = credential,
+                referer = "https://t.bilibili.com/$dynamicId",
+                extraHeaders = dynamicRequestHeaders(),
+            ).let(BilibiliJsonParser::parseDynamicDetail)
+        }.getOrNull()
+    }
+
+    suspend fun enrichDynamicIpLocations(
+        items: List<BiliDynamicItem>,
+        credential: BilibiliCredential? = null,
+        webIpResolver: suspend (String) -> String? = { null },
+    ): List<BiliDynamicItem> = withContext(Dispatchers.IO) {
+        if (items.none { BilibiliJsonParser.normalizeIpLocation(it.ipLocation) == null }) {
+            return@withContext items
+        }
+        val resolvedCredential = credential?.let { exchangeAccessKey(it) }
+        val result = items.toMutableList()
+        for ((index, item) in items.withIndex()) {
+            val normalizedExisting = BilibiliJsonParser.normalizeIpLocation(item.ipLocation)
+            if (normalizedExisting != null) {
+                if (item.ipLocation != normalizedExisting) {
+                    result[index] = result[index].copy(ipLocation = normalizedExisting)
+                }
+                continue
+            }
+            val ipLocation = runCatching {
+                BilibiliJsonParser.normalizeIpLocation(
+                    resolvedCredential?.let { getDynamicAuthorIpLocation(item.id, it) },
+                )
+                    ?: BilibiliJsonParser.normalizeIpLocation(
+                        getDynamicDetail(item.id, resolvedCredential)?.ipLocation,
+                    )
+                    ?: BilibiliJsonParser.normalizeIpLocation(webIpResolver(item.id))
+            }.getOrNull()
+            if (ipLocation != null) {
+                result[index] = result[index].copy(ipLocation = ipLocation)
+            } else if (!item.ipLocation.isNullOrBlank()) {
+                result[index] = result[index].copy(ipLocation = null)
+            }
+        }
+        result
     }
 
     suspend fun searchVideos(
@@ -692,9 +954,10 @@ class BilibiliApiClient {
         params: Map<String, String>,
         credential: BilibiliCredential? = null,
         referer: String = BilibiliEndpoints.HOME,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): JSONObject {
         val signed = WbiSigner.sign(params.toMutableMap(), ensureMixinKey(credential))
-        return getJson(url, signed, credential, referer)
+        return getJson(url, signed, credential, referer, extraHeaders)
     }
 
     private suspend fun ensureMixinKey(credential: BilibiliCredential?): String =
@@ -863,11 +1126,30 @@ class BilibiliApiClient {
         }
     }
 
+    private suspend fun getDynamicJson(
+        url: String,
+        params: Map<String, String>,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): JSONObject = getJson(
+        url = url,
+        params = params,
+        credential = credential,
+        referer = referer,
+        extraHeaders = dynamicRequestHeaders(),
+    )
+
+    private fun dynamicRequestHeaders(): Map<String, String> = mapOf(
+        "x-bili-device-req-json" to """{"platform":"android","device":"phone","mobi_app":"android","build":8510300}""",
+        "x-bili-web-req-json" to """{"spm_id":"333.1365"}""",
+    )
+
     private suspend fun getJson(
         url: String,
         params: Map<String, String>,
         credential: BilibiliCredential? = null,
         referer: String = BilibiliEndpoints.HOME,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): JSONObject {
         val query = params.entries.joinToString("&") { (key, value) ->
             "${encode(key)}=${encode(value)}"
@@ -877,6 +1159,9 @@ class BilibiliApiClient {
             .url(fullUrl)
             .header("User-Agent", BilibiliEndpoints.USER_AGENT)
             .header("Referer", referer)
+        extraHeaders.forEach { (key, value) ->
+            requestBuilder.header(key, value)
+        }
         buildCookieHeader(credential)?.let { cookie ->
             requestBuilder.header("Cookie", cookie)
         }

@@ -63,12 +63,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.example.bilibili.R
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.BiliPlayStream
-import com.example.bilibili.ui.liquidglass.TransparentLiquidTextButton
 import com.example.bilibili.ui.theme.BiliPink
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.LayerBackdrop
@@ -81,7 +81,6 @@ private val VideoProgressLineWidth = 2.5.dp
 
 private val VideoControlBarHeight = 32.dp
 private val VideoControlBarBottomGap = 6.dp
-private val VideoOverlayButtonSurfaceColor = Color.Black.copy(alpha = 0.52f)
 private val VideoControlBorderWidth = 0.5.dp
 private val VideoControlBorderColor = Color(0x80999999)
 
@@ -105,6 +104,7 @@ fun BilibiliVideoSurface(
     danmakuCid: Long = 0L,
     loadDanmaku: (suspend (Long) -> List<BiliDanmakuItem>)? = null,
     playbackEnabled: Boolean = true,
+    portraitVideo: Boolean = false,
 ) {
     val context = LocalContext.current
     val videoPeekController = LocalVideoPeekController.current
@@ -132,9 +132,31 @@ fun BilibiliVideoSurface(
     }
 
     var player by remember(playbackKey) { mutableStateOf<ExoPlayer?>(null) }
+    var isPortraitPlayback by remember(playbackKey) { mutableStateOf(portraitVideo) }
+    var playerSizeKnown by remember(playbackKey) { mutableStateOf(false) }
+
+    LaunchedEffect(portraitVideo) {
+        if (portraitVideo) {
+            isPortraitPlayback = true
+            if (isFullscreen) {
+                coordinator.updateFullscreenPortrait(true)
+            }
+        }
+    }
+
+    val fullscreenPortraitOrientation = when {
+        !isFullscreen -> null
+        portraitVideo -> true
+        coordinator.fullscreenPortraitVideo != null -> coordinator.fullscreenPortraitVideo
+        playerSizeKnown -> isPortraitPlayback
+        else -> null
+    }
 
     ImmersiveVideoChromeEffect(enabled = isFullscreen)
-    FullscreenLandscapeEffect(enabled = isFullscreen)
+    FullscreenOrientationEffect(
+        enabled = isFullscreen,
+        portraitVideo = fullscreenPortraitOrientation,
+    )
 
     LaunchedEffect(playbackKey, stream, isPeekPlayback, isFullscreen, playbackEnabled) {
         val existing = player
@@ -161,6 +183,20 @@ fun BilibiliVideoSurface(
                 positionMs = handedOff.currentPosition.coerceAtLeast(0L)
                 durationMs = handedOff.duration.coerceAtLeast(0L)
                 isBuffering = handedOff.playbackState == Player.STATE_BUFFERING
+                handedOff.videoSize.let { videoSize ->
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        playerSizeKnown = true
+                        val portrait = isPortraitVideoSize(
+                            width = videoSize.width,
+                            height = videoSize.height,
+                            rotationDegrees = videoSize.unappliedRotationDegrees,
+                        )
+                        isPortraitPlayback = portrait
+                        if (isFullscreen) {
+                            coordinator.updateFullscreenPortrait(portrait)
+                        }
+                    }
+                }
                 player = handedOff
                 return@LaunchedEffect
             }
@@ -251,6 +287,35 @@ fun BilibiliVideoSurface(
                 }
                 if (playbackState == Player.STATE_ENDED) {
                     onPlaybackEnded?.invoke()
+                }
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    playerSizeKnown = true
+                    val portrait = isPortraitVideoSize(
+                        width = videoSize.width,
+                        height = videoSize.height,
+                        rotationDegrees = videoSize.unappliedRotationDegrees,
+                    )
+                    isPortraitPlayback = portrait
+                    if (isFullscreen) {
+                        coordinator.updateFullscreenPortrait(portrait)
+                    }
+                }
+            }
+        }
+        activePlayer.videoSize.let { videoSize ->
+            if (videoSize.width > 0 && videoSize.height > 0) {
+                playerSizeKnown = true
+                val portrait = isPortraitVideoSize(
+                    width = videoSize.width,
+                    height = videoSize.height,
+                    rotationDegrees = videoSize.unappliedRotationDegrees,
+                )
+                isPortraitPlayback = portrait
+                if (isFullscreen) {
+                    coordinator.updateFullscreenPortrait(portrait)
                 }
             }
         }
@@ -430,7 +495,11 @@ fun BilibiliVideoSurface(
                 },
                 update = { playerView ->
                     playerView.player = activePlayer
-                    playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    playerView.resizeMode = if (isFullscreen && isPortraitPlayback) {
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    } else {
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    }
                 },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -483,20 +552,13 @@ fun BilibiliVideoSurface(
                 exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
                 modifier = Modifier.align(Alignment.TopStart),
             ) {
-                TransparentLiquidTextButton(
+                VideoOverlayTextButton(
                     text = "关闭",
                     onClick = onCloseFullscreen,
-                    backdrop = layerBackdrop,
-                    textColor = Color.White,
-                    useMenuGlassStyle = true,
-                    surfaceColor = VideoOverlayButtonSurfaceColor,
-                    enableEdgeHighlight = false,
-                    borderWidth = VideoControlBorderWidth,
-                    borderColor = VideoControlBorderColor,
                     modifier = Modifier
                         .padding(12.dp)
                         .widthIn(min = 54.dp)
-                        .height(28.dp),
+                        .height(VideoControlBarHeight),
                 )
             }
         } else if (showFullscreenButton) {
@@ -506,20 +568,13 @@ fun BilibiliVideoSurface(
                 exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
                 modifier = Modifier.align(Alignment.TopEnd),
             ) {
-                TransparentLiquidTextButton(
+                VideoOverlayTextButton(
                     text = "全屏",
                     onClick = onFullscreen,
-                    backdrop = layerBackdrop,
-                    textColor = Color.White,
-                    useMenuGlassStyle = true,
-                    surfaceColor = VideoOverlayButtonSurfaceColor,
-                    enableEdgeHighlight = false,
-                    borderWidth = VideoControlBorderWidth,
-                    borderColor = VideoControlBorderColor,
                     modifier = Modifier
                         .padding(8.dp)
                         .widthIn(min = 54.dp)
-                        .height(28.dp),
+                        .height(VideoControlBarHeight),
                 )
             }
         }
@@ -701,6 +756,36 @@ private fun VideoControls(
 }
 
 private val VideoControlCapsuleShape = RoundedCornerShape(percent = 50)
+
+@Composable
+private fun VideoOverlayTextButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
+            .clip(VideoControlCapsuleShape)
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            style = TextStyle(
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
 
 @Composable
 private fun VideoControlCapsuleProgressBackground(

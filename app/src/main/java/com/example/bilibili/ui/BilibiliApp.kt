@@ -15,6 +15,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -137,6 +138,19 @@ fun BilibiliApp() {
 
     val playUrls = remember { mutableStateMapOf<String, BiliPlayStream>() }
     var activeAccount by remember { mutableStateOf(accountStore.getActiveAccount()) }
+    DisposableEffect(accountStore, scope) {
+        api.onAccessKeyUpdated = { updated ->
+            val account = accountStore.getActiveAccount()
+            if (account != null && account.uid == updated.dedeUserId) {
+                scope.launch {
+                    val next = account.copy(credential = updated)
+                    accountStore.upsertAccount(next)
+                    activeAccount = next
+                }
+            }
+        }
+        onDispose { api.onAccessKeyUpdated = null }
+    }
     var showLoginSheet by remember { mutableStateOf(false) }
     val navController = remember { AppNavController() }
     var feedRefreshHint by remember { mutableStateOf<String?>(null) }
@@ -380,12 +394,13 @@ fun BilibiliApp() {
     fun persistLogin() {
         scope.launch {
             val credential = webSession.readCredentialFromCookies() ?: return@launch
-            val profile = api.getMyInfo(credential)
+            val exchangedCredential = api.exchangeAccessKey(credential)
+            val profile = api.getMyInfo(exchangedCredential)
             val account = StoredBilibiliAccount(
-                uid = credential.dedeUserId,
+                uid = exchangedCredential.dedeUserId,
                 name = profile?.name ?: "B站用户",
                 face = profile?.face,
-                credential = credential,
+                credential = exchangedCredential,
             )
             accountStore.upsertAccount(account)
             accountStore.setActiveAccountId(account.uid)
@@ -395,6 +410,16 @@ fun BilibiliApp() {
             Toast.makeText(context, "登录成功", Toast.LENGTH_SHORT).show()
             refreshFollow()
         }
+    }
+
+    LaunchedEffect(activeAccount?.uid) {
+        val account = activeAccount ?: return@LaunchedEffect
+        if (account.credential.accessKey.isNotBlank()) return@LaunchedEffect
+        val updatedCredential = api.exchangeAccessKey(account.credential)
+        if (updatedCredential.accessKey.isBlank()) return@LaunchedEffect
+        val updatedAccount = account.copy(credential = updatedCredential)
+        accountStore.upsertAccount(updatedAccount)
+        activeAccount = updatedAccount
     }
 
     LaunchedEffect(Unit) {
@@ -706,6 +731,7 @@ fun BilibiliApp() {
                                     referer = "https://www.bilibili.com/video/${fullscreenVideo.bvid}",
                                 )
                             },
+                            portraitVideo = fullscreenVideo.isPortraitVideo,
                         )
                     }
                 }

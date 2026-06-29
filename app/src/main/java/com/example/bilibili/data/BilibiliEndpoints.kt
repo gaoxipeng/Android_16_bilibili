@@ -8,6 +8,12 @@ object BilibiliEndpoints {
     const val HOME_RECOMMEND = "https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd"
     const val FOLLOWING_FEED = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all"
     const val USER_SPACE_DYNAMIC = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
+    const val DYNAMIC_DETAIL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
+
+    const val DYNAMIC_FEED_FEATURES =
+        "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete,onlyfansQaCard,endFooterHidden"
+    const val DYNAMIC_DETAIL_FEATURES =
+        "itemOpusStyle,opusBigCover,onlyfansVote,endFooterHidden,decorationCard,onlyfansAssetsV2,ugcDelete,onlyfansQaCard,commentsNewVersion"
     const val POPULAR = "https://api.bilibili.com/x/web-interface/popular"
     const val RANKING_V2 = "https://api.bilibili.com/x/web-interface/ranking/v2"
     const val VIDEO_VIEW = "https://api.bilibili.com/x/web-interface/view"
@@ -31,6 +37,13 @@ object BilibiliEndpoints {
     const val VIDEO_COMMENTS = "https://api.bilibili.com/x/v2/reply/wbi/main"
     const val VIDEO_COMMENT_REPLIES = "https://api.bilibili.com/x/v2/reply/reply"
     const val VIDEO_ONLINE = "https://api.bilibili.com/x/player/online/total"
+    const val VIDEO_ARCHIVE_RELATION = "https://api.bilibili.com/x/web-interface/archive/relation"
+    const val VIDEO_LIKE = "https://api.bilibili.com/x/web-interface/archive/like"
+    const val VIDEO_COIN = "https://api.bilibili.com/x/web-interface/coin/add"
+    const val VIDEO_TRIPLE = "https://api.bilibili.com/x/web-interface/archive/like/triple"
+    const val VIDEO_SHARE = "https://api.bilibili.com/x/web-interface/share/add"
+    const val FAV_FOLDER_LIST = "https://api.bilibili.com/x/v3/fav/folder/created/list-all"
+    const val FAV_RESOURCE_DEAL = "https://api.bilibili.com/x/v3/fav/resource/deal"
     const val DANMAKU_LIST = "https://api.bilibili.com/x/v1/dm/list.so"
     const val DANMAKU_SEG = "https://api.bilibili.com/x/v2/dm/web/seg.so"
     const val DANMAKU_XML = "https://comment.bilibili.com"

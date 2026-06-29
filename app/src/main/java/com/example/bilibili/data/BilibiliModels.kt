@@ -6,6 +6,8 @@ data class BilibiliCredential(
     val biliJct: String,
     val buvid3: String,
     val buvid4: String = "",
+    val accessKey: String = "",
+    val refreshToken: String = "",
 ) {
     fun toCookieHeader(): String = buildList {
         add("SESSDATA=${sessdata}")
@@ -69,7 +71,12 @@ data class BiliVideoItem(
     val description: String = "",
     val cid: Long = 0L,
     val publishTimeSeconds: Long = 0L,
-)
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
+) {
+    val isPortraitVideo: Boolean
+        get() = videoWidth > 0 && videoHeight > 0 && videoHeight > videoWidth
+}
 
 data class BiliLiveRoom(
     val roomId: Long,
@@ -93,6 +100,7 @@ data class BiliUserProfile(
     val videoCount: Long = 0,
     val topPhoto: String = "",
     val topPhotos: List<String> = emptyList(),
+    val ipLocation: String? = null,
 ) {
     val displayTopPhotos: List<String>
         get() = topPhotos.ifEmpty { listOfNotNull(topPhoto.takeIf { it.isNotBlank() }) }
@@ -103,6 +111,21 @@ data class BiliVideoDetail(
     val publishTimeSeconds: Long = 0L,
     val onlineCount: Long = 0L,
     val replyCount: Long = 0L,
+    val coinCount: Long = 0L,
+    val favoriteCount: Long = 0L,
+    val shareCount: Long = 0L,
+)
+
+data class BiliVideoRelation(
+    val liked: Boolean = false,
+    val favorited: Boolean = false,
+    val coinCount: Int = 0,
+)
+
+data class BiliVideoTripleResult(
+    val liked: Boolean = false,
+    val coined: Boolean = false,
+    val favorited: Boolean = false,
 )
 
 data class BiliAuthorRelation(

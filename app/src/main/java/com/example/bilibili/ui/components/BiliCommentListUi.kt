@@ -138,12 +138,14 @@ fun resolveCommentsEnd(
     previousCount: Int,
     expectedTotal: Long = 0L,
 ): Boolean {
+    val total = page.totalCount.takeIf { it > 0L } ?: expectedTotal
+    if (!page.nextCursor.isNullOrBlank()) {
+        if (total > 0L && mergedCount.toLong() >= total) return true
+        return false
+    }
     if (page.comments.isEmpty() && previousCount > 0) return true
     if (mergedCount == previousCount && page.comments.isNotEmpty()) return true
-    val total = page.totalCount.takeIf { it > 0L } ?: expectedTotal
     if (total > 0L && mergedCount.toLong() >= total) return true
-    if (!page.nextCursor.isNullOrBlank()) return false
-    if (total > 0L && mergedCount.toLong() < total) return false
     return page.isEnd
 }
 
