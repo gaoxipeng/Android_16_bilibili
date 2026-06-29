@@ -1,8 +1,13 @@
 package com.example.bilibili.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,9 +21,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -29,25 +41,29 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,9 +73,13 @@ import com.example.bilibili.data.BiliSearchUserItem
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.SearchHistoryStore
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.ui.components.BiliUserLevelIcon
 import com.example.bilibili.ui.components.RemoteImage
+import com.example.bilibili.ui.components.SlidingTextTabs
 import com.example.bilibili.ui.components.VideoFeedCard
+import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.theme.BiliPink
 import com.kyant.backdrop.backdrops.layerBackdrop
@@ -69,12 +89,16 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.roundToInt
 
 private enum class SearchContentTab(val label: String) {
     Videos("视频"),
     Users("UP主"),
 }
+
+private val SearchHistoryChipBackground = Color(0xFFF7F7F7)
+private val SearchHistoryChipRadius = 8.dp
+private val SearchHistoryChipMaxWidth = 168.dp
+private val SearchHistoryTitleToChipsGap = 2.dp
 
 @Composable
 fun SearchScreen(
@@ -87,7 +111,12 @@ fun SearchScreen(
     onUserClick: (Long, String, String) -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
     modifier: Modifier = Modifier,
+    feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
+    handleSystemBack: Boolean = true,
 ) {
+    val useSingleColumnVideos = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
+    val context = LocalContext.current
+    val searchHistoryStore = remember { SearchHistoryStore(context) }
     val scope = rememberCoroutineScope()
     val searchBackdrop = rememberLayerBackdrop()
     val focusRequester = remember { FocusRequester() }
@@ -112,18 +141,22 @@ fun SearchScreen(
     var userLoadingMore by remember { mutableStateOf(false) }
     var resultError by remember { mutableStateOf<String?>(null) }
     var searchGeneration by remember { mutableIntStateOf(0) }
+    var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
+    var searchHistoryExpanded by remember { mutableStateOf(false) }
 
     val pagerState = rememberPagerState(pageCount = { SearchContentTab.entries.size })
     val videoListState = rememberLazyListState()
+    val videoStaggeredGridState = rememberLazyStaggeredGridState()
     val userListState = rememberLazyListState()
 
-    BackHandler(onBack = onClose)
+    BackHandler(enabled = handleSystemBack, onBack = onClose)
 
     fun submitQuery(raw: String) {
         val normalized = raw.trim()
         if (normalized.isBlank()) return
         queryInput = normalized
         activeQuery = normalized
+        searchHistory = searchHistoryStore.touch(normalized)
         videos = emptyList()
         users = emptyList()
         videoPage = 1
@@ -236,14 +269,24 @@ fun SearchScreen(
         loadUsers(reset = true, generation = generation)
     }
 
-    LaunchedEffect(videoListState, activeQuery, searchGeneration, videoHasMore) {
+    LaunchedEffect(videoListState, videoStaggeredGridState, useSingleColumnVideos, activeQuery, searchGeneration, videoHasMore) {
         if (activeQuery == null) return@LaunchedEffect
-        snapshotFlow {
-            val info = videoListState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val total = info.totalItemsCount
-            if (total <= 0 || last < total - 3) null else last
+        val scrollFlow = if (useSingleColumnVideos) {
+            snapshotFlow {
+                val info = videoListState.layoutInfo
+                val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                val total = info.totalItemsCount
+                if (total <= 0 || last < total - 3) null else last
+            }
+        } else {
+            snapshotFlow {
+                val info = videoStaggeredGridState.layoutInfo
+                val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                val total = info.totalItemsCount
+                if (total <= 0 || last < total - 3) null else last
+            }
         }
+        scrollFlow
             .distinctUntilChanged()
             .filterNotNull()
             .collect {
@@ -331,10 +374,21 @@ fun SearchScreen(
                     }
                 }
             } else {
-                SearchHotPanel(
+                SearchDiscoveryPanel(
+                    searchHistory = searchHistory,
+                    searchHistoryExpanded = searchHistoryExpanded,
+                    onHistoryClick = ::submitQuery,
+                    onHistoryDelete = { query ->
+                        searchHistory = searchHistoryStore.remove(query)
+                    },
+                    onHistoryExpandToggle = { searchHistoryExpanded = !searchHistoryExpanded },
+                    onHistoryClear = {
+                        searchHistory = searchHistoryStore.clear()
+                        searchHistoryExpanded = false
+                    },
                     hotWords = hotWords,
-                    loading = hotLoading,
-                    onSelect = ::submitQuery,
+                    hotLoading = hotLoading,
+                    onHotSelect = ::submitQuery,
                 )
             }
         } else {
@@ -346,7 +400,6 @@ fun SearchScreen(
                     }
                 },
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f))
 
             resultError?.let { error ->
                 Text(
@@ -379,38 +432,70 @@ fun SearchScreen(
                                 }
                             }
                             else -> {
-                                LazyColumn(
-                                    state = videoListState,
-                                    contentPadding = PaddingValues(
-                                        start = 12.dp,
-                                        end = 12.dp,
-                                        top = 8.dp,
-                                        bottom = 24.dp,
-                                    ),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                                ) {
-                                    items(videos, key = { it.bvid }) { video ->
-                                        VideoFeedCard(
-                                            video = video,
-                                            playStream = playUrls[video.bvid],
-                                            coordinator = coordinator,
-                                            onClick = { onVideoClick(video) },
-                                            onEnsurePlayStream = { onEnsurePlayStream(video) },
-                                            onAuthorClick = { mid ->
-                                                onUserClick(mid, video.authorName, "")
-                                            },
-                                            overlayMetaOnCover = true,
-                                        )
+                                if (useSingleColumnVideos) {
+                                    LazyColumn(
+                                        state = videoListState,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(
+                                            start = HomeFeedSingleColumnHorizontalPadding,
+                                            end = HomeFeedSingleColumnHorizontalPadding,
+                                            top = 8.dp,
+                                            bottom = 24.dp,
+                                        ),
+                                        verticalArrangement = Arrangement.spacedBy(HomeFeedSingleColumnSpacing),
+                                    ) {
+                                        items(videos, key = { it.bvid }) { video ->
+                                            VideoFeedCard(
+                                                video = video,
+                                                playStream = playUrls[video.bvid],
+                                                coordinator = coordinator,
+                                                onClick = { onVideoClick(video) },
+                                                onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                                onAuthorClick = { mid ->
+                                                    onUserClick(mid, video.authorName, "")
+                                                },
+                                                overlayMetaOnCover = true,
+                                            )
+                                        }
+                                        if (videoLoadingMore) {
+                                            item(key = "video-loading-more") {
+                                                SearchLoadingMoreIndicator()
+                                            }
+                                        }
                                     }
-                                    if (videoLoadingMore) {
-                                        item(key = "video-loading-more") {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 16.dp),
-                                                contentAlignment = Alignment.Center,
+                                } else {
+                                    LazyVerticalStaggeredGrid(
+                                        columns = StaggeredGridCells.Fixed(2),
+                                        state = videoStaggeredGridState,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(
+                                            start = HomeFeedGridHorizontalPadding,
+                                            end = HomeFeedGridHorizontalPadding,
+                                            top = 8.dp,
+                                            bottom = 24.dp,
+                                        ),
+                                        horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                                        verticalItemSpacing = HomeFeedGridSpacing,
+                                    ) {
+                                        items(videos, key = { it.bvid }) { video ->
+                                            VideoFeedCard(
+                                                video = video,
+                                                playStream = playUrls[video.bvid],
+                                                coordinator = coordinator,
+                                                onClick = { onVideoClick(video) },
+                                                onEnsurePlayStream = { onEnsurePlayStream(video) },
+                                                onAuthorClick = { mid ->
+                                                    onUserClick(mid, video.authorName, "")
+                                                },
+                                                gridStyle = true,
+                                            )
+                                        }
+                                        if (videoLoadingMore) {
+                                            item(
+                                                key = "video-loading-more",
+                                                span = StaggeredGridItemSpan.FullLine,
                                             ) {
-                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                                SearchLoadingMoreIndicator()
                                             }
                                         }
                                     }
@@ -438,22 +523,21 @@ fun SearchScreen(
                                     state = userListState,
                                     contentPadding = PaddingValues(bottom = 24.dp),
                                 ) {
-                                    items(users, key = { it.mid }) { user ->
+                                    itemsIndexed(users, key = { _, user -> user.mid }) { index, user ->
                                         SearchUserRow(
                                             user = user,
                                             onClick = { onUserClick(user.mid, user.name, user.face) },
                                         )
+                                        if (index < users.lastIndex) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(horizontal = 16.dp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
+                                            )
+                                        }
                                     }
                                     if (userLoadingMore) {
                                         item(key = "user-loading-more") {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 16.dp),
-                                                contentAlignment = Alignment.Center,
-                                            ) {
-                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                            }
+                                            SearchLoadingMoreIndicator()
                                         }
                                     }
                                 }
@@ -467,45 +551,110 @@ fun SearchScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SearchHotPanel(
+private fun SearchDiscoveryPanel(
+    searchHistory: List<String>,
+    searchHistoryExpanded: Boolean,
+    onHistoryClick: (String) -> Unit,
+    onHistoryDelete: (String) -> Unit,
+    onHistoryExpandToggle: () -> Unit,
+    onHistoryClear: () -> Unit,
     hotWords: List<BiliHotSearchItem>,
-    loading: Boolean,
-    onSelect: (String) -> Unit,
+    hotLoading: Boolean,
+    onHotSelect: (String) -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+    var deleteHistoryQuery by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(searchHistory, searchHistoryExpanded) {
+        if (deleteHistoryQuery != null && deleteHistoryQuery !in searchHistory) {
+            deleteHistoryQuery = null
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
     ) {
-        Text(
-            text = "B站热搜",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-        )
-        Spacer(Modifier.height(12.dp))
+        if (searchHistory.isNotEmpty()) {
+            item(key = "history-section") {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "搜索历史",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        TextButton(
+                            onClick = {
+                                deleteHistoryQuery = null
+                                onHistoryClear()
+                            },
+                            contentPadding = PaddingValues(vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = "清除",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(SearchHistoryTitleToChipsGap))
+                    SearchHistoryChipsSection(
+                        searchHistory = searchHistory,
+                        searchHistoryExpanded = searchHistoryExpanded,
+                        deleteHistoryQuery = deleteHistoryQuery,
+                        onDeleteHistoryQueryChange = { deleteHistoryQuery = it },
+                        onHistoryClick = onHistoryClick,
+                        onHistoryDelete = onHistoryDelete,
+                        onHistoryExpandToggle = onHistoryExpandToggle,
+                    )
+                }
+            }
+            item(key = "history-spacer") {
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+
+        item(key = "hot-title") {
+            Text(
+                text = "bilibili热搜",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
         when {
-            loading -> {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator()
+            hotLoading -> {
+                item(key = "hot-loading") {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
             }
             hotWords.isEmpty() -> {
-                Text(
-                    text = "暂无热搜",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 16.dp),
-                )
+                item(key = "hot-empty") {
+                    Text(
+                        text = "暂无热搜",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                }
             }
             else -> {
-                hotWords.forEach { item ->
+                itemsIndexed(hotWords, key = { _, item -> item.keyword }) { index, item ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onSelect(item.keyword) }
+                            .clickable { onHotSelect(item.keyword) }
                             .padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -519,9 +668,208 @@ private fun SearchHotPanel(
                             modifier = Modifier.weight(1f),
                         )
                     }
+                    if (index < hotWords.lastIndex) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchHistoryChipFlow(
+    queries: List<String>,
+    maxLines: Int,
+    deleteHistoryQuery: String?,
+    onDeleteHistoryQueryChange: (String?) -> Unit,
+    onHistoryClick: (String) -> Unit,
+    onHistoryDelete: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        maxLines = maxLines,
+    ) {
+        queries.forEach { query ->
+            key(query) {
+                SearchHistoryChip(
+                    query = query,
+                    showDelete = deleteHistoryQuery == query,
+                    onClick = {
+                        onDeleteHistoryQueryChange(null)
+                        onHistoryClick(query)
+                    },
+                    onLongClick = { onDeleteHistoryQueryChange(query) },
+                    onDelete = {
+                        onDeleteHistoryQueryChange(null)
+                        onHistoryDelete(query)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchHistoryChipsSection(
+    searchHistory: List<String>,
+    searchHistoryExpanded: Boolean,
+    deleteHistoryQuery: String?,
+    onDeleteHistoryQueryChange: (String?) -> Unit,
+    onHistoryClick: (String) -> Unit,
+    onHistoryDelete: (String) -> Unit,
+    onHistoryExpandToggle: () -> Unit,
+) {
+    val maxRows = SearchHistoryStore.DISPLAY_MAX_ROWS
+
+    SubcomposeLayout(Modifier.fillMaxWidth()) { constraints ->
+        val fullHeight = subcompose("measure-full") {
+            SearchHistoryChipFlow(
+                queries = searchHistory,
+                maxLines = Int.MAX_VALUE,
+                deleteHistoryQuery = deleteHistoryQuery,
+                onDeleteHistoryQueryChange = onDeleteHistoryQueryChange,
+                onHistoryClick = onHistoryClick,
+                onHistoryDelete = onHistoryDelete,
+            )
+        }.first().measure(constraints).height
+
+        val cappedHeight = subcompose("measure-capped") {
+            SearchHistoryChipFlow(
+                queries = searchHistory,
+                maxLines = maxRows,
+                deleteHistoryQuery = deleteHistoryQuery,
+                onDeleteHistoryQueryChange = onDeleteHistoryQueryChange,
+                onHistoryClick = onHistoryClick,
+                onHistoryDelete = onHistoryDelete,
+            )
+        }.first().measure(constraints).height
+
+        val exceeds = fullHeight > cappedHeight
+
+        subcompose("sync-collapse") {
+            LaunchedEffect(exceeds, searchHistoryExpanded) {
+                if (!exceeds && searchHistoryExpanded) {
+                    onHistoryExpandToggle()
+                }
+            }
+        }.forEach { it.measure(constraints.copy(minWidth = 0, maxWidth = 0, minHeight = 0, maxHeight = 0)) }
+
+        val visiblePlaceable = subcompose("visible") {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                SearchHistoryChipFlow(
+                    queries = searchHistory,
+                    maxLines = if (searchHistoryExpanded) Int.MAX_VALUE else maxRows,
+                    deleteHistoryQuery = deleteHistoryQuery,
+                    onDeleteHistoryQueryChange = onDeleteHistoryQueryChange,
+                    onHistoryClick = onHistoryClick,
+                    onHistoryDelete = onHistoryDelete,
+                )
+                if (exceeds) {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = if (searchHistoryExpanded) "收起" else "展开更多",
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(end = 12.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = onHistoryExpandToggle,
+                                )
+                                .padding(vertical = 2.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = BiliPink,
+                        )
+                    }
+                }
+            }
+        }.first().measure(constraints)
+
+        layout(visiblePlaceable.width, visiblePlaceable.height) {
+            visiblePlaceable.place(0, 0)
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SearchHistoryChip(
+    query: String,
+    showDelete: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val chipShape = RoundedCornerShape(SearchHistoryChipRadius)
+    Box(
+        modifier = Modifier
+            .widthIn(max = SearchHistoryChipMaxWidth)
+            .clip(chipShape)
+            .background(SearchHistoryChipBackground)
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
+    ) {
+        Text(
+            text = query,
+            modifier = Modifier.padding(
+                start = 12.dp,
+                end = if (showDelete) 26.dp else 12.dp,
+                top = 8.dp,
+                bottom = 8.dp,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (showDelete) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 4.dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF999999))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onDelete,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "×",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    lineHeight = 12.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchLoadingMoreIndicator() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(24.dp))
     }
 }
 
@@ -547,39 +895,13 @@ private fun SearchResultTabs(
     scrollPosition: Float,
     onTabSelected: (SearchContentTab) -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(24.dp),
-    ) {
-        SearchContentTab.entries.forEachIndexed { index, tab ->
-            val selected = scrollPosition.roundToInt() == index
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { onTabSelected(tab) },
-            ) {
-                Text(
-                    text = tab.label,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                Spacer(Modifier.height(6.dp))
-                Box(
-                    modifier = Modifier
-                        .width(20.dp)
-                        .height(3.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(if (selected) BiliPink else Color.Transparent),
-                )
-            }
-        }
-    }
+    val tabs = SearchContentTab.entries
+    SlidingTextTabs(
+        labels = tabs.map { it.label },
+        scrollPosition = scrollPosition,
+        onTabSelected = { index -> onTabSelected(tabs[index]) },
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 @Composable
@@ -612,11 +934,9 @@ private fun SearchUserRow(
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
                 if (user.level > 0) {
-                    Spacer(Modifier.width(6.dp))
-                    SearchLevelBadge(user.level)
+                    BiliUserLevelIcon(level = user.level)
                 }
             }
             Text(
@@ -636,21 +956,5 @@ private fun SearchUserRow(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun SearchLevelBadge(level: Int) {
-    Surface(
-        shape = RoundedCornerShape(4.dp),
-        color = BiliPink.copy(alpha = 0.12f),
-    ) {
-        Text(
-            text = "LV$level",
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = BiliPink,
-            fontWeight = FontWeight.Bold,
-        )
     }
 }

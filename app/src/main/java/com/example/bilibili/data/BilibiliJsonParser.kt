@@ -91,9 +91,59 @@ object BilibiliJsonParser {
 
     fun parseUserRelation(json: JSONObject): BiliAuthorRelation {
         val attribute = json.optJSONObject("data")?.optInt("attribute") ?: 0
-        return BiliAuthorRelation(
+        return relationFromAttribute(attribute)
+    }
+
+    fun relationFromAttribute(attribute: Int): BiliAuthorRelation =
+        BiliAuthorRelation(
             following = attribute == 2 || attribute == 6,
             followerMe = attribute == 6,
+        )
+
+    fun parseRelationUserItem(json: JSONObject): BiliRelationUser? {
+        val mid = json.optLong("mid")
+        if (mid <= 0L) return null
+        val ipRaw = json.optString("location").takeIf { it.isNotBlank() }
+            ?: json.optJSONObject("res")?.optString("location")
+            ?: json.optJSONObject("user")?.optString("location")
+        return BiliRelationUser(
+            mid = mid,
+            name = json.optString("uname"),
+            face = normalizeImageUrl(json.optString("face")),
+            sign = json.optString("sign"),
+            relation = relationFromAttribute(json.optInt("attribute")),
+            fanCount = sequenceOf(
+                json.optLong("fans"),
+                json.optLong("follower"),
+                json.optJSONObject("official")?.optLong("fans") ?: 0L,
+            ).firstOrNull { it > 0L } ?: 0L,
+            ipLocation = normalizeIpLocation(ipRaw),
+        )
+    }
+
+    fun parseRelationUserPage(json: JSONObject, pageSize: Int): BiliRelationUserPage {
+        val code = json.optInt("code")
+        if (code != 0) {
+            val message = json.optString("message").takeIf { it.isNotBlank() && it != "0" }
+                ?: when (code) {
+                    22115, 22118 -> "由于该用户隐私设置，列表不可见"
+                    -101 -> "登录后查看"
+                    else -> "加载失败"
+                }
+            return BiliRelationUserPage(users = emptyList(), errorMessage = message)
+        }
+        val data = json.optJSONObject("data")
+            ?: return BiliRelationUserPage(users = emptyList())
+        val list = data.optJSONArray("list") ?: org.json.JSONArray()
+        val users = buildList(list.length()) {
+            for (index in 0 until list.length()) {
+                list.optJSONObject(index)?.let(::parseRelationUserItem)?.let(::add)
+            }
+        }
+        return BiliRelationUserPage(
+            users = users,
+            hasMore = users.size >= pageSize,
+            total = data.optLong("total"),
         )
     }
 
@@ -116,23 +166,84 @@ object BilibiliJsonParser {
         val data = json.optJSONObject("data") ?: return BiliCommentPage(emptyList())
         val cursor = data.optJSONObject("cursor")
         val replies = data.optJSONArray("replies") ?: JSONArray()
-        return BiliCommentPage(
-            comments = buildList(replies.length()) {
-                for (index in 0 until replies.length()) {
-                    replies.optJSONObject(index)
-                        ?.let { parseCommentItem(it, includeInlineReplies = true) }
-                        ?.let(::add)
-                }
-            },
-            nextCursor = cursor?.optJSONObject("pagination_reply")
-                ?.optString("next_offset")
-                ?.takeIf { it.isNotBlank() },
-            isEnd = cursor?.optBoolean("is_end")
-                ?: cursor?.optJSONObject("pagination_reply")?.optString("next_offset").isNullOrBlank(),
-            totalCount = cursor?.optLong("all_count")
-                ?: data.optJSONObject("page")?.optLong("acount")
-                ?: 0L,
+        val comments = buildList(replies.length()) {
+            for (index in 0 until replies.length()) {
+                replies.optJSONObject(index)
+                    ?.let { parseCommentItem(it, includeInlineReplies = true) }
+                    ?.let(::add)
+            }
+        }
+        val paginationReply = parseCommentPaginationReply(cursor)
+        val nextCursor = parseCommentNextCursor(cursor, paginationReply)
+        val totalCount = cursor?.optLong("all_count")
+            ?: data.optJSONObject("page")?.optLong("acount")
+            ?: 0L
+        val isEnd = resolveCommentPageIsEnd(
+            cursor = cursor,
+            nextCursor = nextCursor,
+            pageCommentCount = comments.size,
+            totalCount = totalCount,
         )
+        return BiliCommentPage(
+            comments = comments,
+            nextCursor = nextCursor,
+            isEnd = isEnd,
+            totalCount = totalCount,
+        )
+    }
+
+    private fun parseCommentPaginationReply(cursor: JSONObject?): JSONObject? {
+        if (cursor == null) return null
+        cursor.optJSONObject("pagination_reply")?.let { return it }
+        val raw = cursor.optString("pagination_reply")
+        if (raw.isNotBlank() && raw.startsWith("{")) {
+            runCatching { JSONObject(raw) }.getOrNull()?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseCommentNextCursor(
+        cursor: JSONObject?,
+        paginationReply: JSONObject?,
+    ): String? {
+        paginationReply?.optString("next_offset")?.takeIf { it.isNotBlank() }?.let { return it }
+        paginationReply?.optJSONObject("next_offset")?.takeIf { it.length() > 0 }?.let {
+            return it.toString()
+        }
+        val legacyNext = cursor?.optLong("next")?.takeIf { it > 0L } ?: return null
+        val mode = cursor?.optInt("mode") ?: 3
+        return if (mode == 2) {
+            JSONObject()
+                .put("type", 3)
+                .put("direction", 1)
+                .put("Data", JSONObject().put("cursor", legacyNext))
+                .toString()
+        } else {
+            JSONObject()
+                .put("type", 1)
+                .put("direction", 1)
+                .put("data", JSONObject().put("cursor", legacyNext))
+                .toString()
+        }
+    }
+
+    private fun resolveCommentPageIsEnd(
+        cursor: JSONObject?,
+        nextCursor: String?,
+        pageCommentCount: Int,
+        totalCount: Long,
+    ): Boolean {
+        if (!nextCursor.isNullOrBlank()) {
+            if (totalCount > 0L && pageCommentCount.toLong() >= totalCount) return true
+            if (cursor?.has("is_end") == true && cursor.optBoolean("is_end")) {
+                if (totalCount > 0L && pageCommentCount.toLong() < totalCount) return false
+                return true
+            }
+            return false
+        }
+        if (totalCount > 0L && pageCommentCount.toLong() < totalCount) return false
+        if (cursor?.has("is_end") == true) return cursor.optBoolean("is_end")
+        return pageCommentCount == 0
     }
 
     private fun JSONObject.parseEmoteMap(): Map<String, String> {
@@ -292,7 +403,8 @@ object BilibiliJsonParser {
             following = following,
             follower = follower,
             likes = likes,
-            topPhoto = parseUserTopPhoto(data),
+            topPhoto = parseUserTopPhotos(data).firstOrNull().orEmpty(),
+            topPhotos = parseUserTopPhotos(data),
         )
     }
 
@@ -310,7 +422,8 @@ object BilibiliJsonParser {
             level = levelInfo?.optInt("current_level") ?: 0,
             following = card.optLong("attention"),
             follower = card.optLong("fans"),
-            topPhoto = parseUserTopPhoto(card),
+            topPhoto = parseUserTopPhotos(card).firstOrNull().orEmpty(),
+            topPhotos = parseUserTopPhotos(card),
         )
     }
 
@@ -353,6 +466,8 @@ object BilibiliJsonParser {
                         likeCount = 0L,
                         durationSeconds = parseUserVideoDuration(item),
                         description = item.optString("description"),
+                        publishTimeSeconds = item.optLong("created").takeIf { it > 0L }
+                            ?: item.optLong("pubdate"),
                     ),
                 )
             }
@@ -384,96 +499,480 @@ object BilibiliJsonParser {
         val id = item.optString("id_str").ifBlank { item.optString("id") }
         if (id.isBlank()) return null
         val modules = item.optJSONObject("modules") ?: return null
-        val isForward = item.optString("type") == "DYNAMIC_TYPE_FORWARD" ||
-            item.has("orig")
+        val origItem = item.optJSONObject("orig")?.takeIf { it.optJSONObject("modules") != null }
+        val isForward = item.optString("type") == "DYNAMIC_TYPE_FORWARD" && origItem != null ||
+            origItem != null
         val stat = modules.optJSONObject("module_stat")
+        val meta = parseDynamicItemMeta(item, modules)
         val publishTime = modules.optJSONObject("module_author")?.optLong("pub_ts")
             ?.takeIf { it > 0L }
             ?: item.optLong("pub_ts")
 
         if (isForward) {
-            val forwardText = parseDynamicDesc(modules)
-            val origin = item.optJSONObject("orig")
-                ?.optJSONObject("modules")
-                ?.let(::parseDynamicBody)
-                ?.let { body ->
-                    val authorName = item.optJSONObject("orig")
-                        ?.optJSONObject("modules")
-                        ?.let(::parseModuleAuthorName)
-                        .orEmpty()
+            val forwardRich = parseDynamicDesc(modules)
+            val origin = origItem?.optJSONObject("modules")?.let { origModules ->
+                parseDynamicBody(origItem, origModules).let { body ->
                     BiliDynamicOrigin(
-                        authorName = authorName,
+                        authorName = parseModuleAuthorName(origModules),
                         text = body.text,
+                        emoticons = body.emoticons,
                         video = body.video,
                         imageUrls = body.imageUrls,
                         link = body.link,
                     )
                 }
+            }
             return BiliDynamicItem(
                 id = id,
-                text = forwardText,
+                text = forwardRich.text,
+                emoticons = forwardRich.emoticons,
                 publishTimeSeconds = publishTime,
                 origin = origin,
+                authorMid = meta.authorMid,
+                authorName = meta.authorName,
+                authorFace = meta.authorFace,
+                authorLevel = meta.authorLevel,
+                ipLocation = meta.ipLocation,
+                commentOid = meta.commentOid,
+                commentType = meta.commentType,
+                dynamicType = meta.dynamicType,
                 likeCount = parseDynamicStatCount(stat, "like"),
                 commentCount = parseDynamicStatCount(stat, "comment"),
                 repostCount = parseDynamicStatCount(stat, "forward"),
             )
         }
 
-        val body = parseDynamicBody(modules)
+        val body = parseDynamicBody(item, modules)
         return BiliDynamicItem(
             id = id,
             text = body.text,
+            emoticons = body.emoticons,
             publishTimeSeconds = publishTime,
             video = body.video,
             imageUrls = body.imageUrls,
             link = body.link,
+            authorMid = meta.authorMid,
+            authorName = meta.authorName,
+            authorFace = meta.authorFace,
+            authorLevel = meta.authorLevel,
+            ipLocation = meta.ipLocation,
+            commentOid = meta.commentOid,
+            commentType = meta.commentType,
+            dynamicType = meta.dynamicType,
             likeCount = parseDynamicStatCount(stat, "like"),
             commentCount = parseDynamicStatCount(stat, "comment"),
             repostCount = parseDynamicStatCount(stat, "forward"),
         )
     }
 
+    private data class DynamicItemMeta(
+        val authorMid: Long,
+        val authorName: String,
+        val authorFace: String,
+        val authorLevel: Int,
+        val ipLocation: String?,
+        val commentOid: Long,
+        val commentType: Int,
+        val dynamicType: String,
+    )
+
+    private fun parseDynamicItemMeta(item: JSONObject, modules: JSONObject): DynamicItemMeta {
+        val author = modules.optJSONObject("module_author")
+        val dynamicType = item.optString("type")
+        val basic = item.optJSONObject("basic")
+        var commentType = basic?.optInt("comment_type", 0) ?: 0
+        var commentOid = basic?.optString("comment_id_str")?.toLongOrNull()?.takeIf { it > 0L }
+            ?: basic?.optString("rid_str")?.toLongOrNull()?.takeIf { it > 0L }
+            ?: 0L
+        if (commentType <= 0) {
+            commentType = fallbackDynamicCommentType(dynamicType)
+        }
+        if (commentOid <= 0L) {
+            commentOid = fallbackDynamicCommentOid(item, dynamicType)
+        }
+        return DynamicItemMeta(
+            authorMid = author?.optLong("mid") ?: 0L,
+            authorName = parseModuleAuthorName(modules),
+            authorFace = normalizeImageUrl(author?.optString("face").orEmpty()),
+            authorLevel = author?.optJSONObject("badge")?.optInt("level")
+                ?: author?.optInt("level")
+                ?: 0,
+            ipLocation = normalizeIpLocation(author?.optString("pub_location_text")),
+            commentOid = commentOid,
+            commentType = commentType,
+            dynamicType = dynamicType,
+        )
+    }
+
+    private fun fallbackDynamicCommentType(dynamicType: String): Int = when (dynamicType) {
+        "DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_FORWARD", "DYNAMIC_TYPE_LIVE_RCMD", "DYNAMIC_TYPE_OPUS" -> 17
+        "DYNAMIC_TYPE_DRAW" -> 11
+        "DYNAMIC_TYPE_AV", "DYNAMIC_TYPE_UGC_SEASON" -> 1
+        "DYNAMIC_TYPE_ARTICLE" -> 12
+        else -> 0
+    }
+
+    private fun fallbackDynamicCommentOid(item: JSONObject, dynamicType: String): Long {
+        val id = item.optString("id_str").ifBlank { item.optString("id") }.toLongOrNull() ?: 0L
+        val rid = item.optJSONObject("basic")?.optString("rid_str")?.toLongOrNull()?.takeIf { it > 0L }
+        return when (dynamicType) {
+            "DYNAMIC_TYPE_WORD", "DYNAMIC_TYPE_FORWARD", "DYNAMIC_TYPE_LIVE_RCMD", "DYNAMIC_TYPE_OPUS" -> id
+            "DYNAMIC_TYPE_DRAW" -> rid ?: id
+            else -> rid ?: id
+        }
+    }
+
     private data class DynamicBody(
         val text: String = "",
+        val emoticons: Map<String, String> = emptyMap(),
         val video: BiliVideoItem? = null,
         val imageUrls: List<String> = emptyList(),
         val link: BiliDynamicLink? = null,
     )
 
-    private fun parseDynamicBody(modules: JSONObject): DynamicBody {
-        val text = parseDynamicDesc(modules)
-        val major = modules.optJSONObject("module_dynamic")?.optJSONObject("major")
-        if (major == null) return DynamicBody(text = text)
-        val majorType = major.optString("type")
-        val video = if (majorType == "MAJOR_TYPE_ARCHIVE") {
-            parseDynamicArchiveVideo(major, modules)
-        } else {
-            null
+    private data class DynamicRichText(
+        val text: String = "",
+        val emoticons: Map<String, String> = emptyMap(),
+    )
+
+    private fun parseDynamicBody(item: JSONObject, modules: JSONObject): DynamicBody {
+        val moduleDynamic = modules.optJSONObject("module_dynamic")
+        val descRich = parseDynamicDesc(modules)
+        var text = descRich.text
+        var emoticons = descRich.emoticons.toMutableMap()
+        var video: BiliVideoItem? = null
+        var imageUrls = parseRichTextImages(moduleDynamic?.optJSONObject("desc"))
+        var link: BiliDynamicLink? = null
+
+        moduleDynamic?.optJSONObject("major")?.let { major ->
+            val parsed = parseDynamicMajor(major, modules)
+            if (parsed.text.isNotBlank() && !isDuplicateDynamicText(text, parsed.text)) {
+                text = mergeDynamicText(text, parsed.text)
+            }
+            emoticons.putAll(parsed.emoticons)
+            video = parsed.video
+            imageUrls = parsed.imageUrls
+            link = parsed.link
         }
-        val imageUrls = when (majorType) {
-            "MAJOR_TYPE_DRAW" -> parseDynamicDrawImages(major)
-            "MAJOR_TYPE_OPUS" -> parseDynamicOpusImages(major)
-            else -> emptyList()
+
+        parseDynamicAdditional(moduleDynamic, modules)?.let { additional ->
+            if (additional.text.isNotBlank() && !isDuplicateDynamicText(text, additional.text)) {
+                text = mergeDynamicText(text, additional.text)
+            }
+            emoticons.putAll(additional.emoticons)
+            if (video == null) video = additional.video
+            if (link == null) link = additional.link
+            if (imageUrls.isEmpty()) imageUrls = additional.imageUrls
         }
-        val link = parseDynamicLink(major, majorType)
+
+        if (video == null && imageUrls.isEmpty() && link == null) {
+            parseDynamicItemFallback(item, modules)?.let { fallback ->
+                if (fallback.text.isNotBlank() && !isDuplicateDynamicText(text, fallback.text)) {
+                    text = mergeDynamicText(text, fallback.text)
+                }
+                emoticons.putAll(fallback.emoticons)
+                if (imageUrls.isEmpty()) imageUrls = fallback.imageUrls
+                if (link == null) link = fallback.link
+            }
+        }
+
+        if (video == null) {
+            parseDynamicBasicVideo(item, modules)?.let { basicVideo ->
+                video = basicVideo
+            }
+        }
+
+        if (video != null) {
+            link = null
+        } else if (link != null && !shouldShowDynamicLink(text, link, imageUrls)) {
+            link = null
+        }
+
         return DynamicBody(
             text = text,
+            emoticons = emoticons,
             video = video,
             imageUrls = imageUrls,
             link = link,
         )
     }
 
-    private fun parseDynamicDesc(modules: JSONObject): String {
+    private fun parseDynamicItemFallback(item: JSONObject, modules: JSONObject): DynamicBody? {
+        val dynamicType = item.optString("type")
         val moduleDynamic = modules.optJSONObject("module_dynamic")
-        return moduleDynamic?.optJSONObject("desc")
-            ?.optString("text")
-            ?.takeIf { it.isNotBlank() }
-            ?: modules.optJSONObject("module_desc")
-                ?.optJSONObject("text")
-                ?.optString("text")
-                .orEmpty()
+        val major = moduleDynamic?.optJSONObject("major")
+
+        moduleDynamic?.optJSONObject("additional")?.optJSONObject("ugc")?.let { ugc ->
+            parseAdditionalUgcVideo(ugc, modules)?.let { return DynamicBody(video = it) }
+        }
+
+        if (major != null && major.length() > 0) {
+            val inferred = parseDynamicMajor(major, modules)
+            if (inferred.video != null || inferred.imageUrls.isNotEmpty() || inferred.link != null) {
+                return inferred
+            }
+        }
+
+        return when (dynamicType) {
+            "DYNAMIC_TYPE_AV" -> {
+                major?.optJSONObject("archive")?.let {
+                    DynamicBody(video = parseDynamicArchiveVideo(major, modules))
+                }
+            }
+            "DYNAMIC_TYPE_DRAW" -> major?.let { DynamicBody(imageUrls = parseDynamicDrawImages(it)) }
+            else -> null
+        }
+    }
+
+    private fun parseDynamicBasicVideo(item: JSONObject, modules: JSONObject): BiliVideoItem? {
+        val basic = item.optJSONObject("basic") ?: return null
+        if (basic.optInt("comment_type", -1) != 1) return null
+        val aid = basic.optString("rid_str").toLongOrNull()?.takeIf { it > 0L } ?: return null
+
+        val moduleDynamic = modules.optJSONObject("module_dynamic")
+        val major = moduleDynamic?.optJSONObject("major")
+        major?.optJSONObject("archive")?.let { archive ->
+            parseDynamicArchiveVideo(major, modules)?.let { return it }
+        }
+        moduleDynamic?.optJSONObject("additional")?.optJSONObject("ugc")?.let { ugc ->
+            parseAdditionalUgcVideo(ugc, modules)?.let { return it }
+        }
+
+        val author = modules.optJSONObject("module_author")
+        return BiliVideoItem(
+            bvid = "av$aid",
+            aid = aid,
+            title = "",
+            coverUrl = "",
+            authorName = author?.optString("name").orEmpty(),
+            authorMid = author?.optLong("mid") ?: 0L,
+            viewCount = 0L,
+            danmakuCount = 0L,
+            likeCount = 0L,
+            durationSeconds = 0,
+        )
+    }
+
+    private fun inferDynamicMajorType(major: JSONObject): String {
+        major.optString("type").takeIf { it.isNotBlank() }?.let { return it }
+        return when {
+            major.has("archive") -> "MAJOR_TYPE_ARCHIVE"
+            major.has("draw") -> "MAJOR_TYPE_DRAW"
+            major.has("opus") -> "MAJOR_TYPE_OPUS"
+            major.has("article") -> "MAJOR_TYPE_ARTICLE"
+            major.has("common") -> "MAJOR_TYPE_COMMON"
+            major.has("live") -> "MAJOR_TYPE_LIVE"
+            major.has("live_rcmd") -> "MAJOR_TYPE_LIVE_RCMD"
+            major.has("music") -> "MAJOR_TYPE_MUSIC"
+            major.has("none") -> "MAJOR_TYPE_NONE"
+            else -> ""
+        }
+    }
+
+    private fun parseDynamicMajor(major: JSONObject, modules: JSONObject): DynamicBody {
+        val majorType = inferDynamicMajorType(major)
+        var text = ""
+        var emoticons = mutableMapOf<String, String>()
+        var video: BiliVideoItem? = null
+        var imageUrls = emptyList<String>()
+        var link: BiliDynamicLink? = null
+
+        when (majorType) {
+            "MAJOR_TYPE_ARCHIVE" -> {
+                video = parseDynamicArchiveVideo(major, modules)
+                if (video == null) {
+                    link = parseDynamicArchiveLink(major)
+                }
+            }
+            "MAJOR_TYPE_DRAW" -> imageUrls = parseDynamicDrawImages(major)
+            "MAJOR_TYPE_OPUS" -> {
+                val opus = major.optJSONObject("opus")
+                val summaryRich = parseDynamicRichText(opus?.optJSONObject("summary"))
+                if (summaryRich.text.isNotBlank()) {
+                    text = summaryRich.text
+                }
+                emoticons.putAll(summaryRich.emoticons)
+                imageUrls = parseDynamicOpusImages(major)
+                if (imageUrls.isEmpty()) {
+                    imageUrls = parseRichTextImages(opus?.optJSONObject("summary"))
+                }
+                val opusTitle = opus?.optString("title").orEmpty()
+                if (text.isBlank() && opusTitle.isNotBlank()) {
+                    text = opusTitle
+                }
+                if (imageUrls.isEmpty()) {
+                    link = parseDynamicLink(major, majorType)
+                }
+                val jumpUrl = normalizeJumpUrl(opus?.optString("jump_url").orEmpty())
+                val bvid = extractBvidFromUrl(jumpUrl)
+                if (bvid.isNotBlank()) {
+                    val author = modules.optJSONObject("module_author")
+                    video = BiliVideoItem(
+                        bvid = bvid,
+                        aid = 0L,
+                        title = opus?.optString("title").orEmpty(),
+                        coverUrl = imageUrls.firstOrNull().orEmpty(),
+                        authorName = author?.optString("name").orEmpty(),
+                        authorMid = author?.optLong("mid") ?: 0L,
+                        viewCount = 0L,
+                        danmakuCount = 0L,
+                        likeCount = 0L,
+                        durationSeconds = 0,
+                    )
+                    link = null
+                }
+            }
+            "MAJOR_TYPE_LIVE" -> link = parseDynamicLiveLink(major.optJSONObject("live"))
+            "MAJOR_TYPE_LIVE_RCMD" -> {
+                val liveContent = major.optJSONObject("live_rcmd")?.optString("content").orEmpty()
+                val liveJson = runCatching { JSONObject(liveContent) }.getOrNull()
+                link = parseDynamicLiveLink(liveJson)
+            }
+            "MAJOR_TYPE_MUSIC" -> link = parseDynamicMusicLink(major.optJSONObject("music"))
+            "MAJOR_TYPE_NONE" -> {
+                text = major.optJSONObject("none")?.optString("tips").orEmpty()
+            }
+            else -> link = parseDynamicLink(major, majorType)
+        }
+
+        return DynamicBody(
+            text = text,
+            emoticons = emoticons,
+            video = video,
+            imageUrls = imageUrls,
+            link = link,
+        )
+    }
+
+    private fun parseDynamicAdditional(
+        moduleDynamic: JSONObject?,
+        modules: JSONObject,
+    ): DynamicBody? {
+        val additional = moduleDynamic?.optJSONObject("additional") ?: return null
+        additional.optJSONObject("ugc")?.let { ugc ->
+            return DynamicBody(video = parseAdditionalUgcVideo(ugc, modules))
+        }
+        return when (additional.optString("type")) {
+            "ADDITIONAL_TYPE_UGC" -> {
+                val ugc = additional.optJSONObject("ugc") ?: return null
+                DynamicBody(video = parseAdditionalUgcVideo(ugc, modules))
+            }
+            "ADDITIONAL_TYPE_COMMON" -> {
+                val common = additional.optJSONObject("common") ?: return null
+                val desc = listOf(
+                    common.optString("desc1"),
+                    common.optString("desc2"),
+                ).filter { it.isNotBlank() }.joinToString(" · ")
+                DynamicBody(
+                    link = BiliDynamicLink(
+                        title = common.optString("title"),
+                        url = normalizeJumpUrl(common.optString("jump_url")),
+                        coverUrl = normalizeImageUrl(common.optString("cover")),
+                        desc = desc,
+                    ),
+                )
+            }
+            else -> null
+        }
+    }
+
+    private fun parseDynamicDesc(modules: JSONObject): DynamicRichText {
+        val moduleDynamic = modules.optJSONObject("module_dynamic")
+        parseDynamicRichText(moduleDynamic?.optJSONObject("desc"))
+            .takeIf { it.text.isNotBlank() || it.emoticons.isNotEmpty() }
+            ?.let { return it }
+        parseDynamicRichText(modules.optJSONObject("module_desc")?.optJSONObject("text"))
+            .takeIf { it.text.isNotBlank() || it.emoticons.isNotEmpty() }
+            ?.let { return it }
+        return DynamicRichText()
+    }
+
+    private fun parseDynamicRichText(obj: JSONObject?): DynamicRichText {
+        if (obj == null) return DynamicRichText()
+        val emoticons = linkedMapOf<String, String>()
+        emoticons.putAll(obj.parseEmoteMap())
+
+        val nodes = obj.optJSONArray("rich_text_nodes")
+        if (nodes != null && nodes.length() > 0) {
+            val textBuilder = StringBuilder()
+            for (index in 0 until nodes.length()) {
+                val node = nodes.optJSONObject(index) ?: continue
+                when (node.optString("type")) {
+                    "RICH_TEXT_NODE_TYPE_EMOJI" -> {
+                        val phrase = node.optString("text")
+                            .ifBlank { node.optString("orig_text") }
+                            .ifBlank { node.optJSONObject("emoji")?.optString("text").orEmpty() }
+                        val url = normalizeImageUrl(
+                            node.optJSONObject("emoji")?.optString("icon_url").orEmpty(),
+                        )
+                        if (phrase.isNotBlank() && url.isNotBlank()) {
+                            emoticons[phrase] = url
+                        }
+                        if (phrase.isNotBlank()) {
+                            textBuilder.append(phrase)
+                        }
+                    }
+                    else -> {
+                        textBuilder.append(
+                            node.optString("text").ifBlank { node.optString("orig_text") },
+                        )
+                    }
+                }
+            }
+            return DynamicRichText(textBuilder.toString().trim(), emoticons)
+        }
+
+        val plainText = obj.optString("text").trim()
+        return DynamicRichText(plainText, emoticons)
+    }
+
+    private fun parseRichTextImages(obj: JSONObject?): List<String> {
+        val nodes = obj?.optJSONArray("rich_text_nodes") ?: return emptyList()
+        return buildList {
+            for (index in 0 until nodes.length()) {
+                val node = nodes.optJSONObject(index) ?: continue
+                when (node.optString("type")) {
+                    "RICH_TEXT_NODE_TYPE_IMAGE" -> {
+                        normalizeImageUrl(
+                            node.optString("url").ifBlank { node.optString("src") },
+                        ).takeIf { it.isNotBlank() }?.let(::add)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun mergeDynamicText(vararg parts: String): String =
+        parts.filter { it.isNotBlank() }.joinToString("\n").trim()
+
+    private fun isDuplicateDynamicText(primary: String, secondary: String): Boolean {
+        val a = primary.trim()
+        val b = secondary.trim()
+        if (a.isBlank() || b.isBlank()) return false
+        if (a == b) return true
+        val compactA = a.replace(Regex("\\s+"), "")
+        val compactB = b.replace(Regex("\\s+"), "")
+        if (compactA == compactB) return true
+        return compactA.contains(compactB) || compactB.contains(compactA)
+    }
+
+    private fun shouldShowDynamicLink(
+        text: String,
+        link: BiliDynamicLink,
+        imageUrls: List<String>,
+    ): Boolean {
+        val linkText = listOf(link.title, link.desc).filter { it.isNotBlank() }.joinToString("\n")
+        if (linkText.isBlank() && link.coverUrl.isBlank()) return false
+        if (imageUrls.isNotEmpty()) {
+            if (text.isNotBlank()) {
+                if (link.desc.isNotBlank() && isDuplicateDynamicText(text, link.desc)) return false
+                if (linkText.isNotBlank() && isDuplicateDynamicText(text, linkText)) return false
+            }
+            if (link.coverUrl.isNotBlank() && link.title.isBlank()) return false
+        }
+        if (text.isBlank()) return true
+        if (linkText.isBlank()) return link.coverUrl.isNotBlank() && imageUrls.isEmpty()
+        return !isDuplicateDynamicText(text, linkText)
     }
 
     private fun parseModuleAuthorName(modules: JSONObject): String {
@@ -557,13 +1056,19 @@ object BilibiliJsonParser {
         modules: JSONObject,
     ): BiliVideoItem? {
         val archive = major.optJSONObject("archive") ?: return null
-        val bvid = archive.optString("bvid")
-        if (bvid.isBlank()) return null
+        var bvid = archive.optString("bvid")
+        if (bvid.isBlank()) {
+            bvid = extractBvidFromUrl(normalizeJumpUrl(archive.optString("jump_url")))
+        }
+        val aid = archive.optLong("aid").takeIf { it > 0L }
+            ?: archive.optString("aid").toLongOrNull()
+            ?: 0L
+        if (bvid.isBlank() && aid <= 0L) return null
         val author = modules.optJSONObject("module_author")
         val stat = archive.optJSONObject("stat") ?: JSONObject()
         return BiliVideoItem(
-            bvid = bvid,
-            aid = archive.optString("aid").toLongOrNull() ?: 0L,
+            bvid = bvid.ifBlank { "av$aid" },
+            aid = aid,
             title = archive.optString("title"),
             coverUrl = normalizeImageUrl(archive.optString("cover")),
             authorName = author?.optString("name").orEmpty(),
@@ -576,13 +1081,100 @@ object BilibiliJsonParser {
         )
     }
 
+    private fun parseDynamicArchiveLink(major: JSONObject): BiliDynamicLink? {
+        val archive = major.optJSONObject("archive") ?: return null
+        val url = normalizeJumpUrl(archive.optString("jump_url")).ifBlank {
+            extractBvidFromUrl(archive.optString("bvid")).takeIf { it.isNotBlank() }
+                ?.let { bvid -> "https://www.bilibili.com/video/$bvid" }
+                .orEmpty()
+        }
+        if (url.isBlank()) return null
+        return BiliDynamicLink(
+            title = archive.optString("title"),
+            url = url,
+            coverUrl = normalizeImageUrl(archive.optString("cover")),
+            desc = archive.optString("desc"),
+        )
+    }
+
+    private fun parseAdditionalUgcVideo(
+        ugc: JSONObject,
+        modules: JSONObject,
+    ): BiliVideoItem? {
+        val jumpUrl = normalizeJumpUrl(
+            ugc.optString("jump_url")
+                .ifBlank { ugc.optString("uri") },
+        )
+        var bvid = extractBvidFromUrl(jumpUrl)
+        val aid = ugc.optString("id_str").toLongOrNull()
+            ?: Regex("""av(\d+)""", RegexOption.IGNORE_CASE).find(jumpUrl)?.groupValues?.getOrNull(1)?.toLongOrNull()
+            ?: 0L
+        if (bvid.isBlank() && aid <= 0L) return null
+        val author = modules.optJSONObject("module_author")
+        val descSecond = ugc.optString("desc_second")
+            .ifBlank { ugc.optString("desc_text_2") }
+        return BiliVideoItem(
+            bvid = bvid.ifBlank { "av$aid" },
+            aid = aid,
+            title = ugc.optString("title"),
+            coverUrl = normalizeImageUrl(ugc.optString("cover")),
+            authorName = author?.optString("name").orEmpty(),
+            authorMid = author?.optLong("mid") ?: 0L,
+            viewCount = parseCount(descSecond),
+            danmakuCount = 0L,
+            likeCount = 0L,
+            durationSeconds = parseDurationText(
+                ugc.optString("duration").ifBlank { ugc.optString("duration_text") },
+            ),
+            description = descSecond,
+        )
+    }
+
+    private fun parseDynamicLiveLink(live: JSONObject?): BiliDynamicLink? {
+        if (live == null) return null
+        val url = normalizeJumpUrl(live.optString("jump_url"))
+        if (url.isBlank()) return null
+        return BiliDynamicLink(
+            title = live.optString("title"),
+            url = url,
+            coverUrl = normalizeImageUrl(live.optString("cover")),
+            desc = listOf(
+                live.optString("desc_first"),
+                live.optString("desc_second"),
+            ).filter { it.isNotBlank() }.joinToString(" · "),
+        )
+    }
+
+    private fun parseDynamicMusicLink(music: JSONObject?): BiliDynamicLink? {
+        if (music == null) return null
+        val url = normalizeJumpUrl(music.optString("jump_url"))
+        if (url.isBlank()) return null
+        return BiliDynamicLink(
+            title = music.optString("title"),
+            url = url,
+            coverUrl = normalizeImageUrl(music.optString("cover")),
+            desc = music.optString("label"),
+        )
+    }
+
+    private fun extractBvidFromUrl(url: String): String {
+        if (url.isBlank()) return ""
+        return Regex("""BV[\w]+""", RegexOption.IGNORE_CASE).find(url)?.value.orEmpty()
+    }
+
     private fun parseDynamicDrawImages(major: JSONObject): List<String> {
         val draw = major.optJSONObject("draw") ?: return emptyList()
         val items = draw.optJSONArray("items") ?: return emptyList()
         return buildList(items.length()) {
             for (index in 0 until items.length()) {
-                val item = items.optJSONObject(index) ?: continue
-                normalizeImageUrl(item.optString("src")).takeIf { it.isNotBlank() }?.let(::add)
+                when (val entry = items.opt(index)) {
+                    is JSONObject -> {
+                        normalizeImageUrl(
+                            entry.optString("src").ifBlank { entry.optString("url") },
+                        ).takeIf { it.isNotBlank() }?.let(::add)
+                    }
+                    is String -> normalizeImageUrl(entry).takeIf { it.isNotBlank() }?.let(::add)
+                }
             }
         }
     }
@@ -592,8 +1184,14 @@ object BilibiliJsonParser {
         val pics = opus.optJSONArray("pics") ?: return emptyList()
         return buildList(pics.length()) {
             for (index in 0 until pics.length()) {
-                val item = pics.optJSONObject(index) ?: continue
-                normalizeImageUrl(item.optString("url")).takeIf { it.isNotBlank() }?.let(::add)
+                when (val entry = pics.opt(index)) {
+                    is JSONObject -> {
+                        normalizeImageUrl(
+                            entry.optString("url").ifBlank { entry.optString("src") },
+                        ).takeIf { it.isNotBlank() }?.let(::add)
+                    }
+                    is String -> normalizeImageUrl(entry).takeIf { it.isNotBlank() }?.let(::add)
+                }
             }
         }
     }
@@ -871,13 +1469,77 @@ object BilibiliJsonParser {
         }
     }
 
-    private fun parseUserTopPhoto(source: JSONObject): String {
-        val direct = source.optString("top_photo")
-        if (direct.isNotBlank()) return normalizeImageUrl(direct)
-        val space = source.optJSONObject("space") ?: return ""
-        val large = space.optString("l_img")
-        if (large.isNotBlank()) return normalizeImageUrl(large)
-        return normalizeImageUrl(space.optString("s_img"))
+    fun parseUserTopPhotoList(json: JSONObject, activeTopPhoto: String = ""): List<String> {
+        if (!json.optBoolean("status")) return emptyList()
+        val array = json.optJSONArray("data") ?: return emptyList()
+        val activePath = topPhotoPathKey(activeTopPhoto)
+        val owned = linkedMapOf<String, Int>()
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            if (item.optInt("is_disable") == 1) continue
+            val url = normalizeSpaceImageUrl(item.optString("l_img"))
+            if (url.isBlank()) continue
+            val had = item.optInt("had")
+            val matchesActive = activePath.isNotBlank() && topPhotoPathKey(url) == activePath
+            if (had == 1 || matchesActive) {
+                owned.putIfAbsent(url, item.optInt("sort_num"))
+            }
+        }
+        return owned.entries
+            .sortedByDescending { it.value }
+            .map { it.key }
+    }
+
+    fun parseUserSpaceSettingsTopPhoto(json: JSONObject): String {
+        if (!json.optBoolean("status")) return ""
+        val toutu = json.optJSONObject("data")?.optJSONObject("toutu") ?: return ""
+        val large = toutu.optString("l_img")
+        if (large.isNotBlank()) return normalizeSpaceImageUrl(large)
+        return normalizeSpaceImageUrl(toutu.optString("s_img"))
+    }
+
+    fun mergeUserTopPhotos(vararg groups: List<String>): List<String> =
+        groups.flatMap { it }
+            .map(::normalizeSpaceImageUrl)
+            .filter { it.isNotBlank() }
+            .distinct()
+
+    private fun parseUserTopPhotos(source: JSONObject): List<String> {
+        val values = linkedSetOf<String>()
+        values.addAll(parseDelimitedTopPhotos(source.optString("top_photo")))
+        source.optJSONArray("top_photos")?.let { array ->
+            for (index in 0 until array.length()) {
+                val url = normalizeSpaceImageUrl(array.optString(index))
+                if (url.isNotBlank()) values.add(url)
+            }
+        }
+        val space = source.optJSONObject("space")
+        if (space != null) {
+            val large = normalizeSpaceImageUrl(space.optString("l_img"))
+            if (large.isNotBlank()) values.add(large)
+            val small = normalizeSpaceImageUrl(space.optString("s_img"))
+            if (small.isNotBlank()) values.add(small)
+        }
+        return values.toList()
+    }
+
+    private fun parseDelimitedTopPhotos(raw: String): List<String> =
+        raw.split(',', ';')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .map(::normalizeSpaceImageUrl)
+            .filter { it.isNotBlank() }
+
+    private fun topPhotoPathKey(url: String): String =
+        normalizeSpaceImageUrl(url)
+            .substringAfter("/bfs/", "")
+            .substringBefore('?')
+
+    private fun normalizeSpaceImageUrl(url: String): String {
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return ""
+        if (trimmed.startsWith("bfs/")) return normalizeImageUrl("https://i0.hdslb.com/$trimmed")
+        return normalizeImageUrl(trimmed)
     }
 
     private fun normalizeImageUrl(url: String): String =

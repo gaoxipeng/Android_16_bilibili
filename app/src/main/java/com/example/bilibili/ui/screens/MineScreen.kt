@@ -19,6 +19,7 @@ import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.FeedLayoutStore
+import com.example.bilibili.data.UserRelationTab
 import com.example.bilibili.player.VideoPlaybackCoordinator
 
 @Composable
@@ -35,6 +36,7 @@ fun MineScreen(
     onVideoClick: (BiliVideoItem) -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
     onLoginRequired: () -> Unit,
+    onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit = { _, _, _, _, _ -> },
     contentPadding: PaddingValues,
     feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
     onFeedColumnCountChange: (Int) -> Unit = {},
@@ -70,8 +72,12 @@ fun MineScreen(
         onVideoClick = onVideoClick,
         onEnsurePlayStream = onEnsurePlayStream,
         onLoginRequired = onLoginRequired,
+        onOpenRelationList = { name, face, sign, tab ->
+            onOpenRelationList(mid, name, face, sign, tab)
+        },
         contentPadding = contentPadding,
         enableSettings = true,
+        cacheProfile = true,
         feedColumnCount = feedColumnCount,
         onFeedColumnCountChange = onFeedColumnCountChange,
         modifier = modifier,

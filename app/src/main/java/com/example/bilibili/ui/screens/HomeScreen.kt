@@ -10,8 +10,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -92,6 +95,8 @@ internal val HomeFeedSingleColumnSpacing = 12.dp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
+    loggedIn: Boolean = true,
+    onLoginClick: () -> Unit = {},
     videos: List<BiliVideoItem>,
     playUrls: Map<String, BiliPlayStream>,
     loading: Boolean,
@@ -115,6 +120,24 @@ fun HomeScreen(
     showEmbeddedPullRefreshIndicator: Boolean = true,
     feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
 ) {
+    if (!loggedIn) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(contentPadding),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("登录后查看个人主页", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onLoginClick) {
+                    Text("打开哔哩哔哩登录")
+                }
+            }
+        }
+        return
+    }
+
     val useSingleColumn = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
     val listState = rememberLazyListState()
     val staggeredGridState = rememberLazyStaggeredGridState()

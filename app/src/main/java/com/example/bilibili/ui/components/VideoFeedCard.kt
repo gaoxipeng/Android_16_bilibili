@@ -34,6 +34,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +49,7 @@ import com.example.bilibili.player.LocalVideoPeekController
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.liquidglass.TintedLiquidCapsule
+import com.example.bilibili.ui.format.formatBiliPublishTime
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
@@ -56,14 +59,21 @@ private val VideoFeedCoverOverlayPadding = 6.dp
 private val VideoFeedCoverOverlayColor = Color.White
 private val VideoFeedCoverOverlayIconSize = 10.dp
 private val VideoFeedCoverOverlayTextStyle
-    @Composable get() = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp)
+    @Composable get() = MaterialTheme.typography.labelSmall.copy(
+        fontSize = 10.sp,
+        shadow = Shadow(
+            color = Color.Black.copy(alpha = 0.55f),
+            offset = Offset(0f, 1f),
+            blurRadius = 3f,
+        ),
+    )
 private val VideoFeedCoverScrimHeightFraction = 0.45f
 private val VideoFeedMetaBackground = Color(0xFFFFFFFF)
 private val VideoFeedTitleColor = Color(0xFF1A1A1A)
 private val VideoFeedMetaDataColor = Color(0xFF999999)
 private val VideoFeedUpBadgeColor = Color(0xFFFFA640)
 private val VideoFeedCardBorderColor = Color(0xFFE8E8E8)
-private val VideoFeedCardElevation = 1.dp
+private val VideoFeedGridCardElevation = 0.dp
 private val VideoOverlayLiquidBlurRadius = 14.dp
 private val VideoOverlayAuthorColor = Color(0xFFFFA640)
 private val VideoOverlayBorderWidth = 0.5.dp
@@ -81,6 +91,7 @@ fun VideoFeedCard(
     gridStyle: Boolean = false,
     onEnsurePlayStream: (() -> Unit)? = null,
     onAuthorClick: ((Long) -> Unit)? = null,
+    showAuthorInfo: Boolean = true,
 ) {
     if (gridStyle) {
         VideoFeedGridCard(
@@ -90,6 +101,7 @@ fun VideoFeedCard(
             onClick = onClick,
             onEnsurePlayStream = onEnsurePlayStream,
             onAuthorClick = onAuthorClick,
+            showAuthorInfo = showAuthorInfo,
             modifier = modifier,
         )
         return
@@ -103,6 +115,7 @@ fun VideoFeedCard(
             onClick = onClick,
             onEnsurePlayStream = onEnsurePlayStream,
             onAuthorClick = onAuthorClick,
+            showAuthorInfo = showAuthorInfo,
             modifier = modifier,
         )
         return
@@ -211,6 +224,7 @@ private fun VideoFeedGridCard(
     onClick: () -> Unit,
     onEnsurePlayStream: (() -> Unit)?,
     onAuthorClick: ((Long) -> Unit)? = null,
+    showAuthorInfo: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -232,7 +246,7 @@ private fun VideoFeedGridCard(
         colors = CardDefaults.elevatedCardColors(
             containerColor = VideoFeedMetaBackground,
         ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = VideoFeedCardElevation),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = VideoFeedGridCardElevation),
         onClick = onClick,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -291,29 +305,42 @@ private fun VideoFeedGridCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = VideoFeedTitleColor,
                 )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp)
-                        .clickable(enabled = video.authorMid > 0L) {
-                            if (onAuthorClick != null) {
-                                onAuthorClick(video.authorMid)
-                            } else {
-                                openAuthorSpace(context, video.authorMid)
-                            }
-                        },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    UpAuthorBadge(color = VideoFeedUpBadgeColor)
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = video.authorName,
-                        modifier = Modifier.weight(1f, fill = false),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = VideoFeedMetaDataColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                if (showAuthorInfo) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                            .clickable(enabled = video.authorMid > 0L) {
+                                if (onAuthorClick != null) {
+                                    onAuthorClick(video.authorMid)
+                                } else {
+                                    openAuthorSpace(context, video.authorMid)
+                                }
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        UpAuthorBadge(color = VideoFeedUpBadgeColor)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = video.authorName,
+                            modifier = Modifier.weight(1f, fill = false),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = VideoFeedMetaDataColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else {
+                    videoPublishTimeLabel(video)?.let { publishTime ->
+                        Text(
+                            text = publishTime,
+                            modifier = Modifier.padding(top = 4.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = VideoFeedMetaDataColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -328,6 +355,7 @@ private fun VideoFeedOverlayCard(
     onClick: () -> Unit,
     onEnsurePlayStream: (() -> Unit)?,
     onAuthorClick: ((Long) -> Unit)? = null,
+    showAuthorInfo: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -410,24 +438,35 @@ private fun VideoFeedOverlayCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable(enabled = video.authorMid > 0L) {
-                                if (onAuthorClick != null) {
-                                    onAuthorClick(video.authorMid)
-                                } else {
-                                    openAuthorSpace(context, video.authorMid)
-                                }
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        UpAuthorBadge(color = VideoOverlayAuthorColor)
-                        Spacer(Modifier.width(6.dp))
+                    if (showAuthorInfo) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(enabled = video.authorMid > 0L) {
+                                    if (onAuthorClick != null) {
+                                        onAuthorClick(video.authorMid)
+                                    } else {
+                                        openAuthorSpace(context, video.authorMid)
+                                    }
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            UpAuthorBadge(color = VideoOverlayAuthorColor)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = video.authorName,
+                                modifier = Modifier.weight(1f),
+                                color = VideoOverlayAuthorColor,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    } else {
                         Text(
-                            text = video.authorName,
+                            text = videoPublishTimeLabel(video).orEmpty(),
                             modifier = Modifier.weight(1f),
-                            color = VideoOverlayAuthorColor,
+                            color = overlaySubtextColor,
                             style = MaterialTheme.typography.labelMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -541,6 +580,23 @@ private fun CoverOverlayStat(
 }
 
 @Composable
+internal fun VideoCoverBottomScrim(
+    coverUrl: String,
+    modifier: Modifier = Modifier,
+) {
+    val tint = rememberCoverAverageColor(coverUrl)
+    CoverBottomScrim(tint = tint, modifier = modifier)
+}
+
+@Composable
+internal fun VideoCoverOverlayText(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    CoverOverlayText(text = text, modifier = modifier)
+}
+
+@Composable
 private fun CoverBottomScrim(
     tint: Color,
     modifier: Modifier = Modifier,
@@ -582,6 +638,13 @@ private fun Color.coverBottomScrimColor(): Color {
         blue = blue * darken + 0.03f,
     )
 }
+
+private fun videoPublishTimeLabel(video: BiliVideoItem): String? =
+    if (video.publishTimeSeconds > 0L) {
+        formatBiliPublishTime(video.publishTimeSeconds)
+    } else {
+        null
+    }
 
 private fun formatDuration(seconds: Int): String {
     val minutes = seconds / 60

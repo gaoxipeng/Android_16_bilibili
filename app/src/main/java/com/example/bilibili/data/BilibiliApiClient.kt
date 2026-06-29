@@ -235,28 +235,83 @@ class BilibiliApiClient {
         }
     }
 
+    suspend fun getUserRelationListPage(
+        mid: Long,
+        tab: UserRelationTab,
+        page: Int,
+        pageSize: Int = 20,
+        credential: BilibiliCredential? = null,
+    ): BiliRelationUserPage = withContext(Dispatchers.IO) {
+        val url = when (tab) {
+            UserRelationTab.Following -> BilibiliEndpoints.RELATION_FOLLOWINGS
+            UserRelationTab.Followers -> BilibiliEndpoints.RELATION_FOLLOWERS
+        }
+        val params = buildMap {
+            put("vmid", mid.toString())
+            put("pn", page.toString())
+            put("ps", pageSize.toString())
+            if (tab == UserRelationTab.Following) {
+                put("order_type", "")
+            }
+        }
+        runCatching {
+            getJson(
+                url = url,
+                params = params,
+                credential = credential,
+                referer = "https://space.bilibili.com/$mid",
+            ).let { json -> BilibiliJsonParser.parseRelationUserPage(json, pageSize) }
+        }.getOrElse { error ->
+            BiliRelationUserPage(
+                users = emptyList(),
+                errorMessage = error.message ?: "加载失败",
+            )
+        }
+    }
+
     suspend fun getVideoComments(
         aid: Long,
         sort: BiliCommentSort,
         paginationStr: String? = null,
         credential: BilibiliCredential? = null,
+    ): BiliCommentPage = getSubjectComments(
+        oid = aid,
+        type = 1,
+        sort = sort,
+        paginationStr = paginationStr,
+        credential = credential,
+        referer = "https://www.bilibili.com/video/av$aid",
+    )
+
+    suspend fun getSubjectComments(
+        oid: Long,
+        type: Int,
+        sort: BiliCommentSort,
+        paginationStr: String? = null,
+        credential: BilibiliCredential? = null,
+        referer: String,
     ): BiliCommentPage = withContext(Dispatchers.IO) {
         val params = mutableMapOf(
-            "oid" to aid.toString(),
-            "type" to "1",
+            "oid" to oid.toString(),
+            "type" to type.toString(),
             "mode" to sort.mode.toString(),
             "plat" to "1",
             "web_location" to "1315875",
         )
         params["pagination_str"] = buildCommentPaginationStr(paginationStr)
-        getWbiJsonOnCurrentThread(BilibiliEndpoints.VIDEO_COMMENTS, params, credential)
-            .let(BilibiliJsonParser::parseCommentPage)
+        getWbiJsonOnCurrentThread(
+            url = BilibiliEndpoints.VIDEO_COMMENTS,
+            params = params,
+            credential = credential,
+            referer = referer,
+        ).let(BilibiliJsonParser::parseCommentPage)
     }
 
     suspend fun getCommentReplies(
-        aid: Long,
+        oid: Long,
+        type: Int,
         rootRpid: Long,
-        bvid: String,
+        referer: String,
         pn: Int = 1,
         ps: Int = 20,
         credential: BilibiliCredential? = null,
@@ -264,23 +319,37 @@ class BilibiliApiClient {
         getJson(
             url = BilibiliEndpoints.VIDEO_COMMENT_REPLIES,
             params = mapOf(
-                "type" to "1",
-                "oid" to aid.toString(),
+                "type" to type.toString(),
+                "oid" to oid.toString(),
                 "root" to rootRpid.toString(),
                 "pn" to pn.toString(),
                 "ps" to ps.toString(),
                 "web_location" to "1315875",
             ),
             credential = credential,
-            referer = "https://www.bilibili.com/video/$bvid",
+            referer = referer,
         ).let(BilibiliJsonParser::parseCommentReplyPage)
     }
 
-    private fun buildCommentPaginationStr(nextOffset: String?): String {
-        if (nextOffset.isNullOrBlank()) return """{"offset":""}"""
-        val escaped = nextOffset.replace("\\", "\\\\").replace("\"", "\\\"")
-        return """{"offset":"$escaped"}"""
-    }
+    suspend fun getVideoCommentReplies(
+        aid: Long,
+        rootRpid: Long,
+        bvid: String,
+        pn: Int = 1,
+        ps: Int = 20,
+        credential: BilibiliCredential? = null,
+    ): BiliCommentReplyPage = getCommentReplies(
+        oid = aid,
+        type = 1,
+        rootRpid = rootRpid,
+        referer = "https://www.bilibili.com/video/$bvid",
+        pn = pn,
+        ps = ps,
+        credential = credential,
+    )
+
+    private fun buildCommentPaginationStr(nextOffset: String?): String =
+        JSONObject().put("offset", nextOffset?.takeIf { it.isNotBlank() }.orEmpty()).toString()
 
     suspend fun reportWatchHistory(
         aid: Long,
@@ -360,11 +429,28 @@ class BilibiliApiClient {
             val cardProfile = runCatching {
                 getJson(
                     url = BilibiliEndpoints.USER_CARD,
-                    params = mapOf("mid" to mid.toString(), "photo" to "false"),
+                    params = mapOf("mid" to mid.toString(), "photo" to "true"),
                     credential = credential,
                     referer = referer,
                 ).let(BilibiliJsonParser::parseUserCardProfile)
             }.getOrNull()
+            val activeTopPhoto = accProfile?.topPhoto.orEmpty().ifBlank { cardProfile?.topPhoto.orEmpty() }
+            val topPhotoList = runCatching {
+                getSpaceAjaxJson(
+                    url = BilibiliEndpoints.USER_TOP_PHOTO_LIST,
+                    params = mapOf("mid" to mid.toString()),
+                    credential = credential,
+                    referer = referer,
+                ).let { BilibiliJsonParser.parseUserTopPhotoList(it, activeTopPhoto) }
+            }.getOrDefault(emptyList())
+            val settingsTopPhoto = runCatching {
+                getSpaceAjaxJson(
+                    url = BilibiliEndpoints.USER_SPACE_SETTINGS,
+                    params = mapOf("mid" to mid.toString()),
+                    credential = credential,
+                    referer = referer,
+                ).let(BilibiliJsonParser::parseUserSpaceSettingsTopPhoto)
+            }.getOrNull().orEmpty()
             val upstatLikes = runCatching {
                 getJson(
                     url = BilibiliEndpoints.USER_UPSTAT,
@@ -378,6 +464,8 @@ class BilibiliApiClient {
                 accProfile = accProfile,
                 cardProfile = cardProfile,
                 upstatLikes = upstatLikes,
+                topPhotoList = topPhotoList,
+                settingsTopPhoto = settingsTopPhoto,
             )
         }
 
@@ -386,9 +474,17 @@ class BilibiliApiClient {
         accProfile: BiliUserProfile?,
         cardProfile: BiliUserProfile?,
         upstatLikes: Long,
+        topPhotoList: List<String> = emptyList(),
+        settingsTopPhoto: String = "",
     ): BiliUserProfile? {
         val base = accProfile ?: cardProfile ?: return null
         val card = cardProfile
+        val mergedTopPhotos = BilibiliJsonParser.mergeUserTopPhotos(
+            base.topPhotos,
+            card?.topPhotos.orEmpty(),
+            topPhotoList,
+            listOfNotNull(settingsTopPhoto.takeIf { it.isNotBlank() }),
+        )
         return base.copy(
             mid = mid,
             name = base.name.ifBlank { card?.name.orEmpty() },
@@ -398,19 +494,23 @@ class BilibiliApiClient {
             following = base.following.takeIf { it > 0L } ?: card?.following ?: 0L,
             follower = base.follower.takeIf { it > 0L } ?: card?.follower ?: 0L,
             likes = base.likes.takeIf { it > 0L } ?: upstatLikes,
-            topPhoto = base.topPhoto.ifBlank { card?.topPhoto.orEmpty() },
+            topPhotos = mergedTopPhotos,
+            topPhoto = mergedTopPhotos.firstOrNull()
+                ?: base.topPhoto.ifBlank { card?.topPhoto.orEmpty() },
         )
     }
 
     suspend fun getUserVideos(
         mid: Long,
         pn: Int = 1,
+        order: BiliUserVideoSort = BiliUserVideoSort.LatestPublish,
         credential: BilibiliCredential? = null,
-    ): List<BiliVideoItem> = getUserVideoPage(mid, pn, credential).videos
+    ): List<BiliVideoItem> = getUserVideoPage(mid, pn, order, credential).videos
 
     suspend fun getUserVideoPage(
         mid: Long,
         pn: Int = 1,
+        order: BiliUserVideoSort = BiliUserVideoSort.LatestPublish,
         credential: BilibiliCredential? = null,
     ): BiliUserVideoPage = withContext(Dispatchers.IO) {
         val params = mutableMapOf(
@@ -419,7 +519,7 @@ class BilibiliApiClient {
             "tid" to "0",
             "pn" to pn.toString(),
             "keyword" to "",
-            "order" to "pubdate",
+            "order" to order.order,
             "order_avoided" to "true",
             "platform" to "web",
         )
@@ -441,7 +541,8 @@ class BilibiliApiClient {
             put("host_mid", mid.toString())
             put("timezone_offset", "-480")
             put("platform", "web")
-            put("features", "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete")
+            put("features", "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete")
+            put("web_location", "333.1365")
             if (!offset.isNullOrBlank()) put("offset", offset)
         }
         getJson(
@@ -727,6 +828,38 @@ class BilibiliApiClient {
                 error("HTTP ${response.code}")
             }
             return body
+        }
+    }
+
+    private suspend fun getSpaceAjaxJson(
+        url: String,
+        params: Map<String, String>,
+        credential: BilibiliCredential? = null,
+        referer: String,
+    ): JSONObject {
+        val query = params.entries.joinToString("&") { (key, value) ->
+            "${encode(key)}=${encode(value)}"
+        }
+        val fullUrl = if (query.isBlank()) url else "$url?$query"
+        val requestBuilder = Request.Builder()
+            .url(fullUrl)
+            .header("User-Agent", BilibiliEndpoints.USER_AGENT)
+            .header("Referer", referer)
+        buildCookieHeader(credential)?.let { cookie ->
+            requestBuilder.header("Cookie", cookie)
+        }
+        client.newCall(requestBuilder.build()).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}")
+            }
+            val json = runCatching { JSONObject(body) }.getOrElse {
+                error("响应解析失败")
+            }
+            if (!json.optBoolean("status")) {
+                error(json.optString("data", "请求失败"))
+            }
+            return json
         }
     }
 

@@ -6,10 +6,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.bilibili.data.BiliDanmakuItem
+import com.example.bilibili.data.DanmakuSettings
 
 class VideoPlaybackCoordinator(
     initialDanmakuVisible: Boolean = true,
+    initialDanmakuSettings: DanmakuSettings = DanmakuSettings(),
     private val persistDanmakuVisible: ((Boolean) -> Unit)? = null,
+    private val persistDanmakuSettings: ((DanmakuSettings) -> Unit)? = null,
 ) {
     var activeKey by mutableStateOf<String?>(null)
     var fullscreenKey by mutableStateOf<String?>(null)
@@ -18,11 +21,18 @@ class VideoPlaybackCoordinator(
     val positions = mutableStateMapOf<String, Long>()
     var danmakuVisible by mutableStateOf(initialDanmakuVisible)
         private set
+    var danmakuSettings by mutableStateOf(initialDanmakuSettings)
+        private set
     private val danmakuCache = mutableMapOf<Long, List<BiliDanmakuItem>>()
 
     fun toggleDanmaku() {
         danmakuVisible = !danmakuVisible
         persistDanmakuVisible?.invoke(danmakuVisible)
+    }
+
+    fun updateDanmakuSettings(settings: DanmakuSettings) {
+        danmakuSettings = settings
+        persistDanmakuSettings?.invoke(settings)
     }
 
     suspend fun cachedDanmaku(

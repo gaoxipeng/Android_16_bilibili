@@ -30,9 +30,6 @@ fun BilibiliFollowButton(
 ) {
     val mutual = following && followerMe
     val label = when {
-        compact && !following -> "+关注"
-        compact && mutual -> "互关"
-        compact && following -> "已关注"
         !following -> "+关注"
         mutual -> "互相关注"
         else -> "已关注"
@@ -48,7 +45,11 @@ fun BilibiliFollowButton(
         Box(
             modifier = Modifier
                 .padding(
-                    horizontal = if (mutual) 10.dp else 14.dp,
+                    horizontal = when {
+                        mutual && compact -> 8.dp
+                        mutual -> 10.dp
+                        else -> 14.dp
+                    },
                     vertical = 6.dp,
                 )
                 .heightIn(min = 20.dp),
@@ -64,7 +65,11 @@ fun BilibiliFollowButton(
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelMedium,
-                    fontSize = if (mutual) 12.sp else MaterialTheme.typography.labelMedium.fontSize,
+                    fontSize = when {
+                        mutual && compact -> 11.sp
+                        mutual -> 12.sp
+                        else -> MaterialTheme.typography.labelMedium.fontSize
+                    },
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     color = if (following) Color(0xFF636363) else Color.White,

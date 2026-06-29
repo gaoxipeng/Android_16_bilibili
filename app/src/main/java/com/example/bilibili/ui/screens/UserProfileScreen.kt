@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -85,20 +86,30 @@ import com.example.bilibili.ui.components.BiliWebReaderOverlay
 import com.example.bilibili.ui.components.BiliWebReaderState
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliUserProfile
+import com.example.bilibili.data.BiliUserVideoSort
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.FeedLayoutStore
+import com.example.bilibili.data.UserProfileSessionCache
+import com.example.bilibili.data.UserProfileUiState
+import com.example.bilibili.data.UserRelationTab
 import com.example.bilibili.player.StatusBarIconsEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.ui.components.BiliCommentText
 import com.example.bilibili.ui.components.BilibiliFollowButton
 import com.example.bilibili.ui.components.BiliUserLevelIcon
+import com.example.bilibili.ui.components.SlidingTextTabs
 import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
 import com.example.bilibili.ui.components.ObserveListNearEnd
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoFeedCard
+import com.example.bilibili.ui.components.imageviewer.BiliFullscreenImageViewer
+import com.example.bilibili.ui.components.imageviewer.BiliImageGrid
+import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.format.formatBiliPublishTime
+import com.example.bilibili.ui.format.formatVideoDurationLabel
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.theme.BiliPink
 import kotlinx.coroutines.async
@@ -112,6 +123,27 @@ private enum class UserProfileContentTab(val label: String) {
     Dynamics("动态"),
 }
 
+private fun mergeProfileOnRefresh(
+    previous: BiliUserProfile,
+    loaded: BiliUserProfile,
+    videoCount: Long,
+    seedName: String,
+    seedFace: String,
+): BiliUserProfile = loaded.copy(
+    name = loaded.name.ifBlank { seedName }.ifBlank { previous.name },
+    face = loaded.face.ifBlank { seedFace }.ifBlank { previous.face },
+    sign = loaded.sign.ifBlank { previous.sign },
+    level = loaded.level.takeIf { it > 0 } ?: previous.level,
+    following = loaded.following.takeIf { it > 0L } ?: previous.following,
+    follower = loaded.follower.takeIf { it > 0L } ?: previous.follower,
+    likes = loaded.likes.takeIf { it > 0L } ?: previous.likes,
+    videoCount = videoCount.takeIf { it > 0L }
+        ?: loaded.videoCount.takeIf { it > 0L }
+        ?: previous.videoCount,
+    topPhoto = loaded.topPhoto.ifBlank { previous.topPhoto },
+    topPhotos = loaded.topPhotos.ifEmpty { previous.topPhotos },
+)
+
 private val ProfileHeaderAvatarSize = 72.dp
 private val ProfileHeaderAvatarInset = 3.dp
 private val ProfileHeaderAvatarFrameSize = ProfileHeaderAvatarSize + ProfileHeaderAvatarInset * 2
@@ -120,12 +152,12 @@ private val ProfileHeaderCardCoverOverlap = 22.dp
 private val ProfileHeaderCardRadius = 16.dp
 private val ProfileHeaderCardBorderWidth = 0.5.dp
 private val ProfileHeaderCardBorderColor = Color(0xFFE8E8E8)
+private val DynamicFeedPageBackground = Color(0xFFF5F5F5)
+private val DynamicFeedCardBackground = Color.White
 private val ProfileHeaderCardContentInset = 6.dp
 private val ProfileCompactAvatarSize = 32.dp
 private val ProfileCompactBarStartPadding = 16.dp
 private val ProfileCompactBarContentSpacing = 10.dp
-private val ProfileCompactLevelIconWidth = 28.dp
-private val ProfileCompactLevelIconHeight = 18.dp
 
 @Composable
 fun UserProfileScreen(
@@ -138,11 +170,14 @@ fun UserProfileScreen(
     playUrls: Map<String, BiliPlayStream>,
     coordinator: VideoPlaybackCoordinator,
     onVideoClick: (BiliVideoItem) -> Unit,
+    onDynamicClick: (BiliDynamicItem) -> Unit = {},
     onEnsurePlayStream: (BiliVideoItem) -> Unit = {},
     onLoginRequired: () -> Unit,
+    onOpenRelationList: (name: String, face: String, sign: String, tab: UserRelationTab) -> Unit = { _, _, _, _ -> },
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     enableSettings: Boolean = false,
+    cacheProfile: Boolean = false,
     feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
     onFeedColumnCountChange: (Int) -> Unit = {},
 ) {
@@ -151,33 +186,11 @@ fun UserProfileScreen(
     var showSettings by remember { mutableStateOf(false) }
     val useSingleColumnPosts = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
 
-    var profile by remember(mid) {
-        mutableStateOf(
-            BiliUserProfile(
-                mid = mid,
-                name = seedName,
-                face = seedFace,
-                sign = "",
-                level = 0,
-            ),
-        )
+    val uiState = if (cacheProfile) {
+        remember(mid) { UserProfileSessionCache.getOrCreate(mid, seedName, seedFace) }
+    } else {
+        remember(mid) { UserProfileUiState(mid, seedName, seedFace) }
     }
-    var relation by remember(mid) { mutableStateOf(BiliAuthorRelation()) }
-    var videos by remember(mid) { mutableStateOf<List<BiliVideoItem>>(emptyList()) }
-    var dynamics by remember(mid) { mutableStateOf<List<BiliDynamicItem>>(emptyList()) }
-    var loading by remember(mid) { mutableStateOf(true) }
-    var refreshing by remember(mid) { mutableStateOf(false) }
-    var loadError by remember(mid) { mutableStateOf<String?>(null) }
-    var followLoading by remember(mid) { mutableStateOf(false) }
-
-    var videosPage by remember(mid) { mutableStateOf(1) }
-    var videosHasMore by remember(mid) { mutableStateOf(true) }
-    var videosLoadingMore by remember(mid) { mutableStateOf(false) }
-
-    var dynamicsOffset by remember(mid) { mutableStateOf<String?>(null) }
-    var dynamicsHasMore by remember(mid) { mutableStateOf(true) }
-    var dynamicsLoadingMore by remember(mid) { mutableStateOf(false) }
-    var dynamicsLoaded by remember(mid) { mutableStateOf(false) }
 
     val postsStaggeredGridState = rememberLazyStaggeredGridState()
     val postsListState = rememberLazyListState()
@@ -190,28 +203,28 @@ fun UserProfileScreen(
 
     suspend fun loadProfile(resetLists: Boolean) {
         if (resetLists) {
-            videosPage = 1
-            videosHasMore = true
-            dynamicsOffset = null
-            dynamicsHasMore = true
-            dynamicsLoaded = false
+            uiState.videosPage = 1
+            uiState.videosHasMore = true
+            uiState.dynamicsOffset = null
+            uiState.dynamicsHasMore = true
+            uiState.dynamicsLoaded = false
         }
+        val previousProfile = uiState.profile
         coroutineScope {
             val profileDeferred = async {
-                api.getUserInfo(mid, credential)?.let { loaded ->
-                    profile = loaded.copy(
-                        name = loaded.name.ifBlank { seedName },
-                        face = loaded.face.ifBlank { seedFace },
-                    )
-                    val videoCount = api.getUserNavnum(mid, credential)
-                    if (videoCount > 0L) {
-                        profile = profile.copy(videoCount = videoCount)
-                    }
-                }
+                val loaded = api.getUserInfo(mid, credential) ?: return@async
+                val videoCount = api.getUserNavnum(mid, credential)
+                uiState.profile = mergeProfileOnRefresh(
+                    previous = previousProfile,
+                    loaded = loaded,
+                    videoCount = videoCount,
+                    seedName = seedName,
+                    seedFace = seedFace,
+                )
             }
             val relationDeferred = async {
                 if (credential != null && myMid != mid) {
-                    relation = api.getUserRelation(
+                    uiState.relation = api.getUserRelation(
                         mid = mid,
                         credential = credential,
                         referer = "https://space.bilibili.com/$mid",
@@ -219,10 +232,15 @@ fun UserProfileScreen(
                 }
             }
             val videosDeferred = async {
-                val page = api.getUserVideoPage(mid, pn = 1, credential = credential)
-                videos = page.videos
-                videosHasMore = page.hasMore
-                videosPage = 1
+                val page = api.getUserVideoPage(
+                    mid = mid,
+                    pn = 1,
+                    order = uiState.videosOrder,
+                    credential = credential,
+                )
+                uiState.videos = page.videos
+                uiState.videosHasMore = page.hasMore
+                uiState.videosPage = 1
             }
             profileDeferred.await()
             relationDeferred.await()
@@ -232,79 +250,113 @@ fun UserProfileScreen(
 
     suspend fun loadDynamics(reset: Boolean) {
         if (reset) {
-            dynamicsOffset = null
-            dynamicsHasMore = true
+            uiState.dynamicsOffset = null
+            uiState.dynamicsHasMore = true
         }
-        if (!dynamicsHasMore && !reset) return
+        if (!uiState.dynamicsHasMore && !reset) return
         val page = api.getUserSpaceDynamics(
             mid = mid,
-            offset = if (reset) null else dynamicsOffset,
+            offset = if (reset) null else uiState.dynamicsOffset,
             credential = credential,
         )
-        dynamics = if (reset) page.items else dynamics + page.items
-        dynamicsOffset = page.nextOffset
-        dynamicsHasMore = page.hasMore
-        dynamicsLoaded = true
+        uiState.dynamics = if (reset) page.items else uiState.dynamics + page.items
+        uiState.dynamicsOffset = page.nextOffset
+        uiState.dynamicsHasMore = page.hasMore
+        uiState.dynamicsLoaded = true
     }
 
     fun refresh(keepContent: Boolean = false) {
         scope.launch {
-            if (keepContent) refreshing = true else loading = true
-            loadError = null
+            if (keepContent) uiState.refreshing = true else uiState.loading = true
+            uiState.loadError = null
             runCatching {
                 loadProfile(resetLists = true)
-                if (pagerState.currentPage == UserProfileContentTab.Dynamics.ordinal || dynamicsLoaded) {
+                if (pagerState.currentPage == UserProfileContentTab.Dynamics.ordinal || uiState.dynamicsLoaded) {
                     loadDynamics(reset = true)
                 }
-            }.onFailure { loadError = it.message }
-            loading = false
-            refreshing = false
+            }.onFailure { uiState.loadError = it.message }
+            uiState.loading = false
+            uiState.refreshing = false
         }
     }
 
     fun loadMoreVideos() {
-        if (videosLoadingMore || !videosHasMore) return
+        if (uiState.videosLoadingMore || !uiState.videosHasMore) return
         scope.launch {
-            videosLoadingMore = true
+            uiState.videosLoadingMore = true
             runCatching {
-                val nextPage = videosPage + 1
-                val page = api.getUserVideoPage(mid, pn = nextPage, credential = credential)
+                val nextPage = uiState.videosPage + 1
+                val page = api.getUserVideoPage(
+                    mid = mid,
+                    pn = nextPage,
+                    order = uiState.videosOrder,
+                    credential = credential,
+                )
                 if (page.videos.isNotEmpty()) {
-                    videos = videos + page.videos
-                    videosPage = nextPage
+                    uiState.videos = uiState.videos + page.videos
+                    uiState.videosPage = nextPage
                 }
-                videosHasMore = page.hasMore && page.videos.isNotEmpty()
+                uiState.videosHasMore = page.hasMore && page.videos.isNotEmpty()
             }
-            videosLoadingMore = false
+            uiState.videosLoadingMore = false
+        }
+    }
+
+    fun reloadVideosForSort() {
+        scope.launch {
+            uiState.videosLoadingMore = true
+            uiState.loadError = null
+            runCatching {
+                val page = api.getUserVideoPage(
+                    mid = mid,
+                    pn = 1,
+                    order = uiState.videosOrder,
+                    credential = credential,
+                )
+                uiState.videos = page.videos
+                uiState.videosHasMore = page.hasMore
+                uiState.videosPage = 1
+                if (useSingleColumnPosts) {
+                    postsListState.animateScrollToItem(0)
+                } else {
+                    postsStaggeredGridState.animateScrollToItem(0)
+                }
+            }.onFailure { uiState.loadError = it.message }
+            uiState.videosLoadingMore = false
         }
     }
 
     fun loadMoreDynamics() {
-        if (dynamicsLoadingMore || !dynamicsHasMore) return
+        if (uiState.dynamicsLoadingMore || !uiState.dynamicsHasMore) return
         scope.launch {
-            dynamicsLoadingMore = true
+            uiState.dynamicsLoadingMore = true
             runCatching { loadDynamics(reset = false) }
-            dynamicsLoadingMore = false
+            uiState.dynamicsLoadingMore = false
         }
     }
 
-    LaunchedEffect(mid) {
-        loading = true
-        loadError = null
+    LaunchedEffect(mid, cacheProfile) {
+        if (cacheProfile && uiState.loaded) {
+            uiState.loading = false
+            return@LaunchedEffect
+        }
+        uiState.loading = true
+        uiState.loadError = null
         runCatching { loadProfile(resetLists = true) }
-            .onFailure { loadError = it.message }
-        loading = false
+            .onFailure { uiState.loadError = it.message }
+        uiState.loaded = true
+        uiState.loading = false
     }
 
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
             .distinctUntilChanged()
             .collect { page ->
-                if (page == UserProfileContentTab.Dynamics.ordinal && !dynamicsLoaded && !loading) {
-                    dynamicsLoadingMore = true
+                if (page == UserProfileContentTab.Dynamics.ordinal && !uiState.dynamicsLoaded && !uiState.loading) {
+                    uiState.dynamicsLoadingMore = true
                     runCatching { loadDynamics(reset = true) }
-                        .onFailure { loadError = it.message }
-                    dynamicsLoadingMore = false
+                        .onFailure { uiState.loadError = it.message }
+                    uiState.dynamicsLoadingMore = false
                 }
             }
     }
@@ -325,7 +377,6 @@ fun UserProfileScreen(
     val density = LocalDensity.current
     val collapseThresholdPx = remember(density) { with(density) { 72.dp.roundToPx() } }
     val compactBarContentHeight = 48.dp
-    var profileHeaderHeight by remember(mid) { mutableStateOf(0.dp) }
     val collapseProgress by remember(
         pagerState.currentPage,
         postsStaggeredGridState,
@@ -371,8 +422,8 @@ fun UserProfileScreen(
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val compactBarHeight = (topInset + compactBarContentHeight) * animatedCollapse
     val profileHeaderSlotHeight = when {
-        profileHeaderHeight > 0.dp ->
-            (profileHeaderHeight * (1f - animatedCollapse)).coerceAtLeast(0.dp)
+        uiState.profileHeaderHeight > 0.dp ->
+            (uiState.profileHeaderHeight * (1f - animatedCollapse)).coerceAtLeast(0.dp)
         animatedCollapse >= 1f -> 0.dp
         else -> Dp.Unspecified
     }
@@ -384,14 +435,12 @@ fun UserProfileScreen(
         null
     }
     var webReader by remember { mutableStateOf<BiliWebReaderState?>(null) }
-    val compactHeaderVisible = animatedCollapse > 0.01f
     val profileListBottomPadding =
         contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve
 
-    StatusBarIconsEffect(darkIcons = compactHeaderVisible)
+    StatusBarIconsEffect(darkIcons = true)
 
     if (showSettings) {
-        BackHandler { showSettings = false }
         SettingsScreen(
             feedColumnCount = feedColumnCount,
             onFeedColumnCountChange = onFeedColumnCountChange,
@@ -408,7 +457,7 @@ fun UserProfileScreen(
     ) {
         Column(Modifier.fillMaxSize()) {
             PullToRefreshBox(
-                isRefreshing = refreshing,
+                isRefreshing = uiState.refreshing,
                 onRefresh = { refresh(keepContent = true) },
                 modifier = Modifier.fillMaxWidth().weight(1f),
             ) {
@@ -419,29 +468,28 @@ fun UserProfileScreen(
                             .height(compactBarHeight)
                             .graphicsLayer { clip = true },
                     ) {
-                        if (compactHeaderVisible) {
-                            Column(Modifier.fillMaxWidth()) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(topInset)
-                                        .background(Color.White),
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(compactBarContentHeight)
-                                        .background(Color.White)
-                                        .padding(
-                                            start = ProfileCompactBarStartPadding,
-                                            end = if (showFollowButton) 12.dp else if (enableSettings) 4.dp else 4.dp,
-                                        )
-                                        .graphicsLayer { alpha = animatedCollapse },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(ProfileCompactBarContentSpacing),
-                                ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(topInset)
+                                    .background(Color.White),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(compactBarContentHeight)
+                                    .background(Color.White)
+                                    .padding(
+                                        start = ProfileCompactBarStartPadding,
+                                        end = if (showFollowButton) 12.dp else if (enableSettings) 4.dp else 4.dp,
+                                    )
+                                    .graphicsLayer { alpha = animatedCollapse },
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(ProfileCompactBarContentSpacing),
+                            ) {
                                 RemoteImage(
-                                    url = profile.face,
+                                    url = uiState.profile.face,
                                     modifier = Modifier
                                         .size(ProfileCompactAvatarSize)
                                         .clip(CircleShape),
@@ -454,20 +502,18 @@ fun UserProfileScreen(
                                     verticalArrangement = Arrangement.Center,
                                 ) {
                                     ProfileAuthorNameRow(
-                                        name = profile.name.ifBlank { "UP主" },
-                                        level = profile.level,
+                                        name = uiState.profile.name.ifBlank { "UP主" },
+                                        level = uiState.profile.level,
                                         nameStyle = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = FontWeight.SemiBold,
                                         ),
-                                        levelIconWidth = ProfileCompactLevelIconWidth,
-                                        levelIconHeight = ProfileCompactLevelIconHeight,
                                     )
                                 }
                                 if (showFollowButton) {
                                     BilibiliFollowButton(
-                                        following = relation.following,
-                                        followerMe = relation.followerMe,
-                                        loading = followLoading,
+                                        following = uiState.relation.following,
+                                        followerMe = uiState.relation.followerMe,
+                                        loading = uiState.followLoading,
                                         compact = true,
                                         onClick = {
                                             val cred = credential ?: run {
@@ -475,10 +521,10 @@ fun UserProfileScreen(
                                                 return@BilibiliFollowButton
                                             }
                                             scope.launch {
-                                                followLoading = true
-                                                val previous = relation
-                                                val targetFollow = !relation.following
-                                                relation = relation.copy(following = targetFollow)
+                                                uiState.followLoading = true
+                                                val previous = uiState.relation
+                                                val targetFollow = !uiState.relation.following
+                                                uiState.relation = uiState.relation.copy(following = targetFollow)
                                                 runCatching {
                                                     api.modifyFollow(
                                                         mid = mid,
@@ -486,20 +532,20 @@ fun UserProfileScreen(
                                                         credential = cred,
                                                         referer = "https://space.bilibili.com/$mid",
                                                     ).getOrThrow()
-                                                    relation = api.getUserRelation(
+                                                    uiState.relation = api.getUserRelation(
                                                         mid = mid,
                                                         credential = cred,
                                                         referer = "https://space.bilibili.com/$mid",
                                                     )
                                                 }.onFailure {
-                                                    relation = previous
+                                                    uiState.relation = previous
                                                     Toast.makeText(
                                                         context,
                                                         it.message ?: "关注失败",
                                                         Toast.LENGTH_SHORT,
                                                     ).show()
                                                 }
-                                                followLoading = false
+                                                uiState.followLoading = false
                                             }
                                         },
                                     )
@@ -515,7 +561,6 @@ fun UserProfileScreen(
                                         )
                                     }
                                 }
-                            }
                             }
                         }
                     }
@@ -542,28 +587,36 @@ fun UserProfileScreen(
                                     val measured = with(density) {
                                         coordinates.size.height.toDp()
                                     }
-                                    if (measured != profileHeaderHeight) {
-                                        profileHeaderHeight = measured
+                                    if (measured != uiState.profileHeaderHeight) {
+                                        uiState.profileHeaderHeight = measured
                                     }
                                 },
                         ) {
                             UserProfileHeader(
-                                profile = profile,
-                                loadError = loadError,
+                                profile = uiState.profile,
+                                loadError = uiState.loadError,
                                 showFollowButton = showFollowButton,
-                                relation = relation,
-                                followLoading = followLoading,
+                                relation = uiState.relation,
+                                followLoading = uiState.followLoading,
                                 onOpenSettings = openSettings,
+                                onOpenRelationList = { tab ->
+                                    onOpenRelationList(
+                                        uiState.profile.name.ifBlank { seedName },
+                                        uiState.profile.face.ifBlank { seedFace },
+                                        uiState.profile.sign,
+                                        tab,
+                                    )
+                                },
                                 onFollowClick = {
                                     val cred = credential ?: run {
                                         onLoginRequired()
                                         return@UserProfileHeader
                                     }
                                     scope.launch {
-                                        followLoading = true
-                                        val previous = relation
-                                        val targetFollow = !relation.following
-                                        relation = relation.copy(following = targetFollow)
+                                        uiState.followLoading = true
+                                        val previous = uiState.relation
+                                        val targetFollow = !uiState.relation.following
+                                        uiState.relation = uiState.relation.copy(following = targetFollow)
                                         runCatching {
                                             api.modifyFollow(
                                                 mid = mid,
@@ -571,20 +624,20 @@ fun UserProfileScreen(
                                                 credential = cred,
                                                 referer = "https://space.bilibili.com/$mid",
                                             ).getOrThrow()
-                                            relation = api.getUserRelation(
+                                            uiState.relation = api.getUserRelation(
                                                 mid = mid,
                                                 credential = cred,
                                                 referer = "https://space.bilibili.com/$mid",
                                             )
                                         }.onFailure {
-                                            relation = previous
+                                            uiState.relation = previous
                                             Toast.makeText(
                                                 context,
                                                 it.message ?: "关注失败",
                                                 Toast.LENGTH_SHORT,
                                             ).show()
                                         }
-                                        followLoading = false
+                                        uiState.followLoading = false
                                     }
                                 },
                                 compactVisible = animatedCollapse < 0.5f,
@@ -603,8 +656,17 @@ fun UserProfileScreen(
                                 .fillMaxWidth()
                                 .background(MaterialTheme.colorScheme.surface),
                         ) {
-                            UserProfileContentTabs(
+                            UserProfileContentTabBar(
                                 scrollPosition = tabScrollPosition,
+                                postsSort = uiState.videosOrder,
+                                onPostsSortToggle = {
+                                    uiState.videosOrder = if (uiState.videosOrder == BiliUserVideoSort.LatestPublish) {
+                                        BiliUserVideoSort.MostViews
+                                    } else {
+                                        BiliUserVideoSort.LatestPublish
+                                    }
+                                    reloadVideosForSort()
+                                },
                                 onTabSelected = { tab ->
                                     val sameTab = tab == UserProfileContentTab.entries[pagerState.currentPage]
                                     if (sameTab) {
@@ -629,7 +691,7 @@ fun UserProfileScreen(
                                 },
                             )
 
-                            loadError?.let { error ->
+                            uiState.loadError?.let { error ->
                                 Text(
                                     text = error,
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -639,7 +701,7 @@ fun UserProfileScreen(
                             }
                         }
 
-                        if (loading && videos.isEmpty() && dynamics.isEmpty()) {
+                        if (uiState.loading && uiState.videos.isEmpty() && uiState.dynamics.isEmpty()) {
                             Box(
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = Alignment.Center,
@@ -668,7 +730,7 @@ fun UserProfileScreen(
                                             ),
                                             verticalArrangement = Arrangement.spacedBy(HomeFeedSingleColumnSpacing),
                                         ) {
-                                            if (videos.isEmpty()) {
+                                            if (uiState.videos.isEmpty()) {
                                                 item(key = "posts-empty") {
                                                     ProfileEmptyState(
                                                         title = "暂无投稿",
@@ -676,7 +738,7 @@ fun UserProfileScreen(
                                                     )
                                                 }
                                             } else {
-                                                items(videos, key = { it.bvid }) { video ->
+                                                items(uiState.videos, key = { it.bvid }) { video ->
                                                     VideoFeedCard(
                                                         video = video,
                                                         playStream = playUrls[video.bvid],
@@ -684,14 +746,15 @@ fun UserProfileScreen(
                                                         onClick = { onVideoClick(video) },
                                                         onEnsurePlayStream = { onEnsurePlayStream(video) },
                                                         overlayMetaOnCover = true,
+                                                        showAuthorInfo = false,
                                                     )
                                                 }
-                                                if (videosLoadingMore) {
+                                                if (uiState.videosLoadingMore) {
                                                     item(key = "posts-loading") {
                                                         ProfileLoadingMoreIndicator()
                                                     }
                                                 }
-                                                if (!videosHasMore && videos.isNotEmpty()) {
+                                                if (!uiState.videosHasMore && uiState.videos.isNotEmpty()) {
                                                     item(key = "posts-end") {
                                                         ProfileListEndHint()
                                                     }
@@ -714,7 +777,7 @@ fun UserProfileScreen(
                                             horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
                                             verticalItemSpacing = HomeFeedGridSpacing,
                                         ) {
-                                            if (videos.isEmpty()) {
+                                            if (uiState.videos.isEmpty()) {
                                                 item(key = "posts-empty", span = StaggeredGridItemSpan.FullLine) {
                                                     ProfileEmptyState(
                                                         title = "暂无投稿",
@@ -722,7 +785,7 @@ fun UserProfileScreen(
                                                     )
                                                 }
                                             } else {
-                                                items(videos, key = { it.bvid }) { video ->
+                                                items(uiState.videos, key = { it.bvid }) { video ->
                                                     VideoFeedCard(
                                                         video = video,
                                                         playStream = playUrls[video.bvid],
@@ -730,14 +793,15 @@ fun UserProfileScreen(
                                                         onClick = { onVideoClick(video) },
                                                         onEnsurePlayStream = { onEnsurePlayStream(video) },
                                                         gridStyle = true,
+                                                        showAuthorInfo = false,
                                                     )
                                                 }
-                                                if (videosLoadingMore) {
+                                                if (uiState.videosLoadingMore) {
                                                     item(key = "posts-loading", span = StaggeredGridItemSpan.FullLine) {
                                                         ProfileLoadingMoreIndicator()
                                                     }
                                                 }
-                                                if (!videosHasMore && videos.isNotEmpty()) {
+                                                if (!uiState.videosHasMore && uiState.videos.isNotEmpty()) {
                                                     item(key = "posts-end", span = StaggeredGridItemSpan.FullLine) {
                                                         ProfileListEndHint()
                                                     }
@@ -747,7 +811,7 @@ fun UserProfileScreen(
                                                 key = "posts-scroll-fill",
                                                 span = StaggeredGridItemSpan.FullLine,
                                             ) {
-                                                val fillHeight = profileHeaderHeight.coerceAtLeast(320.dp)
+                                                val fillHeight = uiState.profileHeaderHeight.coerceAtLeast(320.dp)
                                                 Spacer(
                                                     Modifier
                                                         .fillMaxWidth()
@@ -761,44 +825,47 @@ fun UserProfileScreen(
                                 UserProfileContentTab.Dynamics -> {
                                     LazyColumn(
                                         state = dynamicsListState,
-                                        modifier = Modifier.fillMaxSize(),
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(DynamicFeedPageBackground),
                                         contentPadding = PaddingValues(
+                                            top = 8.dp,
                                             bottom = 24.dp + profileListBottomPadding,
                                         ),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
-                                        if (dynamics.isEmpty()) {
+                                        if (uiState.dynamics.isEmpty()) {
                                             item(key = "dynamics-empty") {
                                                 ProfileEmptyState(
-                                                    title = if (dynamicsLoadingMore) "加载中" else "暂无动态",
+                                                    title = if (uiState.dynamicsLoadingMore) "加载中" else "暂无动态",
                                                     body = when {
-                                                        dynamicsLoadingMore -> "正在读取 TA 的动态…"
+                                                        uiState.dynamicsLoadingMore -> "正在读取 TA 的动态…"
                                                         else -> "下拉刷新后会从动态接口重新加载。"
                                                     },
                                                 )
                                             }
                                         } else {
-                                            items(dynamics, key = { it.id }) { item ->
+                                            items(uiState.dynamics, key = { it.id }) { item ->
                                                 DynamicFeedCard(
                                                     item = item,
                                                     onVideoClick = onVideoClick,
+                                                    onDynamicClick = onDynamicClick,
                                                     onLinkClick = { link ->
                                                         webReader = BiliWebReaderState(
                                                             url = link.url,
                                                             title = link.title,
                                                         )
                                                     },
-                                                    modifier = Modifier.padding(
-                                                        horizontal = 16.dp,
-                                                        vertical = 8.dp,
-                                                    ),
+                                                    modifier = Modifier
+                                                        .padding(horizontal = 12.dp),
                                                 )
                                             }
-                                            if (dynamicsLoadingMore) {
+                                            if (uiState.dynamicsLoadingMore) {
                                                 item(key = "dynamics-loading") {
                                                     ProfileLoadingMoreIndicator()
                                                 }
                                             }
-                                            if (!dynamicsHasMore && dynamics.isNotEmpty()) {
+                                            if (!uiState.dynamicsHasMore && uiState.dynamics.isNotEmpty()) {
                                                 item(key = "dynamics-end") {
                                                     ProfileListEndHint()
                                                 }
@@ -815,16 +882,6 @@ fun UserProfileScreen(
                     }
                 }
             }
-        }
-
-        if (compactHeaderVisible) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .fillMaxWidth()
-                    .height(topInset)
-                    .background(Color.White),
-            )
         }
 
         BiliWebReaderOverlay(
@@ -845,6 +902,7 @@ private fun UserProfileHeader(
     onFollowClick: () -> Unit,
     compactVisible: Boolean,
     onOpenSettings: (() -> Unit)? = null,
+    onOpenRelationList: ((UserRelationTab) -> Unit)? = null,
 ) {
     val avatarExposeAboveCard = ProfileHeaderAvatarFrameSize / 3f
 
@@ -871,13 +929,11 @@ private fun UserProfileHeader(
                             ),
                         ),
                 ) {
-                    if (profile.topPhoto.isNotBlank()) {
-                        RemoteImage(
-                            url = profile.topPhoto,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
+                    ProfileCoverBanner(
+                        coverUrls = profile.displayTopPhotos,
+                        modifier = Modifier.fillMaxSize(),
+                        onOpenSettings = if (onOpenSettings != null && compactVisible) onOpenSettings else null,
+                    )
                     if (compactVisible && showFollowButton) {
                         Row(
                             modifier = Modifier
@@ -892,22 +948,6 @@ private fun UserProfileHeader(
                                 followerMe = relation.followerMe,
                                 loading = followLoading,
                                 onClick = onFollowClick,
-                            )
-                        }
-                    }
-                    if (onOpenSettings != null && compactVisible) {
-                        IconButton(
-                            onClick = onOpenSettings,
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .statusBarsPadding()
-                                .padding(top = 4.dp, end = 6.dp)
-                                .size(40.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Settings,
-                                contentDescription = "设置",
-                                tint = Color.White,
                             )
                         }
                     }
@@ -977,12 +1017,18 @@ private fun UserProfileHeader(
                                 .padding(top = 8.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                         ) {
-                            ProfileStatItem("关注", profile.following)
-                            ProfileStatItem("粉丝", profile.follower)
+                            ProfileStatItem(
+                                label = "关注",
+                                value = profile.following,
+                                onClick = onOpenRelationList?.let { { it(UserRelationTab.Following) } },
+                            )
+                            ProfileStatItem(
+                                label = "粉丝",
+                                value = profile.follower,
+                                onClick = onOpenRelationList?.let { { it(UserRelationTab.Followers) } },
+                            )
                             ProfileStatItem("获赞", profile.likes)
-                            if (profile.videoCount > 0L) {
-                                ProfileStatItem("投稿", profile.videoCount)
-                            }
+                            ProfileStatItem("投稿", profile.videoCount)
                         }
 
                         loadError?.let {
@@ -1033,75 +1079,196 @@ private fun UserProfileHeader(
 }
 
 @Composable
-private fun UserProfileContentTabs(
-    scrollPosition: Float,
-    onTabSelected: (UserProfileContentTab) -> Unit,
+private fun ProfileCoverBanner(
+    coverUrls: List<String>,
+    modifier: Modifier = Modifier,
+    onOpenSettings: (() -> Unit)? = null,
 ) {
-    val tabs = UserProfileContentTab.entries
-    val accent = BiliPink
-    val density = LocalDensity.current
-    val indicatorWidth = 22.dp
-    val tabCentersPx = remember { FloatArray(tabs.size) { Float.NaN } }
-    var layoutReady by remember { mutableStateOf(false) }
-    val highlightedIndex = scrollPosition
-        .roundToInt()
-        .coerceIn(0, tabs.lastIndex)
+    val coverImages = remember(coverUrls) { BiliViewerImage.profileCoverImages(coverUrls) }
+    var viewerOpen by remember { mutableStateOf(false) }
+    var viewerIndex by remember { mutableStateOf(0) }
+    val coverPagerState = rememberPagerState(pageCount = { coverImages.size.coerceAtLeast(1) })
+    val statusBarTopInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
-    val indicatorCenterPx = if (!layoutReady || tabs.size == 1) {
-        tabCentersPx.firstOrNull { !it.isNaN() } ?: 0f
-    } else {
-        val position = scrollPosition.coerceIn(0f, tabs.lastIndex.toFloat())
-        val left = position.toInt()
-        val right = (left + 1).coerceAtMost(tabs.lastIndex)
-        val fraction = position - left
-        tabCentersPx[left] + (tabCentersPx[right] - tabCentersPx[left]) * fraction
-    }
-    val indicatorOffset = with(density) { indicatorCenterPx.toDp() - indicatorWidth / 2 }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp),
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(22.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            tabs.forEachIndexed { index, tab ->
-                val selected = index == highlightedIndex
-                Column(
+    Box(modifier = modifier) {
+        if (coverImages.isNotEmpty()) {
+            if (coverImages.size == 1) {
+                Box(
                     modifier = Modifier
-                        .onGloballyPositioned { coords ->
-                            tabCentersPx[index] = coords.positionInParent().x + coords.size.width / 2f
-                            if (!layoutReady && tabCentersPx.all { !it.isNaN() }) {
-                                layoutReady = true
-                            }
-                        }
-                        .clip(RoundedCornerShape(3.dp))
-                        .clickable { onTabSelected(tab) }
-                        .padding(horizontal = 2.dp, vertical = 2.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                        .fillMaxSize()
+                        .clickable {
+                            viewerIndex = 0
+                            viewerOpen = true
+                        },
                 ) {
-                    Text(
-                        text = tab.label,
-                        fontSize = 14.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    val image = coverImages[0]
+                    RemoteImage(
+                        url = image.largeUrl,
+                        fallbackUrls = image.downloadUrls.drop(1),
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
                     )
-                    Spacer(Modifier.height(3.dp))
+                }
+            } else {
+                HorizontalPager(
+                    state = coverPagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondViewportPageCount = 1,
+                ) { page ->
+                    val image = coverImages[page]
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable {
+                                viewerIndex = page
+                                viewerOpen = true
+                            },
+                    ) {
+                        RemoteImage(
+                            url = image.largeUrl,
+                            fallbackUrls = image.downloadUrls.drop(1),
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    coverImages.indices.forEach { index ->
+                        val selected = coverPagerState.currentPage == index
+                        Box(
+                            modifier = Modifier
+                                .size(if (selected) 7.dp else 6.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (selected) Color.White.copy(alpha = 0.95f)
+                                    else Color.White.copy(alpha = 0.45f),
+                                ),
+                        )
+                    }
                 }
             }
         }
 
-        if (layoutReady) {
-            Box(
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(statusBarTopInset + 28.dp)
+                .align(Alignment.TopCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.82f),
+                            Color.White.copy(alpha = 0.35f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+
+        if (onOpenSettings != null) {
+            IconButton(
+                onClick = onOpenSettings,
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .offset(x = indicatorOffset)
-                    .width(indicatorWidth)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(accent),
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 4.dp, end = 6.dp)
+                    .size(40.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Settings,
+                    contentDescription = "设置",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
+
+    if (viewerOpen && coverImages.isNotEmpty()) {
+        BiliFullscreenImageViewer(
+            images = coverImages,
+            initialIndex = viewerIndex.coerceIn(0, coverImages.lastIndex),
+            onDismiss = { viewerOpen = false },
+        )
+    }
+}
+
+@Composable
+private fun UserProfileContentTabBar(
+    scrollPosition: Float,
+    postsSort: BiliUserVideoSort,
+    onPostsSortToggle: () -> Unit,
+    onTabSelected: (UserProfileContentTab) -> Unit,
+) {
+    val tabs = UserProfileContentTab.entries
+    val showPostsSort = scrollPosition.roundToInt() == UserProfileContentTab.Posts.ordinal
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SlidingTextTabs(
+            labels = tabs.map { it.label },
+            scrollPosition = scrollPosition,
+            onTabSelected = { index -> onTabSelected(tabs[index]) },
+            modifier = Modifier.weight(1f),
+        )
+        if (showPostsSort) {
+            ProfileVideoSortToggle(
+                selected = postsSort,
+                onToggle = onPostsSortToggle,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProfileVideoSortToggle(
+    selected: BiliUserVideoSort,
+    onToggle: () -> Unit,
+) {
+    val metaColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.52f)
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = onToggle,
+            )
+            .padding(horizontal = 2.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        ProfileVideoSortLinesIcon(tint = metaColor)
+        Text(
+            text = selected.toggleLabel,
+            fontSize = 11.sp,
+            color = metaColor,
+        )
+    }
+}
+
+@Composable
+private fun ProfileVideoSortLinesIcon(
+    modifier: Modifier = Modifier,
+    tint: Color,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        repeat(3) {
+            Box(
+                Modifier
+                    .width(10.dp)
+                    .height(1.2.dp)
+                    .background(tint, RoundedCornerShape(1.dp)),
             )
         }
     }
@@ -1111,24 +1278,41 @@ private fun UserProfileContentTabs(
 private fun DynamicFeedCard(
     item: BiliDynamicItem,
     onVideoClick: (BiliVideoItem) -> Unit,
+    onDynamicClick: (BiliDynamicItem) -> Unit,
     onLinkClick: (BiliDynamicLink) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val openDetail = item.canOpenDetail
     Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .background(DynamicFeedCardBackground)
+            .then(
+                if (openDetail) {
+                    Modifier.clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = { onDynamicClick(item) },
+                    )
+                } else {
+                    Modifier
+                },
+            )
             .padding(12.dp),
     ) {
         if (item.text.isNotBlank()) {
-            Text(
+            BiliCommentText(
                 text = item.text,
+                emoticons = item.emoticons,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 8,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        val hasBodyContent = item.video != null ||
+            item.imageUrls.isNotEmpty() ||
+            item.link != null
         if (item.origin != null) {
             DynamicOriginBlock(
                 origin = item.origin,
@@ -1136,15 +1320,22 @@ private fun DynamicFeedCard(
                 onLinkClick = onLinkClick,
                 modifier = Modifier.padding(top = if (item.text.isNotBlank()) 10.dp else 0.dp),
             )
-        } else {
+        } else if (hasBodyContent) {
             DynamicContentBlock(
                 text = "",
+                emoticons = emptyMap(),
                 video = item.video,
                 imageUrls = item.imageUrls,
-                link = item.link,
+                link = if (item.video != null) null else item.link,
                 onVideoClick = onVideoClick,
                 onLinkClick = onLinkClick,
                 modifier = Modifier.padding(top = if (item.text.isNotBlank()) 10.dp else 0.dp),
+            )
+        } else if (item.text.isBlank()) {
+            Text(
+                text = "该动态暂无预览内容",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         DynamicFeedMetaRow(item = item)
@@ -1162,7 +1353,7 @@ private fun DynamicOriginBlock(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surface)
+            .background(DynamicFeedPageBackground)
             .padding(10.dp),
     ) {
         if (origin.authorName.isNotBlank()) {
@@ -1177,9 +1368,10 @@ private fun DynamicOriginBlock(
         }
         DynamicContentBlock(
             text = origin.text,
+            emoticons = origin.emoticons,
             video = origin.video,
             imageUrls = origin.imageUrls,
-            link = origin.link,
+            link = if (origin.video != null) null else origin.link,
             onVideoClick = onVideoClick,
             onLinkClick = onLinkClick,
             modifier = Modifier.padding(top = if (origin.authorName.isNotBlank()) 6.dp else 0.dp),
@@ -1190,6 +1382,7 @@ private fun DynamicOriginBlock(
 @Composable
 private fun DynamicContentBlock(
     text: String,
+    emoticons: Map<String, String>,
     video: BiliVideoItem?,
     imageUrls: List<String>,
     link: BiliDynamicLink?,
@@ -1199,8 +1392,9 @@ private fun DynamicContentBlock(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         if (text.isNotBlank()) {
-            Text(
+            BiliCommentText(
                 text = text,
+                emoticons = emoticons,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 6,
                 overflow = TextOverflow.Ellipsis,
@@ -1228,28 +1422,15 @@ private fun DynamicContentBlock(
             )
         }
         if (imageUrls.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        top = when {
-                            text.isNotBlank() || video != null || link != null -> 10.dp
-                            else -> 0.dp
-                        },
-                    ),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                imageUrls.take(3).forEach { url ->
-                    RemoteImage(
-                        url = url,
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(6.dp)),
-                        contentScale = ContentScale.Crop,
-                    )
-                }
-            }
+            BiliImageGrid(
+                images = remember(imageUrls) { BiliViewerImage.fromUrls(imageUrls) },
+                modifier = Modifier.padding(
+                    top = when {
+                        text.isNotBlank() || video != null || link != null -> 10.dp
+                        else -> 0.dp
+                    },
+                ),
+            )
         }
     }
 }
@@ -1260,36 +1441,54 @@ private fun DynamicVideoCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow),
-        verticalAlignment = Alignment.CenterVertically,
+            .clickable(onClick = onClick),
     ) {
-        RemoteImage(
-            url = video.coverUrl,
+        Box(
             modifier = Modifier
-                .width(120.dp)
-                .aspectRatio(16f / 10f)
-                .clip(RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)),
-            contentScale = ContentScale.Crop,
-        )
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(8.dp)),
         ) {
+            RemoteImage(
+                url = video.coverUrl,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+            if (video.durationSeconds > 0) {
+                Text(
+                    text = formatVideoDurationLabel(video.durationSeconds),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                )
+            }
+        }
+        if (video.title.isNotBlank()) {
             Text(
                 text = video.title,
+                modifier = Modifier.padding(top = 8.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        val metaParts = buildList {
+            if (video.viewCount > 0L) add("${formatBiliCount(video.viewCount)}播放")
+            if (video.danmakuCount > 0L) add("${formatBiliCount(video.danmakuCount)}弹幕")
+        }
+        if (metaParts.isNotEmpty()) {
             Text(
-                text = "${formatBiliCount(video.viewCount)}播放",
+                text = metaParts.joinToString(" · "),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
@@ -1364,6 +1563,13 @@ private fun DynamicFeedMetaRow(item: BiliDynamicItem) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (!item.ipLocation.isNullOrBlank()) {
+            Text(
+                text = "IP 属地：${item.ipLocation}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (item.likeCount > 0L) {
             Text(
                 text = "${formatBiliCount(item.likeCount)}赞",
@@ -1394,8 +1600,6 @@ private fun ProfileAuthorNameRow(
     level: Int,
     nameStyle: androidx.compose.ui.text.TextStyle,
     modifier: Modifier = Modifier,
-    levelIconWidth: Dp = 34.dp,
-    levelIconHeight: Dp = 22.dp,
 ) {
     Row(
         modifier = modifier,
@@ -1406,21 +1610,27 @@ private fun ProfileAuthorNameRow(
             style = nameStyle,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
         )
         if (level > 0) {
-            BiliUserLevelIcon(
-                level = level,
-                width = levelIconWidth,
-                height = levelIconHeight,
-            )
+            BiliUserLevelIcon(level = level)
         }
     }
 }
 
 @Composable
-private fun ProfileStatItem(label: String, value: Long) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun ProfileStatItem(
+    label: String,
+    value: Long,
+    onClick: (() -> Unit)? = null,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = if (onClick != null) {
+            Modifier.clickable(onClick = onClick)
+        } else {
+            Modifier
+        },
+    ) {
         Text(
             text = formatBiliCount(value),
             style = MaterialTheme.typography.titleMedium,

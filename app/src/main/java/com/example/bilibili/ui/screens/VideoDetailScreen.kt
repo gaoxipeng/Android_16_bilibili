@@ -42,6 +42,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -61,6 +62,7 @@ import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliUserProfile
 import com.example.bilibili.data.BiliVideoDetail
 import com.example.bilibili.data.BiliVideoItem
+import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.player.BilibiliVideoSurface
@@ -77,6 +79,7 @@ import com.example.bilibili.ui.components.BilibiliFollowButton
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoDetailTab
 import com.example.bilibili.ui.components.VideoDetailTabBar
+import com.example.bilibili.ui.components.imageviewer.BiliFullscreenImageViewer
 import com.example.bilibili.ui.format.formatBiliCommentTime
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.format.formatBiliPublishTime
@@ -95,6 +98,12 @@ private const val CommentPageSize = 20
 private val CommentRowOuterStart = 18.dp
 private val CommentAvatarSize = 34.dp
 private val CommentAuthorFontSize = 13.sp
+
+private data class CommentImageViewerRequest(
+    val images: List<BiliViewerImage>,
+    val initialIndex: Int,
+    val sourceBoundsByIndex: Map<Int, Rect>,
+)
 
 private fun placeholderAuthorCard(video: BiliVideoItem): BiliAuthorCard =
     BiliAuthorCard(
@@ -204,6 +213,7 @@ fun VideoDetailScreen(
     myMid: Long?,
     onLoginRequired: () -> Unit,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
+    playbackActive: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -227,6 +237,7 @@ fun VideoDetailScreen(
     var loadedSubReplies by remember(seedVideo.bvid) { mutableStateOf(mapOf<Long, List<BiliCommentItem>>()) }
     var subRepliesLoading by remember(seedVideo.bvid) { mutableStateOf(setOf<Long>()) }
     var subRepliesEnd by remember(seedVideo.bvid) { mutableStateOf(setOf<Long>()) }
+    var commentImageViewer by remember(seedVideo.bvid) { mutableStateOf<CommentImageViewerRequest?>(null) }
 
     val pagerState = rememberPagerState(initialPage = 0) { VideoDetailTab.entries.size }
     val tabScrollPosition by remember {
@@ -333,7 +344,7 @@ fun VideoDetailScreen(
             val alreadyLoaded = loadedSubReplies[rootId]?.size ?: 0
             val pn = alreadyLoaded / CommentPageSize + 1
             runCatching {
-                api.getCommentReplies(
+                api.getVideoCommentReplies(
                     aid = aid,
                     rootRpid = rootId,
                     bvid = bvid,
@@ -487,8 +498,12 @@ fun VideoDetailScreen(
         }
     }
 
-    LaunchedEffect(playbackKey) {
-        coordinator.requestInlinePlayback(playbackKey)
+    LaunchedEffect(playbackKey, playbackActive) {
+        if (playbackActive) {
+            coordinator.requestInlinePlayback(playbackKey)
+        } else {
+            coordinator.pauseForOverlay()
+        }
     }
 
     val currentDetail = detail
@@ -498,10 +513,13 @@ fun VideoDetailScreen(
 
     LightContentStatusBarEffect()
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
+    ) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
     ) {
         Box(
             modifier = Modifier
@@ -541,6 +559,7 @@ fun VideoDetailScreen(
                                     referer = "https://www.bilibili.com/video/${currentVideo.bvid}",
                                 )
                             },
+                            playbackEnabled = playbackActive,
                         )
                     } else if (currentStream != null) {
                         Box(Modifier.fillMaxSize())
@@ -732,6 +751,13 @@ fun VideoDetailScreen(
                                             comment = entry.comment,
                                             depth = 0,
                                             onAuthorClick = onAuthorClick,
+                                            onCommentImageClick = { pictures, index, bounds ->
+                                                commentImageViewer = CommentImageViewerRequest(
+                                                    images = pictures.map(BiliViewerImage::fromCommentPicture),
+                                                    initialIndex = index,
+                                                    sourceBoundsByIndex = mapOf(index to bounds),
+                                                )
+                                            },
                                         )
                                     }
                                     is CommentReplyEntry -> {
@@ -739,6 +765,13 @@ fun VideoDetailScreen(
                                             comment = entry.reply,
                                             depth = 1,
                                             onAuthorClick = onAuthorClick,
+                                            onCommentImageClick = { pictures, index, bounds ->
+                                                commentImageViewer = CommentImageViewerRequest(
+                                                    images = pictures.map(BiliViewerImage::fromCommentPicture),
+                                                    initialIndex = index,
+                                                    sourceBoundsByIndex = mapOf(index to bounds),
+                                                )
+                                            },
                                         )
                                     }
                                     is CommentReplyFooterEntry -> {
@@ -779,6 +812,16 @@ fun VideoDetailScreen(
                 }
             }
         }
+    }
+    commentImageViewer?.let { request ->
+        BiliFullscreenImageViewer(
+            images = request.images,
+            initialIndex = request.initialIndex,
+            sourceBoundsByIndex = request.sourceBoundsByIndex,
+            animateOpenFromSource = true,
+            onDismiss = { commentImageViewer = null },
+        )
+    }
     }
 }
 
@@ -917,6 +960,7 @@ private fun VideoCommentRow(
     comment: BiliCommentItem,
     depth: Int = 0,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
+    onCommentImageClick: (List<BiliCommentPicture>, Int, Rect) -> Unit = { _, _, _ -> },
 ) {
     val rowStart = CommentRowOuterStart + (depth * 24).dp
     val canOpenProfile = comment.authorMid > 0L
@@ -975,7 +1019,12 @@ private fun VideoCommentRow(
                 )
             }
             if (comment.pictures.isNotEmpty()) {
-                BiliCommentImageStrip(pictures = comment.pictures)
+                BiliCommentImageStrip(
+                    pictures = comment.pictures,
+                    onOpenViewer = { index, bounds ->
+                        onCommentImageClick(comment.pictures, index, bounds)
+                    },
+                )
             }
             Text(
                 text = buildList {

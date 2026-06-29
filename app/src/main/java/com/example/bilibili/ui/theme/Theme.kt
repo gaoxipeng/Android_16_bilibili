@@ -19,7 +19,9 @@ private val LightColorScheme = lightColorScheme(
     primary = BiliPink,
     secondary = BiliPinkDark,
     background = AppBackgroundLight,
-    surface = Color.White,
+    surface = AppSurfaceLight,
+    surfaceContainerLowest = AppBackgroundLight,
+    surfaceTint = Color.Transparent,
 )
 
 @Composable

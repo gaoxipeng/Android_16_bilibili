@@ -159,3 +159,27 @@ internal val ActionMenuOneRowHeight =
     ActionMenuCardInset * 2 + ActionMenuCapsuleHeight
 internal val ActionMenuTwoRowHeight =
     ActionMenuCardInset * 2 + ActionMenuCapsuleHeight * 2 + ActionMenuItemGap
+internal val ActionMenuThreeRowHeight =
+    ActionMenuCardInset * 2 + ActionMenuCapsuleHeight * 3 + ActionMenuItemGap * 2
+
+internal fun calculateActionMenuOffsetFromPointPx(
+    pressOffset: Offset,
+    screenWidthPx: Float,
+    screenHeightPx: Float,
+    menuWidthPx: Float,
+    menuHeightPx: Float,
+    marginPx: Float,
+    gapPx: Float,
+): ActionMenuPlacement {
+    val maxX = (screenWidthPx - menuWidthPx - marginPx).coerceAtLeast(marginPx)
+    val x = (pressOffset.x - menuWidthPx / 2f).coerceIn(marginPx, maxX)
+    val showBelow = pressOffset.y + gapPx + menuHeightPx <= screenHeightPx - marginPx
+    val targetY = if (showBelow) {
+        pressOffset.y + gapPx
+    } else {
+        pressOffset.y - gapPx - menuHeightPx
+    }
+    val maxY = (screenHeightPx - menuHeightPx - marginPx).coerceAtLeast(marginPx)
+    val y = targetY.coerceIn(marginPx, maxY)
+    return ActionMenuPlacement(IntOffset(x.roundToInt(), y.roundToInt()), showBelow)
+}

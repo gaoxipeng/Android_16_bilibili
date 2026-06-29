@@ -68,6 +68,7 @@ data class BiliVideoItem(
     val durationSeconds: Int,
     val description: String = "",
     val cid: Long = 0L,
+    val publishTimeSeconds: Long = 0L,
 )
 
 data class BiliLiveRoom(
@@ -91,7 +92,11 @@ data class BiliUserProfile(
     val likes: Long = 0,
     val videoCount: Long = 0,
     val topPhoto: String = "",
-)
+    val topPhotos: List<String> = emptyList(),
+) {
+    val displayTopPhotos: List<String>
+        get() = topPhotos.ifEmpty { listOfNotNull(topPhoto.takeIf { it.isNotBlank() }) }
+}
 
 data class BiliVideoDetail(
     val video: BiliVideoItem,
@@ -105,6 +110,28 @@ data class BiliAuthorRelation(
     val followerMe: Boolean = false,
 )
 
+enum class UserRelationTab(val label: String) {
+    Following("关注"),
+    Followers("粉丝"),
+}
+
+data class BiliRelationUser(
+    val mid: Long,
+    val name: String,
+    val face: String,
+    val sign: String,
+    val relation: BiliAuthorRelation,
+    val fanCount: Long = 0L,
+    val ipLocation: String? = null,
+)
+
+data class BiliRelationUserPage(
+    val users: List<BiliRelationUser>,
+    val hasMore: Boolean = false,
+    val total: Long = 0L,
+    val errorMessage: String? = null,
+)
+
 data class BiliAuthorCard(
     val profile: BiliUserProfile,
     val relation: BiliAuthorRelation = BiliAuthorRelation(),
@@ -113,6 +140,11 @@ data class BiliAuthorCard(
 enum class BiliCommentSort(val mode: Int, val headerLabel: String, val toggleLabel: String) {
     Hot(3, "热门评论", "按热度"),
     Time(2, "最新评论", "按时间"),
+}
+
+enum class BiliUserVideoSort(val order: String, val toggleLabel: String) {
+    LatestPublish("pubdate", "最新发布"),
+    MostViews("click", "播放最多"),
 }
 
 data class BiliCommentPage(
@@ -166,6 +198,7 @@ data class BiliDynamicLink(
 data class BiliDynamicOrigin(
     val authorName: String,
     val text: String = "",
+    val emoticons: Map<String, String> = emptyMap(),
     val video: BiliVideoItem? = null,
     val imageUrls: List<String> = emptyList(),
     val link: BiliDynamicLink? = null,
@@ -174,15 +207,27 @@ data class BiliDynamicOrigin(
 data class BiliDynamicItem(
     val id: String,
     val text: String,
+    val emoticons: Map<String, String> = emptyMap(),
     val publishTimeSeconds: Long,
     val video: BiliVideoItem? = null,
     val imageUrls: List<String> = emptyList(),
     val link: BiliDynamicLink? = null,
     val origin: BiliDynamicOrigin? = null,
+    val authorMid: Long = 0L,
+    val authorName: String = "",
+    val authorFace: String = "",
+    val authorLevel: Int = 0,
+    val ipLocation: String? = null,
+    val commentOid: Long = 0L,
+    val commentType: Int = 0,
+    val dynamicType: String = "",
     val likeCount: Long = 0L,
     val commentCount: Long = 0L,
     val repostCount: Long = 0L,
-)
+) {
+    val canOpenDetail: Boolean
+        get() = commentOid > 0L && commentType > 0 && video == null
+}
 
 data class BiliDynamicFeedPage(
     val items: List<BiliDynamicItem>,

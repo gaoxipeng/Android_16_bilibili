@@ -15,6 +15,7 @@ import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -30,11 +31,19 @@ fun BiliCommentText(
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     mentionColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
 ) {
     val phrases = remember(emoticons) { emoticons.keys.sortedByDescending { it.length } }
     val hasMentions = remember(text) { MentionPattern.containsMatchIn(text) }
     if (emoticons.isEmpty() && !hasMentions) {
-        Text(text = text, style = style, modifier = modifier)
+        Text(
+            text = text,
+            style = style,
+            modifier = modifier,
+            maxLines = maxLines,
+            overflow = overflow,
+        )
         return
     }
 
@@ -87,5 +96,7 @@ fun BiliCommentText(
         inlineContent = inlineContent,
         style = style,
         modifier = modifier,
+        maxLines = maxLines,
+        overflow = overflow,
     )
 }

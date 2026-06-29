@@ -7,9 +7,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -35,6 +36,9 @@ import com.example.bilibili.data.BiliCommentSort
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.theme.BiliPink
 import kotlin.math.roundToInt
+
+private val VideoDetailTabBarHeight = 36.dp
+private val VideoDetailTabIndicatorHeight = 2.dp
 
 enum class VideoDetailTab(val label: String) {
     Intro("简介"),
@@ -73,18 +77,26 @@ fun VideoDetailTabBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .height(VideoDetailTabBarHeight)
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(modifier = Modifier.weight(1f)) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+        ) {
             Row(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight(),
                 horizontalArrangement = Arrangement.spacedBy(22.dp),
-                verticalAlignment = Alignment.Top,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 VideoDetailTab.entries.forEachIndexed { index, tab ->
                     val selected = scrollPosition.roundToInt()
                         .coerceIn(0, VideoDetailTab.entries.lastIndex) == index
-                    Column(
+                    Box(
                         modifier = Modifier
                             .onGloballyPositioned { coordinates ->
                                 val width = with(density) { coordinates.size.width.toDp() }
@@ -96,8 +108,8 @@ fun VideoDetailTabBar(
                             }
                             .clip(RoundedCornerShape(3.dp))
                             .clickable { onTabSelected(tab) }
-                            .padding(horizontal = 2.dp, vertical = 4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                            .padding(horizontal = 2.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             text = when (tab) {
@@ -114,7 +126,6 @@ fun VideoDetailTabBar(
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             color = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(5.dp))
                     }
                 }
             }
@@ -125,65 +136,23 @@ fun VideoDetailTabBar(
                         .align(Alignment.BottomStart)
                         .offset(x = indicatorOffset)
                         .width(indicatorWidth)
-                        .height(2.dp)
+                        .height(VideoDetailTabIndicatorHeight)
                         .clip(RoundedCornerShape(999.dp))
                         .background(accent),
                 )
             }
         }
 
-        if (showCommentSort) {
-            CommentSortToggle(
-                selected = commentSort,
-                onToggle = onCommentSortToggle,
-            )
-        }
-    }
-}
-
-@Composable
-private fun CommentSortToggle(
-    selected: BiliCommentSort,
-    onToggle: () -> Unit,
-) {
-    val metaColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.52f)
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() },
-                onClick = onToggle,
-            )
-            .padding(horizontal = 2.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        CommentSortLinesIcon(tint = metaColor)
-        Text(
-            text = selected.toggleLabel,
-            fontSize = 11.sp,
-            color = metaColor,
-        )
-    }
-}
-
-@Composable
-private fun CommentSortLinesIcon(
-    modifier: Modifier = Modifier,
-    tint: Color,
-) {
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        repeat(3) {
-            Box(
-                Modifier
-                    .width(10.dp)
-                    .height(1.2.dp)
-                    .background(tint, RoundedCornerShape(1.dp)),
-            )
+        Box(
+            modifier = Modifier.size(width = 72.dp, height = VideoDetailTabBarHeight),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            if (showCommentSort) {
+                BiliCommentSortToggle(
+                    selected = commentSort,
+                    onToggle = onCommentSortToggle,
+                )
+            }
         }
     }
 }

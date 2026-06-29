@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,6 +30,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliPlayStream
+import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.BiliDynamicItem
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliAccountStore
 import com.example.bilibili.data.BilibiliApiClient
@@ -38,6 +41,7 @@ import com.example.bilibili.data.BilibiliPlayerPreferences
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.data.BilibiliWebSession
 import com.example.bilibili.data.StoredBilibiliAccount
+import com.example.bilibili.data.UserRelationTab
 import com.example.bilibili.player.BilibiliVideoSurface
 import com.example.bilibili.player.LocalVideoPeekController
 import com.example.bilibili.player.LocalBilibiliCredential
@@ -50,20 +54,23 @@ import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.FeedRefreshHintOverlay
 import com.example.bilibili.ui.components.NavAnimatedOverlay
 import com.example.bilibili.ui.components.feedRefreshHintMessage
+import com.example.bilibili.ui.components.imageviewer.BiliImageSaveHintController
+import com.example.bilibili.ui.components.imageviewer.BiliImageSaveHintOverlay
+import com.example.bilibili.ui.components.imageviewer.LocalBiliImageSaveHint
 import com.example.bilibili.ui.FeedTabReselectController
 import com.example.bilibili.ui.LocalFeedTabForReselect
 import com.example.bilibili.ui.LocalFeedTabReselectController
 import com.example.bilibili.ui.rememberFeedTabReselectController
 import com.example.bilibili.ui.screens.FollowingScreen
 import com.example.bilibili.ui.screens.HistoryScreen
-import com.example.bilibili.ui.screens.HistoryMenuOverlay
-import com.example.bilibili.ui.screens.rememberHistoryMenuController
 import com.example.bilibili.ui.screens.HomeScreen
 import com.example.bilibili.ui.screens.HomeSearchCapsule
 import com.example.bilibili.ui.screens.HotScreen
 import com.example.bilibili.ui.screens.LoginSheet
 import com.example.bilibili.ui.screens.SearchScreen
 import com.example.bilibili.ui.screens.UserProfileScreen
+import com.example.bilibili.ui.screens.UserRelationListScreen
+import com.example.bilibili.ui.screens.DynamicDetailScreen
 import com.example.bilibili.ui.screens.VideoDetailScreen
 import com.example.bilibili.ui.screens.MineScreen
 import com.example.bilibili.ui.liquidglass.LocalLiquidMenuBackdrop
@@ -72,13 +79,13 @@ import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import com.example.bilibili.ui.navigation.AppNavController
+import com.example.bilibili.ui.navigation.AppNavEntry
+import com.example.bilibili.ui.navigation.findVideoDetail
+import com.example.bilibili.ui.navigation.stableKey
+import com.example.bilibili.ui.navigation.lastVideoDetail
 import kotlinx.coroutines.launch
-
-private data class UserProfileTarget(
-    val mid: Long,
-    val name: String = "",
-    val face: String = "",
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,7 +103,9 @@ fun BilibiliApp() {
     val coordinator = remember(playerPreferences) {
         VideoPlaybackCoordinator(
             initialDanmakuVisible = playerPreferences.isDanmakuVisible(),
+            initialDanmakuSettings = playerPreferences.readDanmakuSettings(),
             persistDanmakuVisible = playerPreferences::setDanmakuVisible,
+            persistDanmakuSettings = playerPreferences::setDanmakuSettings,
         )
     }
     val videoPeekController = remember { VideoPeekController() }
@@ -129,19 +138,19 @@ fun BilibiliApp() {
     val playUrls = remember { mutableStateMapOf<String, BiliPlayStream>() }
     var activeAccount by remember { mutableStateOf(accountStore.getActiveAccount()) }
     var showLoginSheet by remember { mutableStateOf(false) }
-    var detailVideo by remember { mutableStateOf<BiliVideoItem?>(null) }
-    var visitedProfile by remember { mutableStateOf<UserProfileTarget?>(null) }
-    var searchOpen by remember { mutableStateOf(false) }
+    val navController = remember { AppNavController() }
     var feedRefreshHint by remember { mutableStateOf<String?>(null) }
     var feedSearchVisible by remember { mutableStateOf(true) }
 
     val bottomBarBackdrop = rememberLayerBackdrop()
-    val historyMenuController = rememberHistoryMenuController()
     val homePullRefreshState = rememberPullToRefreshState()
     val followPullRefreshState = rememberPullToRefreshState()
     val hotPullRefreshState = rememberPullToRefreshState()
+    val historyPullRefreshState = rememberPullToRefreshState()
+    var historyPullRefreshing by remember { mutableStateOf(false) }
     val watchHistoryReporter = remember(api) { WatchHistoryReporter(api) }
     val feedTabReselectController = rememberFeedTabReselectController()
+    val imageSaveHintController = remember { BiliImageSaveHintController() }
 
     fun handleBottomTabClick(tab: MainTab) {
         if (tab == selectedTab && tab in FeedTabReselectController.FEED_RESELECT_TABS) {
@@ -167,6 +176,7 @@ fun BilibiliApp() {
     }.getOrNull()
 
     fun openVideoDetail(video: BiliVideoItem, progressSeconds: Int = 0) {
+        navController.push(AppNavEntry.VideoDetail(video, progressSeconds))
         scope.launch {
             coordinator.stopPlayback()
             if (progressSeconds > 0) {
@@ -176,39 +186,62 @@ fun BilibiliApp() {
                 )
             }
             resolvePlayUrl(video)
-            detailVideo = video
         }
     }
 
-    fun closeVideoDetail() {
-        coordinator.stopPlayback()
-        detailVideo = null
+    fun openDynamicDetail(item: BiliDynamicItem) {
+        navController.push(AppNavEntry.DynamicDetail(item))
+    }
+
+    fun popNavEntry() {
+        when (navController.pop()) {
+            is AppNavEntry.VideoDetail -> coordinator.stopPlayback()
+            is AppNavEntry.UserProfile -> {
+                navController.stack.lastVideoDetail()?.let { entry ->
+                    coordinator.requestInlinePlayback(
+                        videoPlaybackKey(entry.video.bvid, ownerId = "detail"),
+                    )
+                }
+            }
+            AppNavEntry.Search,
+            is AppNavEntry.DynamicDetail,
+            is AppNavEntry.UserRelationList,
+            null -> Unit
+        }
     }
 
     fun openUserProfile(mid: Long, name: String = "", face: String = "") {
         if (mid <= 0L) return
         coordinator.pauseForOverlay()
         videoPeekController.cancel()
-        visitedProfile = UserProfileTarget(mid = mid, name = name, face = face)
+        navController.push(AppNavEntry.UserProfile(mid = mid, name = name, face = face))
     }
 
-    fun closeUserProfile() {
-        visitedProfile = null
-        detailVideo?.let { video ->
-            coordinator.requestInlinePlayback(
-                videoPlaybackKey(video.bvid, ownerId = "detail"),
-            )
-        }
+    fun openUserRelationList(
+        mid: Long,
+        name: String = "",
+        face: String = "",
+        sign: String = "",
+        initialTab: UserRelationTab,
+    ) {
+        if (mid <= 0L) return
+        coordinator.pauseForOverlay()
+        videoPeekController.cancel()
+        navController.push(
+            AppNavEntry.UserRelationList(
+                mid = mid,
+                name = name,
+                face = face,
+                sign = sign,
+                initialTab = initialTab,
+            ),
+        )
     }
 
     fun openSearch() {
         coordinator.pauseForOverlay()
         videoPeekController.cancel()
-        searchOpen = true
-    }
-
-    fun closeSearch() {
-        searchOpen = false
+        navController.push(AppNavEntry.Search)
     }
 
     fun persistHomeFeedCache() {
@@ -224,6 +257,12 @@ fun BilibiliApp() {
     }
 
     fun refreshHome(showRefreshHint: Boolean = false) {
+        if (activeAccount == null) {
+            homeVideos = emptyList()
+            homeError = null
+            homeHasMore = false
+            return
+        }
         scope.launch {
             val previousItems = homeVideos
             homeLoading = true
@@ -359,10 +398,12 @@ fun BilibiliApp() {
     }
 
     LaunchedEffect(Unit) {
-        if (cachedHomeFeed == null) {
-            refreshHome()
+        if (activeAccount != null) {
+            if (cachedHomeFeed == null) {
+                refreshHome()
+            }
+            refreshFollow()
         }
-        if (activeAccount != null) refreshFollow()
         refreshHot()
     }
 
@@ -400,58 +441,58 @@ fun BilibiliApp() {
     }
 
     val fullscreenKey = coordinator.fullscreenKey
-    val showFeedSearchBar = detailVideo == null && !searchOpen && when (selectedTab) {
-        MainTab.Home -> true
+    val navStack = navController.stack
+    val navOverlayOpen = navController.hasOverlay
+    val topVideoDetailEntry = navStack.lastVideoDetail()
+    val showFeedSearchBar = !navOverlayOpen && when (selectedTab) {
+        MainTab.Home -> activeAccount != null
         MainTab.Following -> activeAccount != null
         MainTab.Hot -> true
         else -> false
     }
-    val feedPullRefreshVisible = detailVideo == null && !searchOpen && when (selectedTab) {
-        MainTab.Home -> true
+    val feedPullRefreshVisible = !navOverlayOpen && when (selectedTab) {
+        MainTab.Home -> activeAccount != null
         MainTab.Following -> activeAccount != null
         MainTab.Hot -> true
+        MainTab.History -> activeAccount != null
         else -> false
     }
     val feedPullRefreshing = when (selectedTab) {
         MainTab.Home -> homeLoading
         MainTab.Following -> followLoading
         MainTab.Hot -> hotLoading
+        MainTab.History -> historyPullRefreshing
         else -> false
     }
     val feedPullRefreshState = when (selectedTab) {
         MainTab.Home -> homePullRefreshState
         MainTab.Following -> followPullRefreshState
         MainTab.Hot -> hotPullRefreshState
+        MainTab.History -> historyPullRefreshState
         else -> homePullRefreshState
     }
-    val fullscreenVideo = remember(fullscreenKey, detailVideo, homeVideos, followVideos, hotVideos) {
+    val fullscreenVideo = remember(fullscreenKey, navStack, homeVideos, followVideos, hotVideos) {
         val bvid = fullscreenKey?.substringAfter(":") ?: return@remember null
-        when {
-            detailVideo?.bvid == bvid -> detailVideo
-            else -> {
+        navStack.findVideoDetail(bvid)
+            ?: run {
                 val all = homeVideos + followVideos + hotVideos
                 all.firstOrNull { it.bvid == bvid }
             }
-        }
     }
 
-    BackHandler(enabled = fullscreenKey != null && detailVideo != null) {
+    BackHandler(enabled = fullscreenKey != null && topVideoDetailEntry != null) {
         coordinator.closeFullscreen()
     }
 
-    BackHandler(enabled = visitedProfile != null) {
-        closeUserProfile()
+    BackHandler(
+        enabled = navOverlayOpen &&
+            fullscreenKey == null &&
+            videoPeekController.activeRequest == null,
+    ) {
+        popNavEntry()
     }
 
-    BackHandler(enabled = searchOpen && visitedProfile == null && detailVideo == null) {
-        closeSearch()
-    }
-
-    BackHandler(enabled = detailVideo != null && fullscreenKey == null && visitedProfile == null) {
-        closeVideoDetail()
-    }
-
-    BackHandler(enabled = fullscreenKey != null && videoPeekController.activeRequest == null && detailVideo == null) {
+    BackHandler(enabled = fullscreenKey != null && videoPeekController.activeRequest == null && topVideoDetailEntry == null) {
         coordinator.closeFullscreen()
     }
 
@@ -460,6 +501,7 @@ fun BilibiliApp() {
         LocalVideoPeekController provides videoPeekController,
         LocalBilibiliCredential provides activeAccount?.credential,
         LocalWatchHistoryReporter provides watchHistoryReporter,
+        LocalBiliImageSaveHint provides imageSaveHintController,
     ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -485,6 +527,8 @@ fun BilibiliApp() {
                 when (selectedTab) {
                 MainTab.Home -> FeedTabReselectScope(MainTab.Home, feedTabReselectController) {
                     HomeScreen(
+                    loggedIn = activeAccount != null,
+                    onLoginClick = { showLoginSheet = true },
                     videos = homeVideos,
                     playUrls = playUrls,
                     loading = homeLoading,
@@ -576,7 +620,9 @@ fun BilibiliApp() {
                         openVideoDetail(video, progressSeconds)
                     },
                     contentPadding = padding,
-                    menuController = historyMenuController,
+                    pullRefreshState = historyPullRefreshState,
+                    showEmbeddedPullRefreshIndicator = false,
+                    onPullRefreshingChange = { historyPullRefreshing = it },
                     )
                 }
                 MainTab.Mine -> {
@@ -596,6 +642,7 @@ fun BilibiliApp() {
                         onVideoClick = { video -> openVideoDetail(video) },
                         onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
                         onLoginRequired = { showLoginSheet = true },
+                        onOpenRelationList = ::openUserRelationList,
                         contentPadding = padding,
                         feedColumnCount = feedColumnCount,
                         onFeedColumnCountChange = { count ->
@@ -608,74 +655,27 @@ fun BilibiliApp() {
             }
             }
 
-            detailVideo?.let { video ->
-                VideoDetailScreen(
-                    seedVideo = video,
-                    playStream = playUrls[video.bvid],
-                    api = api,
-                    coordinator = coordinator,
-                    credential = credential(),
-                    myMid = activeAccount?.uid?.toLongOrNull(),
-                    onLoginRequired = { showLoginSheet = true },
-                    onAuthorClick = { profile ->
-                        openUserProfile(
-                            mid = profile.mid,
-                            name = profile.name,
-                            face = profile.face,
-                        )
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .zIndex(90f),
-                )
-            }
-
-            NavAnimatedOverlay(
-                target = if (searchOpen) Unit else null,
-                modifier = Modifier.fillMaxSize().zIndex(92f),
-            ) {
-                SearchScreen(
-                    api = api,
-                    credential = credential(),
-                    playUrls = playUrls,
-                    coordinator = coordinator,
-                    onClose = ::closeSearch,
-                    onVideoClick = { video ->
-                        closeSearch()
-                        openVideoDetail(video)
-                    },
-                    onUserClick = { mid, name, face -> openUserProfile(mid, name, face) },
-                    onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-
-            NavAnimatedOverlay(
-                target = visitedProfile,
-                modifier = Modifier.fillMaxSize().zIndex(95f),
-            ) { target ->
-                val myMid = activeAccount?.uid?.toLongOrNull()
-                UserProfileScreen(
-                    mid = target.mid,
-                    seedName = target.name,
-                    seedFace = target.face,
-                    api = api,
-                    credential = credential(),
-                    myMid = myMid,
-                    playUrls = playUrls,
-                    coordinator = coordinator,
-                    onVideoClick = { item -> openVideoDetail(item) },
-                    onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                    onLoginRequired = { showLoginSheet = true },
-                    enableSettings = myMid != null && myMid == target.mid,
-                    feedColumnCount = feedColumnCount,
-                    onFeedColumnCountChange = { count ->
-                        feedColumnCount = count
-                        feedLayoutStore.writeColumnCount(count)
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            AppNavStackLayers(
+                navStack = navStack,
+                api = api,
+                credential = credential(),
+                myMid = activeAccount?.uid?.toLongOrNull(),
+                playUrls = playUrls,
+                coordinator = coordinator,
+                feedColumnCount = feedColumnCount,
+                onFeedColumnCountChange = { count ->
+                    feedColumnCount = count
+                    feedLayoutStore.writeColumnCount(count)
+                },
+                contentPadding = padding,
+                onPopNav = ::popNavEntry,
+                onOpenVideo = ::openVideoDetail,
+                onOpenProfile = ::openUserProfile,
+                onOpenDynamic = ::openDynamicDetail,
+                onOpenRelationList = ::openUserRelationList,
+                onLoginRequired = { showLoginSheet = true },
+                onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
+            )
 
             if (fullscreenKey != null && fullscreenVideo != null && videoPeekController.activeRequest == null) {
                 val stream = playUrls[fullscreenVideo.bvid]
@@ -736,14 +736,6 @@ fun BilibiliApp() {
                 )
             }
 
-            if (selectedTab == MainTab.History && detailVideo == null && !searchOpen) {
-                HistoryMenuOverlay(
-                    controller = historyMenuController,
-                    backdrop = bottomBarBackdrop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-
             if (feedPullRefreshVisible) {
                 PullToRefreshDefaults.Indicator(
                     modifier = Modifier
@@ -766,7 +758,7 @@ fun BilibiliApp() {
                 )
             }
 
-            if (detailVideo == null && !searchOpen) {
+            if (!navOverlayOpen) {
                 FeedRefreshHintOverlay(
                     message = feedRefreshHint,
                     onDismiss = { feedRefreshHint = null },
@@ -774,7 +766,11 @@ fun BilibiliApp() {
                 )
             }
 
-            if (detailVideo == null && !searchOpen) {
+            BiliImageSaveHintOverlay(
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+
+            if (!navOverlayOpen) {
                 BilibiliLiquidBottomBar(
                 selectedTab = selectedTab,
                 onTabClick = ::handleBottomTabClick,
@@ -806,6 +802,164 @@ fun BilibiliApp() {
             persistLogin()
         },
     )
+    }
+}
+
+@Composable
+private fun AppNavStackLayers(
+    navStack: List<AppNavEntry>,
+    api: BilibiliApiClient,
+    credential: BilibiliCredential?,
+    myMid: Long?,
+    playUrls: Map<String, BiliPlayStream>,
+    coordinator: VideoPlaybackCoordinator,
+    feedColumnCount: Int,
+    onFeedColumnCountChange: (Int) -> Unit,
+    contentPadding: PaddingValues,
+    onPopNav: () -> Unit,
+    onOpenVideo: (BiliVideoItem, Int) -> Unit,
+    onOpenProfile: (Long, String, String) -> Unit,
+    onOpenDynamic: (BiliDynamicItem) -> Unit,
+    onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
+    onLoginRequired: () -> Unit,
+    onEnsurePlayStream: (BiliVideoItem) -> Unit,
+) {
+    navStack.forEachIndexed { index, entry ->
+        key(entry.stableKey(index)) {
+            NavAnimatedOverlay(
+                target = entry,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(90f + index),
+            ) {
+                AppNavEntryContent(
+                    entry = it,
+                    isActive = index == navStack.lastIndex,
+                    api = api,
+                    credential = credential,
+                    myMid = myMid,
+                    playUrls = playUrls,
+                    coordinator = coordinator,
+                    feedColumnCount = feedColumnCount,
+                    onFeedColumnCountChange = onFeedColumnCountChange,
+                    contentPadding = contentPadding,
+                    onPopNav = onPopNav,
+                    onOpenVideo = onOpenVideo,
+                    onOpenProfile = onOpenProfile,
+                    onOpenDynamic = onOpenDynamic,
+                    onOpenRelationList = onOpenRelationList,
+                    onLoginRequired = onLoginRequired,
+                    onEnsurePlayStream = onEnsurePlayStream,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppNavEntryContent(
+    entry: AppNavEntry,
+    isActive: Boolean,
+    api: BilibiliApiClient,
+    credential: BilibiliCredential?,
+    myMid: Long?,
+    playUrls: Map<String, BiliPlayStream>,
+    coordinator: VideoPlaybackCoordinator,
+    feedColumnCount: Int,
+    onFeedColumnCountChange: (Int) -> Unit,
+    contentPadding: PaddingValues,
+    onPopNav: () -> Unit,
+    onOpenVideo: (BiliVideoItem, Int) -> Unit,
+    onOpenProfile: (Long, String, String) -> Unit,
+    onOpenDynamic: (BiliDynamicItem) -> Unit,
+    onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
+    onLoginRequired: () -> Unit,
+    onEnsurePlayStream: (BiliVideoItem) -> Unit,
+) {
+    when (entry) {
+        AppNavEntry.Search -> {
+            SearchScreen(
+                api = api,
+                credential = credential,
+                playUrls = playUrls,
+                coordinator = coordinator,
+                onClose = onPopNav,
+                onVideoClick = { video -> onOpenVideo(video, 0) },
+                onUserClick = { mid, name, face -> onOpenProfile(mid, name, face) },
+                onEnsurePlayStream = onEnsurePlayStream,
+                feedColumnCount = feedColumnCount,
+                handleSystemBack = isActive,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        is AppNavEntry.VideoDetail -> {
+            VideoDetailScreen(
+                seedVideo = entry.video,
+                playStream = playUrls[entry.video.bvid],
+                api = api,
+                coordinator = coordinator,
+                credential = credential,
+                myMid = myMid,
+                onLoginRequired = onLoginRequired,
+                onAuthorClick = { profile ->
+                    onOpenProfile(profile.mid, profile.name, profile.face)
+                },
+                playbackActive = isActive,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        is AppNavEntry.UserProfile -> {
+            UserProfileScreen(
+                mid = entry.mid,
+                seedName = entry.name,
+                seedFace = entry.face,
+                api = api,
+                credential = credential,
+                myMid = myMid,
+                playUrls = playUrls,
+                coordinator = coordinator,
+                onVideoClick = { item -> onOpenVideo(item, 0) },
+                onDynamicClick = onOpenDynamic,
+                onEnsurePlayStream = onEnsurePlayStream,
+                onLoginRequired = onLoginRequired,
+                onOpenRelationList = { name, face, sign, tab ->
+                    onOpenRelationList(entry.mid, name, face, sign, tab)
+                },
+                enableSettings = myMid != null && myMid == entry.mid,
+                feedColumnCount = feedColumnCount,
+                onFeedColumnCountChange = onFeedColumnCountChange,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        is AppNavEntry.DynamicDetail -> {
+            DynamicDetailScreen(
+                item = entry.item,
+                api = api,
+                credential = credential,
+                onBack = onPopNav,
+                onAuthorClick = { profile ->
+                    onOpenProfile(profile.mid, profile.name, profile.face)
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        is AppNavEntry.UserRelationList -> {
+            UserRelationListScreen(
+                hostMid = entry.mid,
+                hostName = entry.name,
+                hostFace = entry.face,
+                hostSign = entry.sign,
+                initialTab = entry.initialTab,
+                api = api,
+                credential = credential,
+                myMid = myMid,
+                onBack = onPopNav,
+                onUserClick = { mid, name, face -> onOpenProfile(mid, name, face) },
+                onLoginRequired = onLoginRequired,
+                handleSystemBack = isActive,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 

@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -67,7 +68,6 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import com.example.bilibili.R
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.BiliPlayStream
-import com.example.bilibili.ui.liquidglass.TransparentLiquidCapsule
 import com.example.bilibili.ui.liquidglass.TransparentLiquidTextButton
 import com.example.bilibili.ui.theme.BiliPink
 import com.kyant.backdrop.Backdrop
@@ -81,7 +81,7 @@ private val VideoProgressLineWidth = 2.5.dp
 
 private val VideoControlBarHeight = 32.dp
 private val VideoControlBarBottomGap = 6.dp
-private val VideoControlSurfaceColor = Color.Black.copy(alpha = 0.52f)
+private val VideoOverlayButtonSurfaceColor = Color.Black.copy(alpha = 0.52f)
 private val VideoControlBorderWidth = 0.5.dp
 private val VideoControlBorderColor = Color(0x80999999)
 
@@ -104,6 +104,7 @@ fun BilibiliVideoSurface(
     danmakuEnabled: Boolean = false,
     danmakuCid: Long = 0L,
     loadDanmaku: (suspend (Long) -> List<BiliDanmakuItem>)? = null,
+    playbackEnabled: Boolean = true,
 ) {
     val context = LocalContext.current
     val videoPeekController = LocalVideoPeekController.current
@@ -117,8 +118,10 @@ fun BilibiliVideoSurface(
     var controlsHideSignal by remember(playbackKey) { mutableIntStateOf(0) }
     var isScrubbing by remember(playbackKey) { mutableStateOf(false) }
     var danmakuItems by remember(playbackKey) { mutableStateOf<List<BiliDanmakuItem>>(emptyList()) }
+    var showDanmakuSettings by remember(playbackKey) { mutableStateOf(false) }
     val showDanmakuFeature = danmakuEnabled && danmakuCid > 0L && loadDanmaku != null
     val danmakuVisible = coordinator.danmakuVisible
+    val danmakuSettings = coordinator.danmakuSettings
 
     LaunchedEffect(showDanmakuFeature, danmakuCid, loadDanmaku) {
         if (!showDanmakuFeature || loadDanmaku == null) {
@@ -133,7 +136,7 @@ fun BilibiliVideoSurface(
     ImmersiveVideoChromeEffect(enabled = isFullscreen)
     FullscreenLandscapeEffect(enabled = isFullscreen)
 
-    LaunchedEffect(playbackKey, stream, isPeekPlayback, isFullscreen) {
+    LaunchedEffect(playbackKey, stream, isPeekPlayback, isFullscreen, playbackEnabled) {
         val existing = player
         if (existing != null) {
             if (existing.mediaItemCount > 0) return@LaunchedEffect
@@ -144,11 +147,17 @@ fun BilibiliVideoSurface(
         val maxAttempts = if (waitForHandoff) 16 else 1
         repeat(maxAttempts) { attempt ->
             coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
-                handedOff.playWhenReady = true
-                if (handedOff.playbackState == Player.STATE_IDLE) {
-                    handedOff.prepare()
+                if (playbackEnabled) {
+                    handedOff.playWhenReady = true
+                    if (handedOff.playbackState == Player.STATE_IDLE) {
+                        handedOff.prepare()
+                    }
+                    handedOff.play()
+                } else {
+                    coordinator.savePlaybackPosition(playbackKey, handedOff.currentPosition)
+                    handedOff.playWhenReady = false
+                    handedOff.pause()
                 }
-                handedOff.play()
                 positionMs = handedOff.currentPosition.coerceAtLeast(0L)
                 durationMs = handedOff.duration.coerceAtLeast(0L)
                 isBuffering = handedOff.playbackState == Player.STATE_BUFFERING
@@ -167,12 +176,32 @@ fun BilibiliVideoSurface(
         ) {
             isBuffering = false
         }.also {
-            it.playWhenReady = true
+            it.playWhenReady = playbackEnabled
             positionMs = startPositionMs
+            if (!playbackEnabled) {
+                it.pause()
+            }
         }
     }
 
     val activePlayer = player
+    LaunchedEffect(playbackEnabled, activePlayer) {
+        val playerRef = activePlayer ?: return@LaunchedEffect
+        if (playbackEnabled) {
+            if (playerRef.playbackState == Player.STATE_IDLE) {
+                playerRef.prepare()
+            }
+            playerRef.playWhenReady = true
+            if (!playerRef.isPlaying) {
+                playerRef.play()
+            }
+        } else {
+            coordinator.savePlaybackPosition(playbackKey, playerRef.currentPosition)
+            playerRef.playWhenReady = false
+            playerRef.pause()
+        }
+    }
+
     if (activePlayer == null) {
         Box(
             modifier = modifier.background(Color.Black),
@@ -192,6 +221,7 @@ fun BilibiliVideoSurface(
     DisposableEffect(activePlayer, playbackKey, isFullscreen, isPeekPlayback) {
         val pauseHandler = {
             coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
+            activePlayer.playWhenReady = false
             activePlayer.pause()
         }
         if (isPeekPlayback) {
@@ -332,7 +362,7 @@ fun BilibiliVideoSurface(
             .background(Color.Black)
             .clipToBounds()
             .then(
-                if (controlsEnabled) {
+                if (controlsEnabled && !showDanmakuSettings) {
                     Modifier
                         .pointerInput(Unit) {
                             awaitEachGesture {
@@ -406,7 +436,7 @@ fun BilibiliVideoSurface(
             )
         }
 
-        if (showDanmakuFeature && danmakuVisible) {
+        if (showDanmakuFeature) {
             val danmakuBottomReserve = VideoControlBarHeight +
                 VideoControlBarBottomGap +
                 if (isFullscreen) 40.dp else 8.dp
@@ -417,12 +447,24 @@ fun BilibiliVideoSurface(
                 playbackSpeed = selectedSpeed,
                 topInset = 0.dp,
                 bottomReserve = danmakuBottomReserve,
-                enabled = true,
+                enabled = danmakuVisible,
+                settings = danmakuSettings,
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(3f),
             )
         }
+
+        DanmakuSettingsOverlay(
+            visible = showDanmakuSettings,
+            settings = danmakuSettings,
+            onSettingsChange = coordinator::updateDanmakuSettings,
+            onDismiss = { showDanmakuSettings = false },
+            backdrop = layerBackdrop,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(25f),
+        )
 
         if (isBuffering) {
             CircularProgressIndicator(
@@ -447,7 +489,7 @@ fun BilibiliVideoSurface(
                     backdrop = layerBackdrop,
                     textColor = Color.White,
                     useMenuGlassStyle = true,
-                    surfaceColor = VideoControlSurfaceColor,
+                    surfaceColor = VideoOverlayButtonSurfaceColor,
                     enableEdgeHighlight = false,
                     borderWidth = VideoControlBorderWidth,
                     borderColor = VideoControlBorderColor,
@@ -470,7 +512,7 @@ fun BilibiliVideoSurface(
                     backdrop = layerBackdrop,
                     textColor = Color.White,
                     useMenuGlassStyle = true,
-                    surfaceColor = VideoControlSurfaceColor,
+                    surfaceColor = VideoOverlayButtonSurfaceColor,
                     enableEdgeHighlight = false,
                     borderWidth = VideoControlBorderWidth,
                     borderColor = VideoControlBorderColor,
@@ -496,7 +538,6 @@ fun BilibiliVideoSurface(
                 positionMs = positionMs,
                 durationMs = durationMs,
                 speed = selectedSpeed,
-                backdrop = layerBackdrop,
                 isScrubbing = isScrubbing,
                 onScrubbingChange = { isScrubbing = it },
                 onPlayPause = { onPlayPauseState.value() },
@@ -516,6 +557,10 @@ fun BilibiliVideoSurface(
                     controlsHideSignal++
                     coordinator.toggleDanmaku()
                 },
+                onDanmakuLongPress = {
+                    controlsHideSignal++
+                    showDanmakuSettings = true
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(VideoControlBarHeight),
@@ -533,12 +578,12 @@ private fun VideoControls(
     onPlayPause: () -> Unit,
     onSeek: (Long) -> Unit,
     onSpeedClick: () -> Unit,
-    backdrop: Backdrop,
     isScrubbing: Boolean,
     onScrubbingChange: (Boolean) -> Unit,
     showDanmakuToggle: Boolean = false,
     danmakuVisible: Boolean = true,
     onDanmakuToggle: () -> Unit = {},
+    onDanmakuLongPress: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val progress = if (durationMs > 0L) {
@@ -551,8 +596,11 @@ private fun VideoControls(
     val onSeekState by rememberUpdatedState(onSeek)
     val onScrubbingChangeState by rememberUpdatedState(onScrubbingChange)
 
-    TransparentLiquidCapsule(
-        modifier = modifier.pointerInput(durationState) {
+    Box(
+        modifier = modifier
+            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
+            .clip(VideoControlCapsuleShape)
+            .pointerInput(durationState) {
             awaitEachGesture {
                 onScrubbingChangeState(true)
                 try {
@@ -581,13 +629,6 @@ private fun VideoControls(
                 }
             }
         },
-        backdrop = backdrop,
-        pill = true,
-        useMenuGlassStyle = true,
-        surfaceColor = VideoControlSurfaceColor,
-        enableEdgeHighlight = false,
-        borderWidth = VideoControlBorderWidth,
-        borderColor = VideoControlBorderColor,
     ) {
         VideoControlCapsuleProgressBackground(
             progress = progress,
@@ -622,16 +663,18 @@ private fun VideoControls(
                 )
             }
             if (showDanmakuToggle) {
+                Spacer(Modifier.width(10.dp))
                 Text(
                     text = "弹",
                     color = if (danmakuVisible) Color.White else Color.White.copy(alpha = 0.42f),
                     fontWeight = if (danmakuVisible) FontWeight.Bold else FontWeight.Normal,
                     style = TextStyle(fontSize = 14.sp),
-                    modifier = Modifier.clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                        onClick = onDanmakuToggle,
-                    ),
+                    modifier = Modifier.pointerInput(onDanmakuToggle, onDanmakuLongPress) {
+                        detectTapGestures(
+                            onTap = { onDanmakuToggle() },
+                            onLongPress = { onDanmakuLongPress() },
+                        )
+                    },
                 )
             }
             Spacer(Modifier.weight(1f))
