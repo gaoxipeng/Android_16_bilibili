@@ -14,3 +14,10 @@ fun isPortraitVideoSize(
 
 fun knownPortraitVideoHint(videoWidth: Int, videoHeight: Int): Boolean? =
     if (videoWidth > 0 && videoHeight > 0) videoHeight > videoWidth else null
+
+fun knownVideoAspectRatio(videoWidth: Int, videoHeight: Int): Float? =
+    if (videoWidth > 0 && videoHeight > 0) {
+        (videoWidth.toFloat() / videoHeight.toFloat()).coerceIn(0.45f, 2.4f)
+    } else {
+        null
+    }

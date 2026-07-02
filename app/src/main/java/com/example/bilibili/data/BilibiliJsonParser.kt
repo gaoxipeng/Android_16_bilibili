@@ -53,6 +53,7 @@ object BilibiliJsonParser {
             coverUrl = normalizeImageUrl(data.optString("pic")),
             authorName = owner.optString("name"),
             authorMid = owner.optLong("mid"),
+            authorFace = normalizeImageUrl(owner.optString("face")),
             viewCount = stat.optLong("view"),
             danmakuCount = stat.optLong("danmaku"),
             likeCount = stat.optLong("like"),
@@ -351,6 +352,7 @@ object BilibiliJsonParser {
             coverUrl = normalizeImageUrl(item.optString("cover")),
             authorName = upper.optString("name"),
             authorMid = upper.optLong("mid"),
+            authorFace = normalizeImageUrl(upper.optString("face")),
             viewCount = cntInfo.optLong("play"),
             danmakuCount = cntInfo.optLong("danmaku"),
             likeCount = 0L,
@@ -395,6 +397,38 @@ object BilibiliJsonParser {
     fun parseDynamicDetail(json: JSONObject): BiliDynamicItem? {
         val item = json.optJSONObject("data")?.optJSONObject("item") ?: return null
         return parseSpaceDynamicItem(item)
+    }
+
+    fun parseArticleDetail(json: JSONObject): BiliArticleDetail? {
+        val data = json.optJSONObject("data") ?: return null
+        val cvId = data.optLong("id").takeIf { it > 0L }
+            ?: data.optString("id").toLongOrNull()?.takeIf { it > 0L }
+            ?: return null
+        val content = data.optString("content")
+        if (content.isBlank()) return null
+        val author = data.optJSONObject("author")
+        val stats = data.optJSONObject("stats")
+        return BiliArticleDetail(
+            cvId = cvId,
+            title = data.optString("title"),
+            htmlContent = content,
+            summary = data.optString("summary"),
+            authorName = author?.optString("name").orEmpty(),
+            authorMid = author?.optLong("mid") ?: 0L,
+            authorFace = normalizeImageUrl(author?.optString("face").orEmpty()),
+            publishTimeSeconds = data.optLong("publish_time").takeIf { it > 0L }
+                ?: data.optLong("ctime"),
+            viewCount = stats?.optLong("view") ?: 0L,
+            likeCount = stats?.optLong("like") ?: 0L,
+            commentCount = stats?.optLong("reply") ?: 0L,
+        )
+    }
+
+    fun parseOpusArticleCvId(json: JSONObject): Long? {
+        val item = json.optJSONObject("data")?.optJSONObject("item") ?: return null
+        val basic = item.optJSONObject("basic") ?: return null
+        if (basic.optInt("comment_type", 0) != 12) return null
+        return basic.optString("rid_str").toLongOrNull()?.takeIf { it > 0L }
     }
 
     fun parseOnlineCount(json: JSONObject): Long {
@@ -672,6 +706,33 @@ object BilibiliJsonParser {
             } else {
                 emptyList()
             },
+        )
+    }
+
+    fun parseVideoShot(json: JSONObject): BiliVideoShot? {
+        val data = json.optJSONObject("data") ?: return null
+        val images = data.optJSONArray("image")?.let { array ->
+            buildList {
+                for (index in 0 until array.length()) {
+                    normalizeImageUrl(array.optString(index)).takeIf { it.isNotBlank() }?.let(::add)
+                }
+            }
+        } ?: emptyList()
+        if (images.isEmpty()) return null
+        val indexSeconds = data.optJSONArray("index")?.let { array ->
+            buildList {
+                for (index in 0 until array.length()) {
+                    add(array.optInt(index))
+                }
+            }
+        } ?: emptyList()
+        return BiliVideoShot(
+            images = images,
+            indexSeconds = indexSeconds,
+            tileColumns = data.optInt("img_x_len", 10).coerceAtLeast(1),
+            tileRows = data.optInt("img_y_len", 10).coerceAtLeast(1),
+            tileWidth = data.optInt("img_x_size", 160).coerceAtLeast(1),
+            tileHeight = data.optInt("img_y_size", 90).coerceAtLeast(1),
         )
     }
 
@@ -1088,6 +1149,7 @@ object BilibiliJsonParser {
             coverUrl = "",
             authorName = author?.optString("name").orEmpty(),
             authorMid = author?.optLong("mid") ?: 0L,
+            authorFace = normalizeImageUrl(author?.optString("face").orEmpty()),
             viewCount = 0L,
             danmakuCount = 0L,
             likeCount = 0L,
@@ -1336,6 +1398,7 @@ object BilibiliJsonParser {
                     url = url,
                     coverUrl = parseArticleCover(article),
                     desc = article.optString("desc"),
+                    cvId = cvId,
                 )
             }
             "MAJOR_TYPE_COMMON" -> {
@@ -1415,6 +1478,7 @@ object BilibiliJsonParser {
             coverUrl = normalizeImageUrl(archive.optString("cover")),
             authorName = author?.optString("name").orEmpty(),
             authorMid = author?.optLong("mid") ?: 0L,
+            authorFace = normalizeImageUrl(author?.optString("face").orEmpty()),
             viewCount = parseCount(stat.optString("play")),
             danmakuCount = parseCount(stat.optString("danmaku")),
             likeCount = 0L,
@@ -1462,6 +1526,7 @@ object BilibiliJsonParser {
             coverUrl = normalizeImageUrl(ugc.optString("cover")),
             authorName = author?.optString("name").orEmpty(),
             authorMid = author?.optLong("mid") ?: 0L,
+            authorFace = normalizeImageUrl(author?.optString("face").orEmpty()),
             viewCount = parseCount(descSecond),
             danmakuCount = 0L,
             likeCount = 0L,
@@ -1590,6 +1655,22 @@ object BilibiliJsonParser {
         val cover = item.optString("cover").ifBlank {
             item.optJSONArray("covers")?.optString(0).orEmpty()
         }
+        val author = item.optJSONObject("author")
+            ?: item.optJSONObject("owner")
+            ?: item.optJSONObject("upper")
+        val authorName = item.optString("author_name")
+            .ifBlank { item.optString("name") }
+            .ifBlank { author?.optString("name").orEmpty() }
+            .ifBlank { author?.optString("uname").orEmpty() }
+        val authorMid = item.optLong("author_mid").takeIf { it > 0L }
+            ?: author?.optLong("mid")?.takeIf { it > 0L }
+            ?: 0L
+        val authorFace = normalizeImageUrl(
+            item.optString("author_face")
+                .ifBlank { item.optString("author_icon") }
+                .ifBlank { author?.optString("face").orEmpty() }
+                .ifBlank { author?.optString("avatar").orEmpty() },
+        )
         return BiliHistoryItem(
             kid = "archive_$aid",
             bvid = bvid,
@@ -1599,8 +1680,9 @@ object BilibiliJsonParser {
             partTitle = history.optString("part"),
             title = title,
             coverUrl = normalizeImageUrl(cover),
-            authorName = item.optString("author_name"),
-            authorMid = item.optLong("author_mid"),
+            authorName = authorName,
+            authorMid = authorMid,
+            authorFace = authorFace,
             viewAtSeconds = item.optLong("view_at"),
             progressSeconds = item.optInt("progress").coerceAtLeast(0),
             durationSeconds = item.optInt("duration").coerceAtLeast(0),
@@ -1625,6 +1707,10 @@ object BilibiliJsonParser {
                         coverUrl = normalizeImageUrl(item.optString("pic")),
                         authorName = item.optString("author"),
                         authorMid = item.optLong("mid"),
+                        authorFace = normalizeImageUrl(
+                            item.optString("upic")
+                                .ifBlank { item.optString("author_face") },
+                        ),
                         viewCount = item.optLong("play"),
                         danmakuCount = item.optLong("video_review"),
                         likeCount = 0L,
@@ -1752,6 +1838,7 @@ object BilibiliJsonParser {
             coverUrl = normalizeImageUrl(archive.optString("cover")),
             authorName = author?.optString("name").orEmpty(),
             authorMid = author?.optLong("mid") ?: 0L,
+            authorFace = normalizeImageUrl(author?.optString("face").orEmpty()),
             viewCount = parseCount(stat.optString("play")),
             danmakuCount = parseCount(stat.optString("danmaku")),
             likeCount = 0L,
@@ -1802,6 +1889,7 @@ object BilibiliJsonParser {
                         coverUrl = normalizeImageUrl(item.optString("pic")),
                         authorName = owner.optString("name"),
                         authorMid = owner.optLong("mid"),
+                        authorFace = normalizeImageUrl(owner.optString("face")),
                         viewCount = stat.optLong("view"),
                         danmakuCount = stat.optLong("danmaku"),
                         likeCount = stat.optLong("like"),

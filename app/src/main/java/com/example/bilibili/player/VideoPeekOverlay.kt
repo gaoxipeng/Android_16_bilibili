@@ -359,6 +359,8 @@ fun VideoPeekOverlay(
                     onPlaybackEnded = onPlaybackEnded,
                     modifier = Modifier.fillMaxSize(),
                     portraitVideo = video.isPortraitVideo,
+                    scrubPreviewAspectRatio = knownVideoAspectRatio(video.videoWidth, video.videoHeight),
+                    playbackMetadata = VideoPlaybackMetadata.fromVideo(video),
                 )
             }
         }

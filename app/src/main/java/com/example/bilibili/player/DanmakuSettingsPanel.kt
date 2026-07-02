@@ -134,7 +134,8 @@ fun DanmakuSettingsOverlay(
             modifier = Modifier
                 .align(Alignment.Center)
                 .widthIn(max = DanmakuSettingsPanelWidth)
-                .fillMaxWidth(0.86f),
+                .fillMaxWidth(0.86f)
+                .zIndex(1f),
             backdrop = backdrop,
             cornerRadius = DanmakuSettingsPanelCornerRadius,
             contentPadding = PaddingValues(DanmakuSettingsPanelPadding),
@@ -162,6 +163,7 @@ fun DanmakuSettingsOverlay(
                     DanmakuContinuousSlider(
                         value = settings.opacityPercent.toFloat(),
                         valueRange = 10f..100f,
+                        stepSize = 5f,
                         onValueChange = { value ->
                             onSettingsChange(settings.copy(opacityPercent = value.roundToInt()))
                         },
@@ -174,6 +176,7 @@ fun DanmakuSettingsOverlay(
                     DanmakuContinuousSlider(
                         value = settings.fontSizePercent.toFloat(),
                         valueRange = 50f..170f,
+                        stepSize = 5f,
                         onValueChange = { value ->
                             onSettingsChange(settings.copy(fontSizePercent = value.roundToInt()))
                         },
@@ -315,6 +318,7 @@ private fun DanmakuSteppedSlider(
 private fun DanmakuContinuousSlider(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
+    stepSize: Float = 0f,
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -327,8 +331,17 @@ private fun DanmakuContinuousSlider(
     var isDragging by remember { mutableStateOf(false) }
     val clampedValue = value.coerceIn(valueRange)
 
+    fun steppedValue(value: Float): Float {
+        val clamped = value.coerceIn(valueRange)
+        if (stepSize <= 0f) return clamped
+        val steps = ((clamped - valueRange.start) / stepSize).roundToInt()
+        return (valueRange.start + steps * stepSize).coerceIn(valueRange)
+    }
+
     fun valueForFraction(fraction: Float): Float =
-        valueRange.start + (valueRange.endInclusive - valueRange.start) * fraction.coerceIn(0f, 1f)
+        steppedValue(
+            valueRange.start + (valueRange.endInclusive - valueRange.start) * fraction.coerceIn(0f, 1f),
+        )
 
     fun fractionForValue(v: Float): Float {
         val span = valueRange.endInclusive - valueRange.start
@@ -354,8 +367,9 @@ private fun DanmakuContinuousSlider(
                 if (trackWidthPx <= 0f) return@DanmakuSliderTrack
                 val metrics = trackMetrics(trackWidthPx, thumbRadiusPx * 2, thumbRadiusPx)
                 val fraction = metrics.fractionForX(x)
-                dragFraction = fraction
-                onValueChange(valueForFraction(fraction))
+                val newValue = valueForFraction(fraction)
+                dragFraction = fractionForValue(newValue)
+                onValueChange(newValue)
             },
             onGestureStart = { isDragging = true },
             onGestureEnd = {

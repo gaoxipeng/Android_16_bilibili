@@ -7,6 +7,8 @@ import androidx.compose.runtime.setValue
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.DanmakuSettings
+import java.util.Collections
+import java.util.IdentityHashMap
 
 class VideoPlaybackCoordinator(
     initialDanmakuVisible: Boolean = true,
@@ -17,6 +19,8 @@ class VideoPlaybackCoordinator(
     var activeKey by mutableStateOf<String?>(null)
     var fullscreenKey by mutableStateOf<String?>(null)
     var fullscreenPortraitVideo by mutableStateOf<Boolean?>(null)
+    var fullscreenOrientationLocked by mutableStateOf(true)
+        private set
     var peekPlaybackKey by mutableStateOf<String?>(null)
     var pendingPeekHandoffKey by mutableStateOf<String?>(null)
     var pendingFullscreenHandoffKey by mutableStateOf<String?>(null)
@@ -28,6 +32,26 @@ class VideoPlaybackCoordinator(
         private set
     private val danmakuCache = mutableMapOf<Long, List<BiliDanmakuItem>>()
     private val danmakuTimelineCache = mutableMapOf<String, DanmakuTimelineSnapshot>()
+    private val videoShotsByCid = mutableMapOf<Long, com.example.bilibili.data.BiliVideoShot?>()
+    private val videoAspectRatiosByKey = mutableMapOf<String, Float>()
+
+    fun cacheVideoShot(cid: Long, shot: com.example.bilibili.data.BiliVideoShot?) {
+        if (cid > 0L) {
+            videoShotsByCid[cid] = shot
+        }
+    }
+
+    fun cachedVideoShot(cid: Long): com.example.bilibili.data.BiliVideoShot? =
+        videoShotsByCid[cid]
+
+    fun cacheVideoAspectRatio(playbackKey: String, aspectRatio: Float?) {
+        if (aspectRatio != null && aspectRatio > 0f) {
+            videoAspectRatiosByKey[playbackPositionKey(playbackKey)] = aspectRatio
+        }
+    }
+
+    fun cachedVideoAspectRatio(playbackKey: String): Float? =
+        videoAspectRatiosByKey[playbackPositionKey(playbackKey)]
 
     data class DanmakuTimelineSnapshot(
         val cid: Long,
@@ -87,8 +111,14 @@ class VideoPlaybackCoordinator(
 
     private var handoffPlayer: ExoPlayer? = null
     private var handoffKey: String? = null
-    private val inlinePauseHandlers = mutableSetOf<() -> Unit>()
-    private val peekPauseHandlers = mutableSetOf<() -> Unit>()
+    private val releasedPlayers =
+        Collections.synchronizedSet(Collections.newSetFromMap(IdentityHashMap<ExoPlayer, Boolean>()))
+    @Volatile
+    var playbackStopping: Boolean = false
+        private set
+    private val inlinePauseHandlers = mutableMapOf<String, () -> Unit>()
+    private val fullscreenPauseHandlers = mutableMapOf<String, () -> Unit>()
+    private val peekPauseHandlers = mutableMapOf<String, () -> Unit>()
     private val handoffPrepareHandlers = mutableSetOf<(String) -> Unit>()
 
     fun registerHandoffPrepareHandler(handler: (String) -> Unit) {
@@ -115,10 +145,12 @@ class VideoPlaybackCoordinator(
 
     fun requestInlinePlayback(key: String) {
         pausePeek()
-        pauseInlineOnly()
+        pauseInlineOnly(exceptKey = key)
+        pauseFullscreenOnly()
         activeKey = key
         fullscreenKey = null
         fullscreenPortraitVideo = null
+        fullscreenOrientationLocked = true
     }
 
     fun openFullscreen(key: String, portraitVideo: Boolean? = null) {
@@ -126,6 +158,7 @@ class VideoPlaybackCoordinator(
         activeKey = key
         fullscreenKey = key
         fullscreenPortraitVideo = portraitVideo
+        fullscreenOrientationLocked = true
         prepareFullscreenHandoff(key)
     }
 
@@ -146,6 +179,7 @@ class VideoPlaybackCoordinator(
 
     fun claimPeekPlayback(key: String) {
         pauseInlineOnly()
+        pauseFullscreenOnly()
         activeKey = null
         fullscreenKey = null
         peekPlaybackKey = key
@@ -158,13 +192,18 @@ class VideoPlaybackCoordinator(
     }
 
     fun pauseForOverlay() {
-        pausePeek()
-        pauseInlineOnly()
+        pauseAll()
+    }
+
+    fun pauseAll() {
+        peekPauseHandlers.values.forEach { it() }
+        inlinePauseHandlers.values.forEach { it() }
+        fullscreenPauseHandlers.values.forEach { it() }
     }
 
     fun stopPlayback() {
-        pausePeek()
-        pauseInlineOnly()
+        playbackStopping = true
+        pauseAll()
         handoffKey?.let { key ->
             handoffPlayer?.let { player ->
                 savePlaybackPosition(key, player.currentPosition)
@@ -173,9 +212,25 @@ class VideoPlaybackCoordinator(
         activeKey = null
         fullscreenKey = null
         fullscreenPortraitVideo = null
+        fullscreenOrientationLocked = true
         peekPlaybackKey = null
         pendingPeekHandoffKey = null
-        releaseHandoffPlayer()
+        VideoShotImageLoader.clearCaches()
+        playbackStopping = false
+    }
+
+    fun releasePlayerOnce(player: ExoPlayer?) {
+        player ?: return
+        if (!releasedPlayers.add(player)) return
+        runCatching {
+            player.playWhenReady = false
+            player.pause()
+            player.release()
+        }
+    }
+
+    fun clearReleasedPlayers() {
+        releasedPlayers.clear()
     }
 
     fun closeFullscreen() {
@@ -185,11 +240,17 @@ class VideoPlaybackCoordinator(
         }
         fullscreenKey = null
         fullscreenPortraitVideo = null
+        fullscreenOrientationLocked = true
     }
 
     fun updateFullscreenPortrait(portraitVideo: Boolean) {
         if (fullscreenKey == null) return
         fullscreenPortraitVideo = portraitVideo
+    }
+
+    fun releaseFullscreenOrientationLock(key: String) {
+        if (fullscreenKey != key) return
+        fullscreenOrientationLocked = false
     }
 
     fun getPlaybackPosition(playbackKey: String): Long =
@@ -199,28 +260,49 @@ class VideoPlaybackCoordinator(
         positions[playbackPositionKey(playbackKey)] = positionMs.coerceAtLeast(0L)
     }
 
-    fun registerInlinePauseHandler(handler: () -> Unit) {
-        inlinePauseHandlers += handler
+    fun registerInlinePauseHandler(playbackKey: String, handler: () -> Unit) {
+        inlinePauseHandlers[playbackKey] = handler
     }
 
-    fun unregisterInlinePauseHandler(handler: () -> Unit) {
-        inlinePauseHandlers -= handler
+    fun unregisterInlinePauseHandler(playbackKey: String) {
+        inlinePauseHandlers.remove(playbackKey)
     }
 
-    fun registerPeekPauseHandler(handler: () -> Unit) {
-        peekPauseHandlers += handler
+    fun registerFullscreenPauseHandler(playbackKey: String, handler: () -> Unit) {
+        fullscreenPauseHandlers[playbackKey] = handler
     }
 
-    fun unregisterPeekPauseHandler(handler: () -> Unit) {
-        peekPauseHandlers -= handler
+    fun unregisterFullscreenPauseHandler(playbackKey: String) {
+        fullscreenPauseHandlers.remove(playbackKey)
     }
 
-    fun pausePeek() {
-        peekPauseHandlers.forEach { it() }
+    fun registerPeekPauseHandler(playbackKey: String, handler: () -> Unit) {
+        peekPauseHandlers[playbackKey] = handler
     }
 
-    fun pauseInlineOnly() {
-        inlinePauseHandlers.forEach { it() }
+    fun unregisterPeekPauseHandler(playbackKey: String) {
+        peekPauseHandlers.remove(playbackKey)
+    }
+
+    fun pausePeek(exceptKey: String? = null) {
+        peekPauseHandlers.forEach { (key, handler) ->
+            if (exceptKey != null && key == exceptKey) return@forEach
+            handler()
+        }
+    }
+
+    fun pauseInlineOnly(exceptKey: String? = null) {
+        inlinePauseHandlers.forEach { (key, handler) ->
+            if (exceptKey != null && key == exceptKey) return@forEach
+            handler()
+        }
+    }
+
+    fun pauseFullscreenOnly(exceptKey: String? = null) {
+        fullscreenPauseHandlers.forEach { (key, handler) ->
+            if (exceptKey != null && key == exceptKey) return@forEach
+            handler()
+        }
     }
 
     fun stashPlayer(key: String, player: ExoPlayer, keepPlaying: Boolean = false) {
@@ -263,8 +345,9 @@ class VideoPlaybackCoordinator(
 
     fun releaseHandoffPlayer() {
         handoffKey = null
-        handoffPlayer?.release()
+        val player = handoffPlayer
         handoffPlayer = null
+        releasePlayerOnce(player)
     }
 }
 

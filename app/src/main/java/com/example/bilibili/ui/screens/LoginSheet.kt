@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import com.example.bilibili.ui.components.consumeTouchEvents
 import com.example.bilibili.data.BilibiliWebSession
 
 @Composable
@@ -52,7 +53,8 @@ fun LoginSheet(
     Surface(
         modifier = Modifier
             .fillMaxSize()
-            .zIndex(200f),
+            .zIndex(200f)
+            .consumeTouchEvents(),
         color = MaterialTheme.colorScheme.background,
     ) {
         Column(Modifier.fillMaxSize()) {

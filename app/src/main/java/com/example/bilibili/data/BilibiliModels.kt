@@ -1,5 +1,7 @@
 package com.example.bilibili.data
 
+import com.example.bilibili.util.BiliArticleUrl
+
 data class BilibiliCredential(
     val dedeUserId: String,
     val sessdata: String,
@@ -35,6 +37,18 @@ data class BiliPlayStream(
     val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
 }
 
+data class BiliVideoShot(
+    val images: List<String>,
+    val indexSeconds: List<Int>,
+    val tileColumns: Int,
+    val tileRows: Int,
+    val tileWidth: Int,
+    val tileHeight: Int,
+) {
+    val tilesPerImage: Int get() = tileColumns * tileRows
+    val totalTiles: Int get() = images.size * tilesPerImage
+}
+
 data class BiliDanmakuItem(
     val timeMs: Long,
     val mode: Int,
@@ -64,6 +78,7 @@ data class BiliVideoItem(
     val coverUrl: String,
     val authorName: String,
     val authorMid: Long,
+    val authorFace: String = "",
     val viewCount: Long,
     val danmakuCount: Long,
     val likeCount: Long,
@@ -328,6 +343,21 @@ data class BiliDynamicLink(
     val url: String,
     val coverUrl: String = "",
     val desc: String = "",
+    val cvId: Long = 0L,
+)
+
+data class BiliArticleDetail(
+    val cvId: Long,
+    val title: String,
+    val htmlContent: String,
+    val summary: String = "",
+    val authorName: String = "",
+    val authorMid: Long = 0L,
+    val authorFace: String = "",
+    val publishTimeSeconds: Long = 0L,
+    val viewCount: Long = 0L,
+    val likeCount: Long = 0L,
+    val commentCount: Long = 0L,
 )
 
 data class BiliDynamicOrigin(
@@ -361,7 +391,31 @@ data class BiliDynamicItem(
     val repostCount: Long = 0L,
 ) {
     val canOpenDetail: Boolean
-        get() = commentOid > 0L && commentType > 0 && video == null
+        get() = commentOid > 0L && commentType > 0 && video == null && resolveArticleCvId() == null
+
+    fun resolveArticleCvId(): Long? {
+        link?.cvId?.takeIf { it > 0L }?.let { return it }
+        BiliArticleUrl.extractCvId(link?.url.orEmpty())?.let { return it }
+        if (dynamicType == "DYNAMIC_TYPE_ARTICLE" && commentType == 12 && commentOid > 0L) {
+            return commentOid
+        }
+        return null
+    }
+
+    fun isArticleDynamic(): Boolean =
+        resolveArticleCvId() != null ||
+            dynamicType == "DYNAMIC_TYPE_ARTICLE" ||
+            dynamicType == "DYNAMIC_TYPE_OPUS"
+
+    fun resolveArticleMobileUrl(): String? {
+        link?.url.orEmpty().trim().takeIf { it.isNotBlank() }?.let { url ->
+            BiliArticleUrl.resolveMobileOpusUrl(url)?.let { return it }
+        }
+        if (!isArticleDynamic()) return null
+        return id.toLongOrNull()
+            ?.takeIf { it > 0L }
+            ?.let(BiliArticleUrl::buildMobileOpusUrl)
+    }
 }
 
 data class BiliDynamicFeedPage(
@@ -424,6 +478,7 @@ data class BiliHistoryItem(
     val coverUrl: String,
     val authorName: String,
     val authorMid: Long,
+    val authorFace: String = "",
     val viewAtSeconds: Long,
     val progressSeconds: Int,
     val durationSeconds: Int,
@@ -436,6 +491,7 @@ data class BiliHistoryItem(
         coverUrl = coverUrl,
         authorName = authorName,
         authorMid = authorMid,
+        authorFace = authorFace,
         viewCount = 0L,
         danmakuCount = 0L,
         likeCount = 0L,

@@ -11,6 +11,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import com.example.bilibili.util.BiliArticleUrl
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -764,6 +765,40 @@ class BilibiliApiClient {
         }.getOrDefault(false)
     }
 
+    private val videoShotCache = mutableMapOf<Long, BiliVideoShot?>()
+
+    suspend fun getVideoShot(
+        bvid: String,
+        aid: Long,
+        cid: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliVideoShot? = withContext(Dispatchers.IO) {
+        if (cid <= 0L) return@withContext null
+        synchronized(videoShotCache) {
+            if (cid in videoShotCache) return@withContext videoShotCache[cid]
+        }
+        val referer = if (bvid.isNotBlank()) {
+            "https://www.bilibili.com/video/$bvid"
+        } else {
+            BilibiliEndpoints.HOME
+        }
+        suspend fun fetchShot(index: String?): BiliVideoShot? = runCatching {
+            val params = buildMap {
+                if (bvid.isNotBlank()) put("bvid", bvid)
+                if (aid > 0L) put("aid", aid.toString())
+                put("cid", cid.toString())
+                if (index != null) put("index", index)
+            }
+            getJson(BilibiliEndpoints.VIDEO_SHOT, params, credential, referer = referer)
+                .let(BilibiliJsonParser::parseVideoShot)
+        }.getOrNull()
+        val shot = fetchShot(index = "1") ?: fetchShot(index = null) ?: fetchShot(index = "2")
+        synchronized(videoShotCache) {
+            videoShotCache[cid] = shot
+        }
+        shot
+    }
+
     suspend fun getPlayUrl(
         bvid: String,
         cid: Long,
@@ -961,6 +996,62 @@ class BilibiliApiClient {
             }
             updated
         }
+
+    suspend fun getArticle(
+        cvId: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliArticleDetail? = withContext(Dispatchers.IO) {
+        if (cvId <= 0L) return@withContext null
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.ARTICLE_VIEW,
+                params = mapOf("id" to cvId.toString()),
+                credential = credential,
+                referer = "https://www.bilibili.com/read/cv$cvId",
+            ).let(BilibiliJsonParser::parseArticleDetail)
+        }.getOrNull()
+    }
+
+    suspend fun resolveArticleFromUrl(
+        url: String,
+        credential: BilibiliCredential? = null,
+    ): BiliArticleDetail? = withContext(Dispatchers.IO) {
+        if (url.isBlank()) return@withContext null
+        val resolvedUrl = resolveRedirectUrl(url)
+        BiliArticleUrl.extractCvId(resolvedUrl)?.let { cvId ->
+            return@withContext getArticle(cvId, credential)
+        }
+        val opusId = BiliArticleUrl.extractOpusId(resolvedUrl) ?: return@withContext null
+        val cvId = runCatching {
+            getJson(
+                url = BilibiliEndpoints.OPUS_DETAIL,
+                params = mapOf(
+                    "id" to opusId.toString(),
+                    "timezone_offset" to "-480",
+                    "platform" to "web",
+                    "features" to "htmlNewStyle,onlyfansAssetsV2,decorationCard",
+                ),
+                credential = credential,
+                referer = "https://www.bilibili.com/opus/$opusId",
+                extraHeaders = dynamicRequestHeaders(),
+            ).let(BilibiliJsonParser::parseOpusArticleCvId)
+        }.getOrNull() ?: return@withContext null
+        getArticle(cvId, credential)
+    }
+
+    private suspend fun resolveRedirectUrl(url: String): String {
+        if (!url.contains("b23.tv", ignoreCase = true)) return url
+        return runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .head()
+                .header("User-Agent", BilibiliEndpoints.USER_AGENT)
+                .build()
+            client.newCall(request).execute().use { response ->
+                response.request.url.toString()
+            }
+        }.getOrDefault(url)
+    }
 
     suspend fun getDynamicAuthorIpLocation(
         dynamicId: String,

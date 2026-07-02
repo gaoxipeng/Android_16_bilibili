@@ -457,7 +457,19 @@ fun DanmakuOverlay(
             }
         }
 
-        LaunchedEffect(isPlaying, enabled, items, widthPx, heightPx, playbackSpeed, scrollAreaHeightPx, speedMultiplier) {
+        LaunchedEffect(
+            isPlaying,
+            enabled,
+            items,
+            widthPx,
+            heightPx,
+            playbackSpeed,
+            scrollAreaHeightPx,
+            speedMultiplier,
+            settings.fontSizePercent,
+            settings.opacityPercent,
+            spawnContext,
+        ) {
             if (!enabled || items.isEmpty()) return@LaunchedEffect
             while (true) {
                 withFrameNanos {

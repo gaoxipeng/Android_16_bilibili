@@ -13,6 +13,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.delay
 
@@ -48,7 +50,13 @@ fun <T> NavAnimatedOverlay(
         exit = navStackExitTransition(),
         label = "nav-stack-overlay",
     ) {
-        displayed?.let { item -> content(item) }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .consumeTouchEvents(),
+        ) {
+            displayed?.let { item -> content(item) }
+        }
     }
     if (!visible && displayed != null) {
         LaunchedEffect(displayed) {

@@ -2,6 +2,7 @@ package com.example.bilibili.ui.components
 
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import android.util.LruCache
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -17,15 +18,23 @@ import coil.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+private val coverAverageColorCache = object : LruCache<String, Color>(256) {}
+
 @Composable
 fun rememberCoverAverageColor(
     coverUrl: String,
     fallback: Color = Color(0xFF3A3A3C),
 ): Color {
     val context = LocalContext.current
-    var color by remember(coverUrl) { mutableStateOf(fallback) }
+    var color by remember(coverUrl) {
+        mutableStateOf(coverAverageColorCache.get(coverUrl) ?: fallback)
+    }
 
     LaunchedEffect(coverUrl) {
+        coverAverageColorCache.get(coverUrl)?.let {
+            color = it
+            return@LaunchedEffect
+        }
         val average = withContext(Dispatchers.IO) {
             runCatching {
                 val request = ImageRequest.Builder(context)
@@ -41,6 +50,7 @@ fun rememberCoverAverageColor(
             }.getOrNull()
         }
         if (average != null) {
+            coverAverageColorCache.put(coverUrl, average)
             color = average
         }
     }

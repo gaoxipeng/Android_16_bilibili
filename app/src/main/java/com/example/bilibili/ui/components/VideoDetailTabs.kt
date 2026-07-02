@@ -91,7 +91,8 @@ fun VideoDetailTabBar(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
+                .fillMaxHeight()
+                .consumeTouchEvents(),
         ) {
             Row(
                 modifier = Modifier
@@ -151,7 +152,9 @@ fun VideoDetailTabBar(
         }
 
         Box(
-            modifier = Modifier.size(width = 72.dp, height = VideoDetailTabBarHeight),
+            modifier = Modifier
+                .size(width = 72.dp, height = VideoDetailTabBarHeight)
+                .consumeTouchEvents(),
             contentAlignment = Alignment.CenterEnd,
         ) {
             if (showCommentSort) {

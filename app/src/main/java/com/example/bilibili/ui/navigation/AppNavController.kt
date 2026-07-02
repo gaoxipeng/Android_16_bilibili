@@ -26,6 +26,11 @@ sealed interface AppNavEntry {
         val item: BiliDynamicItem,
     ) : AppNavEntry
 
+    data class ArticleDetail(
+        val webUrl: String,
+        val seedTitle: String = "",
+    ) : AppNavEntry
+
     data class UserRelationList(
         val mid: Long,
         val name: String = "",
@@ -40,6 +45,7 @@ internal fun AppNavEntry.stableKey(index: Int): String = when (this) {
     is AppNavEntry.VideoDetail -> "video:${video.bvid}@$index"
     is AppNavEntry.UserProfile -> "profile:$mid@$index"
     is AppNavEntry.DynamicDetail -> "dynamic:${item.id}@$index"
+    is AppNavEntry.ArticleDetail -> "article:${webUrl.hashCode()}@$index"
     is AppNavEntry.UserRelationList -> "relation-list:$mid@$index"
 }
 
@@ -64,6 +70,7 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
             }
             is AppNavEntry.UserProfile -> stack + entry
             is AppNavEntry.DynamicDetail -> stack + entry
+            is AppNavEntry.ArticleDetail -> stack + entry
             is AppNavEntry.UserRelationList -> stack + entry
         }
     }

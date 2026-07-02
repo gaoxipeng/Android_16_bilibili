@@ -1,6 +1,7 @@
 package com.example.bilibili.player
 
 import android.content.Context
+import android.net.Uri
 import android.webkit.CookieManager
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -17,9 +18,14 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BilibiliEndpoints
 
-fun buildVideoMediaSource(context: Context, stream: BiliPlayStream): MediaSource {
+fun buildVideoMediaSource(
+    context: Context,
+    stream: BiliPlayStream,
+    playbackMetadata: VideoPlaybackMetadata? = null,
+): MediaSource {
     val factory = bilibiliDataSourceFactory(context)
-    val videoSource = createStreamMediaSource(factory, stream.videoUrl)
+    val mediaMetadata = playbackMetadata?.toMediaMetadata()
+    val videoSource = createStreamMediaSource(factory, stream.videoUrl, mediaMetadata)
     val audioUrl = stream.audioUrl?.takeIf { it.isNotBlank() && it != stream.videoUrl }
     if (audioUrl == null) return videoSource
     val audioSource = ProgressiveMediaSource.Factory(factory)
@@ -30,8 +36,16 @@ fun buildVideoMediaSource(context: Context, stream: BiliPlayStream): MediaSource
 private fun createStreamMediaSource(
     factory: DefaultDataSource.Factory,
     url: String,
+    mediaMetadata: androidx.media3.common.MediaMetadata? = null,
 ): MediaSource {
-    val mediaItem = MediaItem.fromUri(url)
+    val mediaItem = MediaItem.Builder()
+        .setUri(url)
+        .apply {
+            if (mediaMetadata != null) {
+                setMediaMetadata(mediaMetadata)
+            }
+        }
+        .build()
     return when {
         url.contains(".mpd", ignoreCase = true) ->
             DashMediaSource.Factory(factory).createMediaSource(mediaItem)
@@ -72,6 +86,7 @@ fun createExoPlayer(
     context: Context,
     stream: BiliPlayStream,
     startPositionMs: Long = 0L,
+    playbackMetadata: VideoPlaybackMetadata? = null,
     onReady: (ExoPlayer) -> Unit = {},
 ): ExoPlayer {
     val audioAttributes = AudioAttributes.Builder()
@@ -83,14 +98,19 @@ fun createExoPlayer(
         .build()
         .apply {
             volume = 1f
-            setMediaSource(buildVideoMediaSource(context, stream))
+            setMediaSource(buildVideoMediaSource(context, stream, playbackMetadata))
+            playWhenReady = true
             prepare()
             if (startPositionMs > 0L) seekTo(startPositionMs)
             playWhenReady = true
+            play()
             addListener(
                 object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_READY) {
+                            if (playWhenReady && !isPlaying) {
+                                play()
+                            }
                             onReady(this@apply)
                         }
                     }

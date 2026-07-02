@@ -84,6 +84,7 @@ import com.example.bilibili.data.BiliDynamicIpWebResolver
 import com.example.bilibili.data.BiliDynamicItem
 import com.example.bilibili.data.BiliDynamicLink
 import com.example.bilibili.data.BiliDynamicOrigin
+import com.example.bilibili.util.BiliArticleUrl
 import com.example.bilibili.ui.components.BiliWebReaderOverlay
 import com.example.bilibili.ui.components.BiliWebReaderState
 import com.example.bilibili.data.BiliPlayStream
@@ -191,6 +192,7 @@ fun UserProfileScreen(
     coordinator: VideoPlaybackCoordinator,
     onVideoClick: (BiliVideoItem) -> Unit,
     onDynamicClick: (BiliDynamicItem) -> Unit = {},
+    onArticleClick: (String, String) -> Unit = { _, _ -> },
     onEnsurePlayStream: (BiliVideoItem) -> Unit = {},
     onLoginRequired: () -> Unit,
     onOpenRelationList: (name: String, face: String, sign: String, tab: UserRelationTab) -> Unit = { _, _, _, _ -> },
@@ -959,10 +961,41 @@ fun UserProfileScreen(
                                                     onVideoClick = onVideoClick,
                                                     onDynamicClick = onDynamicClick,
                                                     onLinkClick = { link ->
-                                                        webReader = BiliWebReaderState(
-                                                            url = link.url,
-                                                            title = link.title,
-                                                        )
+                                                        item.resolveArticleMobileUrl()?.let { webUrl ->
+                                                            onArticleClick(webUrl, link.title)
+                                                            return@DynamicFeedCard
+                                                        }
+                                                        BiliArticleUrl.resolveMobileOpusUrl(link.url)?.let { webUrl ->
+                                                            onArticleClick(webUrl, link.title)
+                                                            return@DynamicFeedCard
+                                                        }
+                                                        if (BiliArticleUrl.isArticleLikeUrl(link.url)) {
+                                                            scope.launch {
+                                                                val resolved = runCatching {
+                                                                    api.resolveArticleFromUrl(link.url, credential)
+                                                                }.getOrNull()
+                                                                val webUrl = resolved?.let {
+                                                                    item.resolveArticleMobileUrl()
+                                                                        ?: BiliArticleUrl.resolveMobileOpusUrl(link.url)
+                                                                }
+                                                                if (webUrl != null) {
+                                                                    onArticleClick(
+                                                                        webUrl,
+                                                                        resolved?.title?.ifBlank { link.title } ?: link.title,
+                                                                    )
+                                                                } else {
+                                                                    webReader = BiliWebReaderState(
+                                                                        url = link.url,
+                                                                        title = link.title,
+                                                                    )
+                                                                }
+                                                            }
+                                                        } else {
+                                                            webReader = BiliWebReaderState(
+                                                                url = link.url,
+                                                                title = link.title,
+                                                            )
+                                                        }
                                                     },
                                                     modifier = Modifier
                                                         .padding(horizontal = 12.dp),
@@ -1394,7 +1427,7 @@ private fun DynamicFeedCard(
     onLinkClick: (BiliDynamicLink) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val openDetail = item.canOpenDetail
+    val openDetail = item.canOpenDetail || item.isArticleDynamic()
     Column(
         modifier = modifier
             .fillMaxWidth()

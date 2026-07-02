@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -64,7 +66,6 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,7 +93,7 @@ import com.example.bilibili.ui.components.ObserveListNearEnd
 import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.SlidingTextTabs
-import com.example.bilibili.ui.components.UpAuthorBadge
+import com.example.bilibili.ui.components.VideoFeedAuthorAvatar
 import com.example.bilibili.ui.components.VideoCoverBottomScrim
 import com.example.bilibili.ui.components.VideoCoverOverlayText
 import com.example.bilibili.ui.components.VideoFeedCard
@@ -116,7 +117,6 @@ private data class HistoryEntry(
     val showSectionHeader: Boolean,
 )
 
-private val HistorySectionHeaderHeight = 32.dp
 private val HistoryCoverWidth = 136.dp
 private val HistoryCoverHeight = 77.dp
 
@@ -135,30 +135,6 @@ private fun buildHistoryEntries(items: List<BiliHistoryItem>): List<HistoryEntry
         )
     }
     return entries
-}
-
-private fun resolveStickyHistorySectionLabel(
-    listState: LazyListState,
-    entries: List<HistoryEntry>,
-    sectionHeaderHeightPx: Int,
-): String? {
-    if (entries.isEmpty()) return null
-    val topRowIndex = listState.layoutInfo.visibleItemsInfo
-        .mapNotNull { info -> info.index.takeIf { it in entries.indices } }
-        .minOrNull() ?: return null
-    val sectionLabel = entries[topRowIndex].sectionLabel
-    val firstRowIndex = entries.indexOfFirst { entry ->
-        entry.sectionLabel == sectionLabel && entry.showSectionHeader
-    }
-    if (firstRowIndex < 0) return null
-    val firstVisible = listState.firstVisibleItemIndex
-    val scrollOffset = listState.firstVisibleItemScrollOffset
-    val showSticky = when {
-        firstVisible > firstRowIndex -> true
-        firstVisible == firstRowIndex -> scrollOffset >= sectionHeaderHeightPx
-        else -> false
-    }
-    return if (showSticky) sectionLabel else null
 }
 
 internal data class HistoryActionMenuRequest(
@@ -235,7 +211,7 @@ fun HistoryMenuOverlay(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(
     api: BilibiliApiClient,
@@ -247,7 +223,7 @@ fun HistoryScreen(
     playUrls: Map<String, BiliPlayStream>,
     coordinator: VideoPlaybackCoordinator,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
-    onAuthorClick: (Long) -> Unit = {},
+    onAuthorClick: (Long, String, String) -> Unit = { _, _, _ -> },
     menuController: HistoryMenuController,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
@@ -258,14 +234,10 @@ fun HistoryScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
     val historyListState = rememberLazyListState()
     val favoritesListState = rememberLazyListState()
     val favoritesGridState = rememberLazyStaggeredGridState()
     val useSingleColumnFavorites = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
-    val sectionHeaderHeightPx = remember(density) {
-        with(density) { HistorySectionHeaderHeight.roundToPx() }
-    }
 
     val pagerState = rememberPagerState(
         initialPage = 0,
@@ -501,11 +473,6 @@ fun HistoryScreen(
     }
 
     val historyEntries = remember(historyItems) { buildHistoryEntries(historyItems) }
-    val stickySection by remember(historyEntries, historyListState, sectionHeaderHeightPx) {
-        derivedStateOf {
-            resolveStickyHistorySectionLabel(historyListState, historyEntries, sectionHeaderHeightPx)
-        }
-    }
     val listTopInset = contentPadding.calculateTopPadding()
     val listBottomInset = contentPadding.calculateBottomPadding() + 88.dp
 
@@ -586,15 +553,26 @@ fun HistoryScreen(
                                 }
                             }
                             else -> {
-                                Box(modifier = Modifier.fillMaxSize()) {
-                                    LazyColumn(
-                                        state = historyListState,
-                                        contentPadding = PaddingValues(bottom = listBottomInset),
-                                    ) {
-                                        items(
-                                            items = historyEntries,
-                                            key = { it.item.kid },
-                                        ) { entry ->
+                                LazyColumn(
+                                    state = historyListState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(bottom = listBottomInset),
+                                ) {
+                                    historyEntries.forEach { entry ->
+                                        if (entry.showSectionHeader) {
+                                            stickyHeader(key = "section-${entry.sectionLabel}-${entry.item.kid}") {
+                                                HistorySectionHeader(
+                                                    label = entry.sectionLabel,
+                                                    compactTop = entry == historyEntries.first(),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(Color.White),
+                                                )
+                                            }
+                                        }
+                                        item(
+                                            key = entry.item.kid,
+                                        ) {
                                             Column(
                                                 modifier = Modifier.animateItem(
                                                     placementSpec = spring(
@@ -603,13 +581,18 @@ fun HistoryScreen(
                                                     ),
                                                 ),
                                             ) {
-                                                if (entry.showSectionHeader) {
-                                                    HistorySectionHeader(entry.sectionLabel)
-                                                }
                                                 HistoryItemRow(
                                                     item = entry.item,
+                                                    compactTop = entry.showSectionHeader,
                                                     onClick = {
                                                         onHistoryItemClick(entry.item)
+                                                    },
+                                                    onAuthorClick = {
+                                                        onAuthorClick(
+                                                            entry.item.authorMid,
+                                                            entry.item.authorName,
+                                                            entry.item.authorFace,
+                                                        )
                                                     },
                                                     onMoreClick = { anchor ->
                                                         menuController.open(entry.item.kid, anchor) { kid ->
@@ -636,24 +619,18 @@ fun HistoryScreen(
                                                 )
                                             }
                                         }
-                                        if (historyLoadingMore) {
-                                            item(key = "history-loading-more") {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(vertical = 16.dp),
-                                                    contentAlignment = Alignment.Center,
-                                                ) {
-                                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                                }
+                                    }
+                                    if (historyLoadingMore) {
+                                        item(key = "history-loading-more") {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 16.dp),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
                                             }
                                         }
-                                    }
-                                    stickySection?.let { label ->
-                                        HistoryStickySectionHeader(
-                                            label = label,
-                                            modifier = Modifier.align(Alignment.TopStart),
-                                        )
                                     }
                                 }
                             }
@@ -697,7 +674,7 @@ fun HistoryScreen(
                                             coordinator = coordinator,
                                             onClick = { onVideoClick(video) },
                                             onEnsurePlayStream = { onEnsurePlayStream(video) },
-                                            onAuthorClick = onAuthorClick,
+                                            onAuthorClick = { mid -> onAuthorClick(mid, video.authorName, video.authorFace) },
                                             overlayMetaOnCover = true,
                                         )
                                     }
@@ -735,7 +712,7 @@ fun HistoryScreen(
                                             coordinator = coordinator,
                                             onClick = { onVideoClick(video) },
                                             onEnsurePlayStream = { onEnsurePlayStream(video) },
-                                            onAuthorClick = onAuthorClick,
+                                            onAuthorClick = { mid -> onAuthorClick(mid, video.authorName, video.authorFace) },
                                             gridStyle = true,
                                         )
                                     }
@@ -773,6 +750,9 @@ private fun HistoryContentTabBar(
         scrollPosition = scrollPosition,
         onTabSelected = { index -> onTabSelected(tabs[index]) },
         modifier = Modifier.fillMaxWidth(),
+        fontSize = 22.sp,
+        selectedFontWeight = FontWeight.Bold,
+        unselectedFontWeight = FontWeight.SemiBold,
     )
 }
 
@@ -780,28 +760,16 @@ private fun HistoryContentTabBar(
 private fun HistorySectionHeader(
     label: String,
     modifier: Modifier = Modifier,
+    compactTop: Boolean = false,
 ) {
     Text(
         text = label,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            .padding(top = 2.dp, bottom = 6.dp),
+            .padding(top = if (compactTop) 0.dp else 2.dp, bottom = 2.dp),
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
-    )
-}
-
-@Composable
-private fun HistoryStickySectionHeader(
-    label: String,
-    modifier: Modifier = Modifier,
-) {
-    HistorySectionHeader(
-        label = label,
-        modifier = modifier
-            .fillMaxWidth()
-            .background(Color.White),
     )
 }
 
@@ -809,13 +777,21 @@ private fun HistoryStickySectionHeader(
 private fun HistoryItemRow(
     item: BiliHistoryItem,
     onClick: () -> Unit,
+    onAuthorClick: () -> Unit,
     onMoreClick: (Rect) -> Unit,
     modifier: Modifier = Modifier,
+    compactTop: Boolean = false,
 ) {
+    val canOpenAuthor = item.authorMid > 0L
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(
+                start = 16.dp,
+                end = 16.dp,
+                top = if (compactTop) 4.dp else 12.dp,
+                bottom = 12.dp,
+            ),
         verticalAlignment = Alignment.Top,
     ) {
         HistoryThumbnail(
@@ -831,34 +807,39 @@ private fun HistoryItemRow(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 12.dp)
-                .height(HistoryCoverHeight),
+                .heightIn(min = HistoryCoverHeight),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onClick),
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = item.title.ifBlank { "未命名视频" },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onClick),
                     style = MaterialTheme.typography.bodyMedium,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     lineHeight = 18.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
-                if (item.authorName.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
+                if (item.authorName.isNotBlank() || item.authorFace.isNotBlank() || canOpenAuthor) {
+                    Spacer(Modifier.height(6.dp))
                     Row(
-                        modifier = Modifier.height(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                enabled = canOpenAuthor,
+                                onClick = onAuthorClick,
+                            ),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        UpAuthorBadge()
+                        VideoFeedAuthorAvatar(
+                            faceUrl = item.authorFace,
+                            authorName = item.authorName,
+                        )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = item.authorName,
-                            style = MaterialTheme.typography.bodySmall,
+                            text = item.authorName.ifBlank { "UP主" },
+                            style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

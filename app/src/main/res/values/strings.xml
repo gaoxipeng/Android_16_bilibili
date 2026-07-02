@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">哔哩哔哩</string>
+    <string name="media_playback_channel_name">视频播放</string>
 </resources>

@@ -29,13 +29,14 @@ data class BiliViewerImage(
             urls.filter { it.isNotBlank() }.map(::fromUrl)
 
         fun fromCommentPicture(picture: BiliCommentPicture): BiliViewerImage {
-            val candidates = BiliImageUrlResolver.fullscreenCandidatesFromUrl(picture.url)
-            val displayUrl = candidates.firstOrNull()?.takeIf { it.isNotBlank() } ?: picture.url
+            val largeCandidates = BiliImageUrlResolver.fullscreenCandidatesFromUrl(picture.url)
+            val largeUrl = largeCandidates.firstOrNull()?.takeIf { it.isNotBlank() } ?: picture.url
+            val thumbnailUrl = BiliImageUrlResolver.commentThumbnailUrl(picture.url)
             return BiliViewerImage(
                 id = picture.url,
-                thumbnailUrl = picture.url,
-                largeUrl = displayUrl,
-                downloadUrls = candidates,
+                thumbnailUrl = thumbnailUrl,
+                largeUrl = largeUrl,
+                downloadUrls = BiliImageUrlResolver.commentThumbnailFallbackUrls(picture.url),
                 width = picture.width.takeIf { it > 0 },
                 height = picture.height.takeIf { it > 0 },
             )

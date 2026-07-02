@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -49,6 +50,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -70,12 +72,14 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import com.example.bilibili.R
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.BiliPlayStream
+import com.example.bilibili.data.BiliVideoShot
 import com.example.bilibili.ui.theme.BiliPink
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlin.math.abs
 
 private val VideoProgressLineWidth = 2.5.dp
@@ -106,18 +110,37 @@ fun BilibiliVideoSurface(
     loadDanmaku: (suspend (Long) -> List<BiliDanmakuItem>)? = null,
     playbackEnabled: Boolean = true,
     portraitVideo: Boolean = false,
+    videoShot: BiliVideoShot? = null,
+    scrubPreviewAspectRatio: Float? = null,
+    playbackMetadata: VideoPlaybackMetadata? = null,
 ) {
     val context = LocalContext.current
     val videoPeekController = LocalVideoPeekController.current
     val layerBackdrop = backdrop as? LayerBackdrop ?: rememberLayerBackdrop()
-    var positionMs by remember(playbackKey) { mutableLongStateOf(0L) }
-    var durationMs by remember(playbackKey) { mutableLongStateOf(0L) }
-    var isPlaying by remember(playbackKey) { mutableStateOf(true) }
-    var isBuffering by remember(playbackKey) { mutableStateOf(true) }
+    val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
+    val initialHandoffPlayer = remember(playbackKey, streamToken) {
+        coordinator.consumeHandoffPlayer(playbackKey)
+    }
+    var boundStreamToken by remember(playbackKey, streamToken) {
+        mutableStateOf(if (initialHandoffPlayer != null) streamToken else null)
+    }
+    var positionMs by remember(playbackKey, streamToken) {
+        mutableLongStateOf(initialHandoffPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L)
+    }
+    var durationMs by remember(playbackKey, streamToken) {
+        mutableLongStateOf(initialHandoffPlayer?.duration?.takeIf { it > 0L } ?: 0L)
+    }
+    var isPlaying by remember(playbackKey, streamToken) {
+        mutableStateOf(initialHandoffPlayer?.isPlaying ?: true)
+    }
+    var isBuffering by remember(playbackKey, streamToken) {
+        mutableStateOf(initialHandoffPlayer?.playbackState == Player.STATE_BUFFERING || initialHandoffPlayer == null)
+    }
     var selectedSpeed by remember(playbackKey) { mutableStateOf(1f) }
     var controlsVisible by remember(playbackKey) { mutableStateOf(initialControlsVisible) }
     var controlsHideSignal by remember(playbackKey) { mutableIntStateOf(0) }
     var isScrubbing by remember(playbackKey) { mutableStateOf(false) }
+    var resumePlaybackAfterScrub by remember(playbackKey) { mutableStateOf(false) }
     var danmakuItems by remember(playbackKey) { mutableStateOf<List<BiliDanmakuItem>>(emptyList()) }
     var fullscreenDanmakuMountAllowed by remember(playbackKey, isFullscreen) {
         mutableStateOf(!isFullscreen)
@@ -135,7 +158,7 @@ fun BilibiliVideoSurface(
         danmakuItems = coordinator.cachedDanmaku(danmakuCid) { loadDanmaku(danmakuCid) }
     }
 
-    var player by remember(playbackKey) { mutableStateOf<ExoPlayer?>(null) }
+    var player by remember(playbackKey, streamToken) { mutableStateOf<ExoPlayer?>(initialHandoffPlayer) }
     var playerHandedOff by remember(playbackKey) { mutableStateOf(false) }
     var isPortraitPlayback by remember(playbackKey) { mutableStateOf(portraitVideo) }
     var playerSizeKnown by remember(playbackKey) { mutableStateOf(false) }
@@ -151,10 +174,30 @@ fun BilibiliVideoSurface(
 
     val fullscreenPortraitOrientation = when {
         !isFullscreen -> null
+        !coordinator.fullscreenOrientationLocked -> null
         portraitVideo -> true
         coordinator.fullscreenPortraitVideo != null -> coordinator.fullscreenPortraitVideo
         playerSizeKnown -> isPortraitPlayback
         else -> null
+    }
+    val shotRefererUrl = playbackMetadata?.bvid?.takeIf { it.isNotBlank() }?.let { bvid ->
+        "https://www.bilibili.com/video/$bvid"
+    } ?: playbackKey.substringAfter(':', missingDelimiterValue = playbackKey).takeIf { it.isNotBlank() }?.let { bvid ->
+        "https://www.bilibili.com/video/$bvid"
+    } ?: com.example.bilibili.data.BilibiliEndpoints.HOME
+    val resolvedVideoShot = videoShot
+        ?: stream.cid.takeIf { it > 0L }?.let { coordinator.cachedVideoShot(it) }
+    val resolvedScrubPreviewAspectRatio =
+        scrubPreviewAspectRatio ?: coordinator.cachedVideoAspectRatio(playbackKey)
+
+    LaunchedEffect(playbackKey, scrubPreviewAspectRatio) {
+        coordinator.cacheVideoAspectRatio(playbackKey, scrubPreviewAspectRatio)
+    }
+
+    LaunchedEffect(resolvedVideoShot, shotRefererUrl) {
+        resolvedVideoShot?.images?.take(2)?.forEach { spriteUrl ->
+            VideoShotImageLoader.preloadSprite(spriteUrl, shotRefererUrl)
+        }
     }
 
     ImmersiveVideoChromeEffect(enabled = isFullscreen)
@@ -163,14 +206,11 @@ fun BilibiliVideoSurface(
         portraitVideo = fullscreenPortraitOrientation,
     )
 
-    var boundStreamToken by remember(playbackKey) { mutableStateOf<String?>(null) }
-
     DisposableEffect(playbackKey, isFullscreen, isPeekPlayback) {
         val handoffHandler: (String) -> Unit = handoffHandler@{ requestedKey ->
             if (requestedKey != playbackKey || isPeekPlayback) return@handoffHandler
             val currentPlayer = player ?: return@handoffHandler
             coordinator.stashPlayer(playbackKey, currentPlayer, keepPlaying = true)
-            player = null
             playerHandedOff = true
         }
         coordinator.registerHandoffPrepareHandler(handoffHandler)
@@ -180,7 +220,6 @@ fun BilibiliVideoSurface(
     }
 
     LaunchedEffect(playbackKey, stream.cid, stream.videoUrl, stream.audioUrl, isPeekPlayback, playbackEnabled) {
-        val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
         if (player != null && boundStreamToken == streamToken) return@LaunchedEffect
 
         val streamChanged = boundStreamToken != null && boundStreamToken != streamToken
@@ -188,7 +227,7 @@ fun BilibiliVideoSurface(
             coordinator.releaseHandoffPlayer()
         }
 
-        player?.let { runCatching { it.release() } }
+        player?.let { coordinator.releasePlayerOnce(it) }
         player = null
         playerHandedOff = false
         boundStreamToken = streamToken
@@ -249,13 +288,16 @@ fun BilibiliVideoSurface(
             context = context,
             stream = stream,
             startPositionMs = startPositionMs,
+            playbackMetadata = playbackMetadata,
         ) {
             isBuffering = false
         }.also {
             it.playWhenReady = playbackEnabled
             positionMs = startPositionMs
             playerHandedOff = false
-            if (!playbackEnabled) {
+            if (playbackEnabled) {
+                it.play()
+            } else {
                 it.pause()
             }
         }
@@ -281,7 +323,7 @@ fun BilibiliVideoSurface(
                 playerRef.prepare()
             }
             playerRef.playWhenReady = true
-            if (!playerRef.isPlaying) {
+            if (!playerRef.isPlaying || playerRef.playbackState == Player.STATE_READY) {
                 playerRef.play()
             }
         } else {
@@ -309,24 +351,68 @@ fun BilibiliVideoSurface(
 
     WatchHistoryEffect(stream = stream, player = activePlayer)
 
+    val resolvedPlaybackMetadata = playbackMetadata ?: VideoPlaybackMetadata(
+        title = "哔哩哔哩视频",
+        artist = "哔哩哔哩",
+        artworkUrl = "",
+        bvid = playbackKey.substringAfter(':', playbackKey),
+    )
+    DisposableEffect(
+        activePlayer,
+        playbackKey,
+        isFullscreen,
+        isPeekPlayback,
+        coordinator.activeKey,
+        coordinator.fullscreenKey,
+        coordinator.peekPlaybackKey,
+        resolvedPlaybackMetadata,
+    ) {
+        val isPrimaryPlayback = when {
+            isFullscreen -> coordinator.fullscreenKey == playbackKey
+            isPeekPlayback -> coordinator.peekPlaybackKey == playbackKey
+            else -> coordinator.activeKey == playbackKey && coordinator.fullscreenKey == null
+        }
+        if (isPrimaryPlayback) {
+            VideoPlaybackMediaBridge.attach(playbackKey, activePlayer, resolvedPlaybackMetadata)
+        }
+        onDispose {
+            if (coordinator.playbackStopping ||
+                coordinator.activeKey == null && !isFullscreen && !isPeekPlayback
+            ) {
+                return@onDispose
+            }
+            val stillPrimary = when {
+                isFullscreen -> coordinator.fullscreenKey == playbackKey
+                isPeekPlayback -> coordinator.peekPlaybackKey == playbackKey
+                else -> coordinator.activeKey == playbackKey && coordinator.fullscreenKey == null
+            }
+            val keepSessionForHandoff = when {
+                !isFullscreen && coordinator.fullscreenKey == playbackKey -> true
+                isFullscreen && coordinator.fullscreenKey == null &&
+                    coordinator.activeKey == playbackKey -> true
+                else -> false
+            }
+            if (stillPrimary || keepSessionForHandoff) return@onDispose
+            VideoPlaybackMediaBridge.detach(playbackKey)
+        }
+    }
+
     DisposableEffect(activePlayer, playbackKey, isFullscreen, isPeekPlayback) {
         val streamTokenAtMount = boundStreamToken
         val pauseHandler = {
             coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
             activePlayer.playWhenReady = false
             activePlayer.pause()
+            isPlaying = false
         }
-        if (isPeekPlayback) {
-            coordinator.registerPeekPauseHandler(pauseHandler)
-        } else if (!isFullscreen) {
-            coordinator.registerInlinePauseHandler(pauseHandler)
+        when {
+            isPeekPlayback -> coordinator.registerPeekPauseHandler(playbackKey, pauseHandler)
+            isFullscreen -> coordinator.registerFullscreenPauseHandler(playbackKey, pauseHandler)
+            else -> coordinator.registerInlinePauseHandler(playbackKey, pauseHandler)
         }
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
-                if (!playing) {
-                    isScrubbing = false
-                }
                 positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
                 val duration = activePlayer.duration
                 if (duration > 0L) {
@@ -379,25 +465,35 @@ fun BilibiliVideoSurface(
         onDispose {
             coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
             activePlayer.removeListener(listener)
-            if (isPeekPlayback) {
-                coordinator.unregisterPeekPauseHandler(pauseHandler)
-                if (videoPeekController.activeRequest == null) {
-                    coordinator.releasePeekPlayback(playbackKey)
+            when {
+                isPeekPlayback -> {
+                    coordinator.unregisterPeekPauseHandler(playbackKey)
+                    if (videoPeekController.activeRequest == null) {
+                        coordinator.releasePeekPlayback(playbackKey)
+                    }
                 }
-            } else if (!isFullscreen) {
-                coordinator.unregisterInlinePauseHandler(pauseHandler)
+                isFullscreen -> coordinator.unregisterFullscreenPauseHandler(playbackKey)
+                else -> coordinator.unregisterInlinePauseHandler(playbackKey)
             }
             if (playerHandedOff) return@onDispose
+            val stoppingPlayback = coordinator.playbackStopping ||
+                coordinator.activeKey == null && !isFullscreen && !isPeekPlayback
             val handoffToPeekFullscreen = isPeekPlayback &&
                 !isFullscreen &&
                 videoPeekController.isFullscreenMode &&
                 videoPeekController.activeRequest != null
             val streamStillCurrent = streamTokenAtMount != null && streamTokenAtMount == boundStreamToken
             when {
+                stoppingPlayback -> {
+                    coordinator.releasePlayerOnce(activePlayer)
+                    coordinator.releaseHandoffPlayer()
+                    VideoPlaybackMediaBridge.detachAll()
+                    coordinator.clearReleasedPlayers()
+                }
                 handoffToPeekFullscreen -> Unit
                 !streamStillCurrent -> {
                     coordinator.releaseHandoffPlayer()
-                    runCatching { activePlayer.release() }
+                    coordinator.releasePlayerOnce(activePlayer)
                 }
                 !isFullscreen && coordinator.fullscreenKey == playbackKey -> {
                     coordinator.stashPlayer(playbackKey, activePlayer, keepPlaying = true)
@@ -414,7 +510,10 @@ fun BilibiliVideoSurface(
                     ) -> {
                     coordinator.stashPlayer(playbackKey, activePlayer)
                 }
-                else -> activePlayer.release()
+                else -> {
+                    VideoPlaybackMediaBridge.detach(playbackKey)
+                    coordinator.releasePlayerOnce(activePlayer)
+                }
             }
         }
     }
@@ -446,18 +545,43 @@ fun BilibiliVideoSurface(
 
     val positionState by rememberUpdatedState(positionMs)
     val durationState by rememberUpdatedState(durationMs)
-    val onSeekState = rememberUpdatedState<(Long) -> Unit> { target ->
+    val onScrubPreviewState = rememberUpdatedState<(Long) -> Unit> { target ->
         controlsHideSignal++
         controlsVisible = true
         positionMs = target
+    }
+    val onScrubCommitState = rememberUpdatedState<(Long) -> Unit> { target ->
+        val shouldResume = resumePlaybackAfterScrub
+        isScrubbing = false
+        controlsHideSignal++
+        controlsVisible = true
+        positionMs = target
+        coordinator.savePlaybackPosition(playbackKey, target)
         activePlayer.seekTo(target)
+        if (shouldResume) {
+            if (activePlayer.playbackState == Player.STATE_IDLE ||
+                activePlayer.playbackState == Player.STATE_ENDED
+            ) {
+                activePlayer.prepare()
+            }
+            activePlayer.playWhenReady = true
+            activePlayer.play()
+        } else {
+            activePlayer.playWhenReady = false
+        }
+        isPlaying = activePlayer.isPlaying
     }
 
     LaunchedEffect(activePlayer, isPlaying, isBuffering, isScrubbing) {
-        while (true) {
+        while (isActive) {
             if (!isScrubbing) {
-                positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
-                durationMs = activePlayer.duration.coerceAtLeast(durationMs)
+                runCatching {
+                    positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
+                    val duration = activePlayer.duration
+                    if (duration > 0L) {
+                        durationMs = duration
+                    }
+                }
             }
             delay(if (isScrubbing) 500 else 250)
         }
@@ -475,76 +599,43 @@ fun BilibiliVideoSurface(
     val onPlayPauseState = rememberUpdatedState<() -> Unit>({
         controlsHideSignal++
         if (activePlayer.isPlaying) {
+            activePlayer.playWhenReady = false
             activePlayer.pause()
+            isPlaying = false
         } else {
             if (durationMs > 0 && positionMs >= durationMs - 500) {
                 activePlayer.seekTo(0)
             }
+            when {
+                isPeekPlayback -> {
+                    if (coordinator.peekPlaybackKey != playbackKey) {
+                        coordinator.claimPeekPlayback(playbackKey)
+                    }
+                }
+                isFullscreen -> Unit
+                coordinator.activeKey != playbackKey -> coordinator.requestInlinePlayback(playbackKey)
+            }
+            if (activePlayer.playbackState == Player.STATE_IDLE ||
+                activePlayer.playbackState == Player.STATE_ENDED
+            ) {
+                activePlayer.prepare()
+            }
+            activePlayer.playWhenReady = true
             activePlayer.play()
+            isPlaying = activePlayer.isPlaying
         }
     })
 
     Box(
         modifier = modifier
-            .background(Color.Black)
-            .clipToBounds()
-            .then(
-                if (controlsEnabled && !showDanmakuSettings) {
-                    Modifier
-                        .pointerInput(Unit) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                val slop = viewConfiguration.touchSlop
-                                val anchorX = down.position.x
-                                val startY = down.position.y
-                                val anchorPosition = positionState
-                                val width = size.width.toFloat()
-                                var dragging = false
-                                var lastSeekPosition = anchorPosition
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id }
-                                        ?: event.changes.firstOrNull()
-                                        ?: break
-                                    val dx = abs(change.position.x - anchorX)
-                                    val dy = abs(change.position.y - startY)
-                                    val duration = durationState
-                                    if (!dragging && dx > slop && dx > dy) {
-                                        dragging = true
-                                        isScrubbing = true
-                                        controlsVisible = true
-                                        controlsHideSignal++
-                                    }
-                                    if (dragging && duration > 0L && width > 0f && change.pressed) {
-                                        change.consume()
-                                        val deltaMs = ((change.position.x - anchorX) / width * duration).toLong()
-                                        val newPosition = (anchorPosition + deltaMs).coerceIn(0L, duration)
-                                        if (newPosition != lastSeekPosition) {
-                                            lastSeekPosition = newPosition
-                                            onSeekState.value(newPosition)
-                                        }
-                                    }
-                                    if (event.changes.all { it.changedToUpIgnoreConsumed() }) break
-                                }
-                                if (dragging) {
-                                    isScrubbing = false
-                                }
-                            }
-                        }
-                        .pointerInput(isFullscreen, controlsEnabled) {
-                            detectTapGestures(
-                                onTap = {
-                                    controlsVisible = !controlsVisible
-                                    controlsHideSignal++
-                                },
-                                onDoubleTap = { onPlayPauseState.value() },
-                            )
-                        }
-                } else {
-                    Modifier
-                },
-            ),
+            .fillMaxSize()
+            .background(Color.Black),
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clipToBounds(),
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -566,6 +657,9 @@ fun BilibiliVideoSurface(
                     } else {
                         AspectRatioFrameLayout.RESIZE_MODE_FIT
                     }
+                },
+                onRelease = { playerView ->
+                    playerView.player = null
                 },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -594,17 +688,43 @@ fun BilibiliVideoSurface(
                     .zIndex(1f),
             )
         }
+        }
 
-        DanmakuSettingsOverlay(
-            visible = showDanmakuSettings,
-            settings = danmakuSettings,
-            onSettingsChange = coordinator::updateDanmakuSettings,
-            onDismiss = { showDanmakuSettings = false },
-            backdrop = layerBackdrop,
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(25f),
-        )
+        if (controlsEnabled && !showDanmakuSettings) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(5f)
+                    .pointerInput(Unit) {
+                        detectHorizontalVideoScrub(
+                            positionState = { positionState },
+                            durationState = { durationState },
+                            onDragStart = {
+                                resumePlaybackAfterScrub = activePlayer.isPlaying
+                                if (activePlayer.isPlaying) {
+                                    activePlayer.playWhenReady = false
+                                    activePlayer.pause()
+                                    isPlaying = false
+                                }
+                                controlsVisible = true
+                                controlsHideSignal++
+                            },
+                            onScrubbingChange = { isScrubbing = it },
+                            onScrubPreview = { onScrubPreviewState.value(it) },
+                            onScrubCommit = { onScrubCommitState.value(it) },
+                        )
+                    }
+                    .pointerInput(isFullscreen, controlsEnabled) {
+                        detectTapGestures(
+                            onTap = {
+                                controlsVisible = !controlsVisible
+                                controlsHideSignal++
+                            },
+                            onDoubleTap = { onPlayPauseState.value() },
+                        )
+                    },
+            )
+        }
 
         if (isBuffering) {
             CircularProgressIndicator(
@@ -629,7 +749,7 @@ fun BilibiliVideoSurface(
                     text = "关闭",
                     onClick = onCloseFullscreen,
                     modifier = Modifier
-                        .padding(12.dp)
+                        .padding(start = 60.dp, top = 20.dp, end = 12.dp, bottom = 12.dp)
                         .widthIn(min = 54.dp)
                         .height(VideoControlBarHeight),
                 )
@@ -655,7 +775,7 @@ fun BilibiliVideoSurface(
         }
 
         AnimatedVisibility(
-            visible = controlsEnabled && controlsVisible,
+            visible = controlsEnabled && controlsVisible && !showDanmakuSettings,
             enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { it },
             exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { it },
             modifier = Modifier
@@ -670,9 +790,22 @@ fun BilibiliVideoSurface(
                 durationMs = durationMs,
                 speed = selectedSpeed,
                 isScrubbing = isScrubbing,
-                onScrubbingChange = { isScrubbing = it },
+                onScrubbingChange = { scrubbing ->
+                    if (!scrubbing) {
+                        isScrubbing = false
+                    } else if (!isScrubbing) {
+                        resumePlaybackAfterScrub = activePlayer.isPlaying
+                        if (activePlayer.isPlaying) {
+                            activePlayer.playWhenReady = false
+                            activePlayer.pause()
+                            isPlaying = false
+                        }
+                        isScrubbing = true
+                    }
+                },
+                onScrubPreview = { onScrubPreviewState.value(it) },
+                onScrubCommit = { onScrubCommitState.value(it) },
                 onPlayPause = { onPlayPauseState.value() },
-                onSeek = { onSeekState.value(it) },
                 onSpeedClick = {
                     controlsHideSignal++
                     selectedSpeed = when (selectedSpeed) {
@@ -690,6 +823,7 @@ fun BilibiliVideoSurface(
                 },
                 onDanmakuLongPress = {
                     controlsHideSignal++
+                    controlsVisible = false
                     showDanmakuSettings = true
                 },
                 modifier = Modifier
@@ -697,6 +831,37 @@ fun BilibiliVideoSurface(
                     .height(VideoControlBarHeight),
             )
         }
+
+        val scrubProgressFraction = if (durationMs > 0L) {
+            (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+        VideoScrubPreviewOverlay(
+            visible = isScrubbing,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            progressFraction = scrubProgressFraction,
+            videoShot = resolvedVideoShot,
+            previewAspectRatio = resolvedScrubPreviewAspectRatio,
+            refererUrl = shotRefererUrl,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(20f)
+                .padding(horizontal = 6.dp)
+                .padding(bottom = (if (isFullscreen) 40.dp else 8.dp) + VideoControlBarHeight + 10.dp),
+        )
+
+        DanmakuSettingsOverlay(
+            visible = showDanmakuSettings,
+            settings = danmakuSettings,
+            onSettingsChange = coordinator::updateDanmakuSettings,
+            onDismiss = { showDanmakuSettings = false },
+            backdrop = layerBackdrop,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(30f),
+        )
     }
 }
 
@@ -707,7 +872,8 @@ private fun VideoControls(
     durationMs: Long,
     speed: Float,
     onPlayPause: () -> Unit,
-    onSeek: (Long) -> Unit,
+    onScrubPreview: (Long) -> Unit,
+    onScrubCommit: (Long) -> Unit,
     onSpeedClick: () -> Unit,
     isScrubbing: Boolean,
     onScrubbingChange: (Boolean) -> Unit,
@@ -724,42 +890,14 @@ private fun VideoControls(
     }
     val positionState by rememberUpdatedState(positionMs)
     val durationState by rememberUpdatedState(durationMs)
-    val onSeekState by rememberUpdatedState(onSeek)
+    val onScrubPreviewState by rememberUpdatedState(onScrubPreview)
+    val onScrubCommitState by rememberUpdatedState(onScrubCommit)
     val onScrubbingChangeState by rememberUpdatedState(onScrubbingChange)
 
     Box(
         modifier = modifier
             .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
-            .clip(VideoControlCapsuleShape)
-            .pointerInput(durationState) {
-            awaitEachGesture {
-                onScrubbingChangeState(true)
-                try {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val duration = durationState
-                    val width = size.width.toFloat()
-                    if (duration <= 0L || width <= 0f) return@awaitEachGesture
-                    val anchorPosition = positionState
-                    val anchorX = down.position.x
-                    var lastSeekPosition = anchorPosition
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull() ?: break
-                        if (change.pressed) {
-                            val deltaMs = ((change.position.x - anchorX) / width * duration).toLong()
-                            val newPosition = (anchorPosition + deltaMs).coerceIn(0L, duration)
-                            if (newPosition != lastSeekPosition) {
-                                lastSeekPosition = newPosition
-                                onSeekState(newPosition)
-                            }
-                        }
-                        if (event.changes.all { it.changedToUpIgnoreConsumed() }) break
-                    }
-                } finally {
-                    onScrubbingChangeState(false)
-                }
-            }
-        },
+            .clip(VideoControlCapsuleShape),
     ) {
         VideoControlCapsuleProgressBackground(
             progress = progress,
@@ -794,21 +932,41 @@ private fun VideoControls(
                 )
             }
             if (showDanmakuToggle) {
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "弹",
-                    color = if (danmakuVisible) Color.White else Color.White.copy(alpha = 0.42f),
-                    fontWeight = if (danmakuVisible) FontWeight.Bold else FontWeight.Normal,
-                    style = TextStyle(fontSize = 14.sp),
-                    modifier = Modifier.pointerInput(onDanmakuToggle, onDanmakuLongPress) {
-                        detectTapGestures(
-                            onTap = { onDanmakuToggle() },
-                            onLongPress = { onDanmakuLongPress() },
+                Box(
+                    modifier = Modifier
+                        .zIndex(1f)
+                        .sizeIn(minWidth = 28.dp, minHeight = 28.dp)
+                        .pointerInput(onDanmakuToggle, onDanmakuLongPress) {
+                            detectTapGestures(
+                                onTap = { onDanmakuToggle() },
+                                onLongPress = { onDanmakuLongPress() },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "弹",
+                        color = if (danmakuVisible) Color.White else Color.White.copy(alpha = 0.42f),
+                        fontWeight = if (danmakuVisible) FontWeight.Bold else FontWeight.Normal,
+                        style = TextStyle(fontSize = 14.sp),
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .pointerInput(durationState) {
+                        detectHorizontalVideoScrub(
+                            positionState = { positionState },
+                            durationState = { durationState },
+                            onDragStart = { onScrubbingChangeState(true) },
+                            onScrubbingChange = onScrubbingChangeState,
+                            onScrubPreview = { onScrubPreviewState(it) },
+                            onScrubCommit = { onScrubCommitState(it) },
                         )
                     },
-                )
-            }
-            Spacer(Modifier.weight(1f))
+            )
             Text(
                 text = speedLabel(speed),
                 color = Color.White,
@@ -899,3 +1057,51 @@ private fun VideoControlCapsuleProgressBackground(
 
 @Composable
 fun rememberVideoControlBackdrop(): Backdrop = rememberLayerBackdrop()
+
+private suspend fun PointerInputScope.detectHorizontalVideoScrub(
+    positionState: () -> Long,
+    durationState: () -> Long,
+    onDragStart: () -> Unit,
+    onScrubbingChange: (Boolean) -> Unit,
+    onScrubPreview: (Long) -> Unit,
+    onScrubCommit: (Long) -> Unit,
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val slop = viewConfiguration.touchSlop
+        val anchorX = down.position.x
+        val startY = down.position.y
+        val anchorPosition = positionState()
+        val width = size.width.toFloat()
+        var dragging = false
+        var lastSeekPosition = anchorPosition
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id }
+                ?: event.changes.firstOrNull()
+                ?: break
+            val dx = abs(change.position.x - anchorX)
+            val dy = abs(change.position.y - startY)
+            val duration = durationState()
+            if (!dragging && dx > slop && dx > dy && duration > 0L && width > 0f) {
+                dragging = true
+                onDragStart()
+                onScrubbingChange(true)
+            }
+            if (dragging && duration > 0L && width > 0f && change.pressed) {
+                change.consume()
+                val deltaMs = ((change.position.x - anchorX) / width * duration).toLong()
+                val newPosition = (anchorPosition + deltaMs).coerceIn(0L, duration)
+                if (newPosition != lastSeekPosition) {
+                    lastSeekPosition = newPosition
+                    onScrubPreview(newPosition)
+                }
+            }
+            if (event.changes.all { it.changedToUpIgnoreConsumed() }) break
+        }
+        if (dragging) {
+            onScrubCommit(lastSeekPosition)
+            onScrubbingChange(false)
+        }
+    }
+}

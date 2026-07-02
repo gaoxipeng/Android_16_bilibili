@@ -27,6 +27,26 @@ object BiliImageUrlResolver {
         }.distinct()
     }
 
+    private val ThumbnailWidthPattern = Regex("""@(\d+)w""", RegexOption.IGNORE_CASE)
+
+    fun commentThumbnailUrl(url: String, maxEdge: Int = 336): String {
+        if (url.isBlank()) return url
+        val base = stripSizeSuffix(url)
+        if (!base.contains("hdslb.com", ignoreCase = true)) return url
+        val existingEdge = ThumbnailWidthPattern.find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        if (existingEdge != null && existingEdge >= maxEdge) return url
+        return "${base}@${maxEdge}w_${maxEdge}h.webp"
+    }
+
+    fun commentThumbnailFallbackUrls(url: String): List<String> {
+        val thumbnail = commentThumbnailUrl(url)
+        return buildList {
+            if (url.isNotBlank() && url != thumbnail) add(url)
+            val stripped = stripSizeSuffix(url)
+            if (stripped.isNotBlank() && stripped != thumbnail && stripped != url) add(stripped)
+        }.distinct()
+    }
+
     fun thumbnailCandidates(image: BiliViewerImage): List<String> =
         buildList {
             image.thumbnailUrl.takeIf { it.isNotBlank() }?.let(::add)

@@ -1,6 +1,8 @@
 package com.example.bilibili.ui.screens
 
 import android.content.Intent
+import android.content.res.Configuration
+import android.view.OrientationEventListener
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -47,6 +50,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +69,7 @@ import com.example.bilibili.data.BiliVideoPage
 import com.example.bilibili.data.BiliUgcSeason
 import com.example.bilibili.data.BiliVideoDetail
 import com.example.bilibili.data.BiliVideoItem
+import com.example.bilibili.data.BiliVideoShot
 import com.example.bilibili.data.BiliVideoRelation
 import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.data.BilibiliApiClient
@@ -73,8 +78,10 @@ import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.player.BilibiliVideoSurface
 import com.example.bilibili.player.LightContentStatusBarEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.player.VideoPlaybackMetadata
 import com.example.bilibili.player.rememberVideoControlBackdrop
 import com.example.bilibili.player.knownPortraitVideoHint
+import com.example.bilibili.player.knownVideoAspectRatio
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.BiliCommentImageStrip
 import com.example.bilibili.ui.components.BiliCommentText
@@ -505,10 +512,16 @@ fun VideoDetailScreen(
         commentsListState.scrollToItem(0)
     }
 
-    LaunchedEffect(pagerState.currentPage, commentSort, detail?.video?.aid) {
+    var loadedCommentsKey by remember(seedVideo.bvid) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(pagerState.currentPage, detail?.video?.aid, commentSort) {
         if (pagerState.currentPage != VideoDetailTab.Comments.ordinal) return@LaunchedEffect
-        if (detail == null) return@LaunchedEffect
-        reloadCommentsTab(refreshMeta = true)
+        val aid = detail?.video?.aid ?: return@LaunchedEffect
+        if (aid <= 0L) return@LaunchedEffect
+        val key = "$aid:$commentSort"
+        if (loadedCommentsKey == key) return@LaunchedEffect
+        reloadCommentsTab(refreshMeta = loadedCommentsKey == null)
+        loadedCommentsKey = key
     }
 
     val commentEntries by remember {
@@ -589,6 +602,19 @@ fun VideoDetailScreen(
         ?: seedVideo.cid.takeIf { it > 0L }
     val streamMatchesTarget = playbackTargetCid == null ||
         currentStream?.cid?.takeIf { it > 0L } == playbackTargetCid
+
+    var videoShot by remember(currentVideo.bvid, currentCid) { mutableStateOf<BiliVideoShot?>(null) }
+    LaunchedEffect(currentVideo.bvid, currentVideo.aid, currentCid, credential?.dedeUserId) {
+        val cid = currentCid.takeIf { it > 0L } ?: return@LaunchedEffect
+        val shot = api.getVideoShot(
+            bvid = currentVideo.bvid,
+            aid = currentVideo.aid,
+            cid = cid,
+            credential = credential,
+        )
+        videoShot = shot
+        coordinator.cacheVideoShot(cid, shot)
+    }
 
     LaunchedEffect(
         seedVideo.bvid,
@@ -675,9 +701,86 @@ fun VideoDetailScreen(
     }
 
     val isVideoFullscreen = coordinator.fullscreenKey == playbackKey
+    val configuration = LocalConfiguration.current
     val hazeState = rememberHazeState()
+    var autoFullscreenByRotation by remember(playbackKey) { mutableStateOf(false) }
+    var suppressAutoFullscreenUntilPortrait by remember(playbackKey) { mutableStateOf(false) }
+    var closeAutoFullscreenAfterPortrait by remember(playbackKey) { mutableStateOf(false) }
 
     LightContentStatusBarEffect()
+
+    LaunchedEffect(
+        configuration.orientation,
+        isVideoFullscreen,
+        currentStream,
+        streamMatchesTarget,
+        currentVideo.isPortraitVideo,
+        suppressAutoFullscreenUntilPortrait,
+        closeAutoFullscreenAfterPortrait,
+        playbackKey,
+    ) {
+        if (configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+            suppressAutoFullscreenUntilPortrait = false
+        }
+        if (configuration.orientation == Configuration.ORIENTATION_PORTRAIT &&
+            isVideoFullscreen &&
+            autoFullscreenByRotation &&
+            closeAutoFullscreenAfterPortrait
+        ) {
+            closeAutoFullscreenAfterPortrait = false
+            autoFullscreenByRotation = false
+            coordinator.closeFullscreen()
+            return@LaunchedEffect
+        }
+        if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+            !isVideoFullscreen &&
+            currentStream != null &&
+            streamMatchesTarget &&
+            !currentVideo.isPortraitVideo &&
+            !suppressAutoFullscreenUntilPortrait
+        ) {
+            autoFullscreenByRotation = true
+            coordinator.openFullscreen(
+                playbackKey,
+                portraitVideo = knownPortraitVideoHint(
+                    currentVideo.videoWidth,
+                    currentVideo.videoHeight,
+                ) ?: false,
+            )
+        } else if (configuration.orientation == Configuration.ORIENTATION_PORTRAIT &&
+            isVideoFullscreen &&
+            autoFullscreenByRotation
+        ) {
+            autoFullscreenByRotation = false
+            suppressAutoFullscreenUntilPortrait = true
+            closeAutoFullscreenAfterPortrait = false
+            coordinator.closeFullscreen()
+        }
+    }
+
+    DisposableEffect(autoFullscreenByRotation, isVideoFullscreen, playbackKey, context) {
+        if (!autoFullscreenByRotation || !isVideoFullscreen) {
+            return@DisposableEffect onDispose {}
+        }
+        val orientationListener = object : OrientationEventListener(context.applicationContext) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                val uprightPortrait = orientation <= 25 || orientation >= 335 ||
+                    orientation in 155..205
+                if (uprightPortrait && coordinator.fullscreenKey == playbackKey) {
+                    closeAutoFullscreenAfterPortrait = true
+                    suppressAutoFullscreenUntilPortrait = true
+                    coordinator.releaseFullscreenOrientationLock(playbackKey)
+                }
+            }
+        }
+        if (orientationListener.canDetectOrientation()) {
+            orientationListener.enable()
+        }
+        onDispose {
+            orientationListener.disable()
+        }
+    }
 
     Box(
         modifier = modifier
@@ -717,6 +820,9 @@ fun VideoDetailScreen(
                             coordinator = coordinator,
                             backdrop = controlBackdrop,
                             onFullscreen = {
+                                autoFullscreenByRotation = false
+                                closeAutoFullscreenAfterPortrait = false
+                                suppressAutoFullscreenUntilPortrait = false
                                 coordinator.openFullscreen(
                                     playbackKey,
                                     portraitVideo = knownPortraitVideoHint(
@@ -725,7 +831,12 @@ fun VideoDetailScreen(
                                     ),
                                 )
                             },
-                            onCloseFullscreen = { coordinator.closeFullscreen() },
+                            onCloseFullscreen = {
+                                autoFullscreenByRotation = false
+                                closeAutoFullscreenAfterPortrait = false
+                                suppressAutoFullscreenUntilPortrait = false
+                                coordinator.closeFullscreen()
+                            },
                             modifier = Modifier.fillMaxSize(),
                             danmakuEnabled = true,
                             danmakuCid = currentStream.cid.takeIf { it > 0L }
@@ -740,6 +851,12 @@ fun VideoDetailScreen(
                             },
                             playbackEnabled = playbackActive,
                             portraitVideo = currentVideo.isPortraitVideo,
+                            videoShot = videoShot,
+                            scrubPreviewAspectRatio = knownVideoAspectRatio(
+                                currentVideo.videoWidth,
+                                currentVideo.videoHeight,
+                            ),
+                            playbackMetadata = VideoPlaybackMetadata.fromVideo(currentVideo),
                         )
                     } else if (currentStream != null && streamMatchesTarget) {
                         Box(Modifier.fillMaxSize())
@@ -788,7 +905,7 @@ fun VideoDetailScreen(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
-            beyondViewportPageCount = 0,
+            beyondViewportPageCount = 1,
         ) { page ->
             when (VideoDetailTab.entries[page]) {
                 VideoDetailTab.Intro -> {
@@ -1285,6 +1402,7 @@ fun VideoDetailScreen(
         onDismiss = { showMoreMenu = false },
         onOpenOfficialApp = {
             showMoreMenu = false
+            coordinator.pauseForOverlay()
             BilibiliAppLauncher.openVideo(
                 context = context,
                 bvid = currentVideo.bvid,

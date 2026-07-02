@@ -62,6 +62,7 @@ class BilibiliHomeFeedStore(context: Context) {
                         coverUrl = item.optString("cover_url"),
                         authorName = item.optString("author_name"),
                         authorMid = item.optLong("author_mid"),
+                        authorFace = item.optString("author_face"),
                         viewCount = item.optLong("view_count"),
                         danmakuCount = item.optLong("danmaku_count"),
                         likeCount = item.optLong("like_count"),
@@ -85,6 +86,7 @@ class BilibiliHomeFeedStore(context: Context) {
                         .put("cover_url", video.coverUrl)
                         .put("author_name", video.authorName)
                         .put("author_mid", video.authorMid)
+                        .put("author_face", video.authorFace)
                         .put("view_count", video.viewCount)
                         .put("danmaku_count", video.danmakuCount)
                         .put("like_count", video.likeCount)

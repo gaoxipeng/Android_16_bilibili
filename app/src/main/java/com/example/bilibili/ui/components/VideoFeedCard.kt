@@ -71,7 +71,6 @@ private val VideoFeedCoverScrimHeightFraction = 0.45f
 private val VideoFeedMetaBackground = Color(0xFFFFFFFF)
 private val VideoFeedTitleColor = Color(0xFF1A1A1A)
 private val VideoFeedMetaDataColor = Color(0xFF999999)
-private val VideoFeedUpBadgeColor = Color(0xFFFFA640)
 private val VideoFeedCardBorderColor = Color(0xFFE8E8E8)
 private val VideoFeedGridCardElevation = 0.dp
 private val VideoOverlayLiquidBlurRadius = 14.dp
@@ -319,7 +318,10 @@ private fun VideoFeedGridCard(
                             },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        UpAuthorBadge(color = VideoFeedUpBadgeColor)
+                        VideoFeedAuthorAvatar(
+                            faceUrl = video.authorFace,
+                            authorName = video.authorName,
+                        )
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = video.authorName,
@@ -451,7 +453,10 @@ private fun VideoFeedOverlayCard(
                                 },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            UpAuthorBadge(color = VideoOverlayAuthorColor)
+                            VideoFeedAuthorAvatar(
+                                faceUrl = video.authorFace,
+                                authorName = video.authorName,
+                            )
                             Spacer(Modifier.width(6.dp))
                             Text(
                                 text = video.authorName,

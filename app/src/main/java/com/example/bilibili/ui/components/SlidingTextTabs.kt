@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bilibili.ui.theme.BiliPink
@@ -45,6 +46,9 @@ fun SlidingTextTabs(
     tabSpacing: Dp = 22.dp,
     accent: Color = BiliPink,
     unselectedColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    fontSize: TextUnit = 14.sp,
+    selectedFontWeight: FontWeight = FontWeight.SemiBold,
+    unselectedFontWeight: FontWeight = FontWeight.Normal,
 ) {
     if (labels.isEmpty()) return
 
@@ -70,6 +74,7 @@ fun SlidingTextTabs(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .consumeTouchEvents()
             .padding(contentPadding),
     ) {
         Row(
@@ -93,8 +98,8 @@ fun SlidingTextTabs(
                 ) {
                     Text(
                         text = label,
-                        fontSize = 14.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        fontSize = fontSize,
+                        fontWeight = if (selected) selectedFontWeight else unselectedFontWeight,
                         color = if (selected) accent else unselectedColor,
                     )
                     Spacer(Modifier.height(3.dp))

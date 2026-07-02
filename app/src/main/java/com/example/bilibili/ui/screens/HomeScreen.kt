@@ -46,7 +46,6 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -142,7 +141,6 @@ fun HomeScreen(
     val listState = rememberLazyListState()
     val staggeredGridState = rememberLazyStaggeredGridState()
     var showSearch by remember { mutableStateOf(true) }
-    var previousScrollKey by remember { mutableIntStateOf(0) }
     val feedTab = LocalFeedTabForReselect.current
     val feedTabReselectController = LocalFeedTabReselectController.current
 
@@ -171,6 +169,7 @@ fun HomeScreen(
     }
 
     LaunchedEffect(useSingleColumn, listState, staggeredGridState) {
+        var previousScrollKey = 0
         val scrollFlow = if (useSingleColumn) {
             snapshotFlow {
                 listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset

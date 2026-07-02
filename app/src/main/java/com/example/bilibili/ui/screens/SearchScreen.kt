@@ -99,6 +99,7 @@ private val SearchHistoryChipBackground = Color(0xFFF7F7F7)
 private val SearchHistoryChipRadius = 8.dp
 private val SearchHistoryChipMaxWidth = 168.dp
 private val SearchHistoryTitleToChipsGap = 2.dp
+private val SearchContentTopGap = 2.dp
 
 @Composable
 fun SearchScreen(
@@ -340,7 +341,7 @@ fun SearchScreen(
             modifier = Modifier
                 .padding(top = HomeSearchBarTopGap)
                 .padding(horizontal = HomeSearchBarHorizontalInset)
-                .padding(bottom = HomeSearchBarBottomGap),
+                .padding(bottom = SearchContentTopGap),
         )
 
         if (activeQuery == null) {
@@ -521,7 +522,8 @@ fun SearchScreen(
                             else -> {
                                 LazyColumn(
                                     state = userListState,
-                                    contentPadding = PaddingValues(bottom = 24.dp),
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
                                 ) {
                                     itemsIndexed(users, key = { _, user -> user.mid }) { index, user ->
                                         SearchUserRow(
@@ -574,7 +576,7 @@ private fun SearchDiscoveryPanel(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = SearchContentTopGap, bottom = 24.dp),
     ) {
         if (searchHistory.isNotEmpty()) {
             item(key = "history-section") {
@@ -900,7 +902,7 @@ private fun SearchResultTabs(
         labels = tabs.map { it.label },
         scrollPosition = scrollPosition,
         onTabSelected = { index -> onTabSelected(tabs[index]) },
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = SearchContentTopGap),
     )
 }
 

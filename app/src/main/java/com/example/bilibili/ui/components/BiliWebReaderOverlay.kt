@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -38,12 +39,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.bilibili.data.BilibiliEndpoints
+import com.example.bilibili.util.BiliArticleUrl
 
 data class BiliWebReaderState(
     val url: String,
     val title: String = "",
 )
+
+private const val BILI_MOBILE_WEB_UA =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 " +
+        "(KHTML, like Gecko) Mobile/15E148 BiliApp/72600100 os/ios model/iPhone mobi_ios"
 
 private class MobileWebViewportCoordinator {
     private var lastFittedUrl: String? = null
@@ -77,12 +82,26 @@ private fun WebView.fitMobileWebViewport(scrollToTop: Boolean = true) {
     )
 }
 
+private fun webRequestHeaders(url: String): Map<String, String> {
+    val referer = if (url.contains("m.bilibili.com", ignoreCase = true)) {
+        "https://m.bilibili.com/"
+    } else {
+        "https://www.bilibili.com/"
+    }
+    return mapOf(
+        "Referer" to referer,
+        "Origin" to referer.trimEnd('/'),
+        "User-Agent" to BILI_MOBILE_WEB_UA,
+    )
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BiliWebReaderOverlay(
     state: BiliWebReaderState?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    showHeader: Boolean = true,
 ) {
     if (state == null) return
 
@@ -94,17 +113,31 @@ fun BiliWebReaderOverlay(
     BackHandler(onBack = onBack)
 
     Surface(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .consumeTouchEvents(),
         color = MaterialTheme.colorScheme.background,
     ) {
         Column(Modifier.fillMaxSize()) {
-            RowHeader(
-                title = state.title,
-                topInset = topInset,
-                onBack = onBack,
-            )
-            HorizontalDivider()
-            Box(Modifier.fillMaxSize()) {
+            if (showHeader) {
+                RowHeader(
+                    title = state.title,
+                    topInset = topInset,
+                    onBack = onBack,
+                )
+                HorizontalDivider()
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (!showHeader) {
+                            Modifier.padding(top = topInset)
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
                 val webView = remember(state.url) {
                     WebView(context).apply {
                         layoutParams = ViewGroup.LayoutParams(
@@ -121,18 +154,31 @@ fun BiliWebReaderOverlay(
                             useWideViewPort = true
                             loadWithOverviewMode = false
                             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                            userAgentString =
-                                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 " +
-                                "(KHTML, like Gecko) Mobile/15E148 BiliApp/72600100 os/ios model/iPhone mobi_ios"
+                            userAgentString = BILI_MOBILE_WEB_UA
                         }
                         webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?,
+                            ): Boolean {
+                                val target = request?.url?.toString().orEmpty()
+                                if (target.startsWith("bilibili://", ignoreCase = true)) {
+                                    return true
+                                }
+                                BiliArticleUrl.resolveMobileOpusUrl(target)?.let { opusUrl ->
+                                    view?.loadUrl(opusUrl, webRequestHeaders(opusUrl))
+                                    return true
+                                }
+                                return false
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 loading = false
                                 if (!viewportCoordinator.shouldFitOnPageFinished(url)) return
                                 view?.fitMobileWebViewport(scrollToTop = true)
                             }
                         }
-                        loadUrl(state.url)
+                        loadUrl(state.url, webRequestHeaders(state.url))
                     }
                 }
 

@@ -109,6 +109,7 @@ fun InlineVideoCard(
                 context = context,
                 stream = stream,
                 startPositionMs = coordinator.getPlaybackPosition(playbackKey),
+                playbackMetadata = VideoPlaybackMetadata.fromVideo(video),
             )
             coordinator.stashPlayer(playbackKey, player)
         }
@@ -168,7 +169,6 @@ fun InlineVideoCard(
             .pointerInput(video.bvid) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    ensurePlayStreamState.value?.invoke()
                     var cancelledByMoveBeforeLongPress = false
                     var releasedBeforeLongPress = false
                     val longPressed = withTimeoutOrNull(VideoPeekLongPressTimeoutMs) {
@@ -191,13 +191,18 @@ fun InlineVideoCard(
 
                     if (!longPressed) {
                         if (releasedBeforeLongPress && !cancelledByMoveBeforeLongPress) {
+                            ensurePlayStreamState.value?.invoke()
                             onCardClick?.invoke()
                         }
                         return@awaitEachGesture
                     }
 
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    val stream = currentStreamState.value() ?: return@awaitEachGesture
+                    val stream = currentStreamState.value()
+                    if (stream == null) {
+                        ensurePlayStreamState.value?.invoke()
+                        return@awaitEachGesture
+                    }
                     down.consume()
                     openVideoPeek(stream)
 
@@ -261,6 +266,8 @@ fun InlineVideoCard(
                     onCloseFullscreen = { coordinator.closeFullscreen() },
                     modifier = Modifier.fillMaxSize(),
                     portraitVideo = video.isPortraitVideo,
+                    scrubPreviewAspectRatio = knownVideoAspectRatio(video.videoWidth, video.videoHeight),
+                    playbackMetadata = VideoPlaybackMetadata.fromVideo(video),
                 )
             } else {
                 Box(

@@ -9,6 +9,8 @@ object BilibiliEndpoints {
     const val FOLLOWING_FEED = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all"
     const val USER_SPACE_DYNAMIC = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
     const val DYNAMIC_DETAIL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
+    const val ARTICLE_VIEW = "https://api.bilibili.com/x/article/view"
+    const val OPUS_DETAIL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail"
 
     const val DYNAMIC_FEED_FEATURES =
         "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete,onlyfansQaCard,endFooterHidden"
@@ -38,6 +40,7 @@ object BilibiliEndpoints {
     const val VIDEO_COMMENTS = "https://api.bilibili.com/x/v2/reply/wbi/main"
     const val VIDEO_COMMENT_REPLIES = "https://api.bilibili.com/x/v2/reply/reply"
     const val VIDEO_ONLINE = "https://api.bilibili.com/x/player/online/total"
+    const val VIDEO_SHOT = "https://api.bilibili.com/x/player/videoshot"
     const val VIDEO_ARCHIVE_RELATION = "https://api.bilibili.com/x/web-interface/archive/relation"
     const val VIDEO_HAS_LIKE = "https://api.bilibili.com/x/web-interface/archive/has/like"
     const val VIDEO_FAVOURED = "https://api.bilibili.com/x/v2/fav/video/favoured"

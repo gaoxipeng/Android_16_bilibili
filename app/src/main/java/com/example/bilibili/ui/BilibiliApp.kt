@@ -1,5 +1,6 @@
 package com.example.bilibili.ui
 
+import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -14,7 +15,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,9 +52,14 @@ import com.example.bilibili.player.WatchHistoryReporter
 import com.example.bilibili.player.VideoPeekController
 import com.example.bilibili.player.VideoPeekOverlay
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.player.VideoPlaybackMediaBridge
+import com.example.bilibili.player.VideoPlaybackMetadata
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.FeedRefreshHintOverlay
+import com.example.bilibili.ui.components.PressAgainExitConfirmWindowMillis
+import com.example.bilibili.ui.components.PressAgainExitHintOverlay
 import com.example.bilibili.ui.components.NavAnimatedOverlay
+import com.example.bilibili.ui.components.blockHiddenTouches
 import com.example.bilibili.ui.components.feedRefreshHintMessage
 import com.example.bilibili.ui.components.imageviewer.BiliImageSaveHintController
 import com.example.bilibili.ui.components.imageviewer.BiliImageSaveHintOverlay
@@ -74,6 +79,7 @@ import com.example.bilibili.ui.screens.LoginSheet
 import com.example.bilibili.ui.screens.SearchScreen
 import com.example.bilibili.ui.screens.UserProfileScreen
 import com.example.bilibili.ui.screens.UserRelationListScreen
+import com.example.bilibili.ui.screens.ArticleDetailScreen
 import com.example.bilibili.ui.screens.DynamicDetailScreen
 import com.example.bilibili.data.BiliVideoPage
 import com.example.bilibili.ui.screens.VideoDetailScreen
@@ -85,14 +91,15 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.bilibili.ui.navigation.AppNavController
 import com.example.bilibili.ui.navigation.AppNavEntry
 import com.example.bilibili.ui.navigation.findVideoDetail
 import com.example.bilibili.ui.navigation.stableKey
 import com.example.bilibili.ui.navigation.lastVideoDetail
+import com.example.bilibili.util.BiliArticleUrl
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -118,6 +125,9 @@ fun BilibiliApp() {
             persistDanmakuVisible = playerPreferences::setDanmakuVisible,
             persistDanmakuSettings = playerPreferences::setDanmakuSettings,
         )
+    }
+    LaunchedEffect(Unit) {
+        VideoPlaybackMediaBridge.initialize(context)
     }
     val videoPeekController = remember { VideoPeekController() }
 
@@ -165,6 +175,8 @@ fun BilibiliApp() {
     val navController = remember { AppNavController() }
     var feedRefreshHint by remember { mutableStateOf<String?>(null) }
     var feedSearchVisible by remember { mutableStateOf(true) }
+    var pressAgainExitHintVisible by remember { mutableStateOf(false) }
+    var lastExitBackPressAt by remember { mutableStateOf(0L) }
 
     val bottomBarBackdrop = rememberLayerBackdrop()
     val historyMenuController = rememberHistoryMenuController()
@@ -180,8 +192,10 @@ fun BilibiliApp() {
 
     DisposableEffect(lifecycleOwner, backgroundPlaybackEnabled) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && !backgroundPlaybackEnabled) {
-                coordinator.pauseForOverlay()
+            if (!backgroundPlaybackEnabled &&
+                (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP)
+            ) {
+                coordinator.pauseAll()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -324,7 +338,30 @@ fun BilibiliApp() {
     }
 
     fun openDynamicDetail(item: BiliDynamicItem) {
+        item.resolveArticleMobileUrl()?.let { webUrl ->
+            coordinator.pauseForOverlay()
+            videoPeekController.cancel()
+            navController.push(
+                AppNavEntry.ArticleDetail(
+                    webUrl = webUrl,
+                    seedTitle = item.link?.title?.ifBlank { item.text }.orEmpty(),
+                ),
+            )
+            return
+        }
         navController.push(AppNavEntry.DynamicDetail(item))
+    }
+
+    fun openArticleDetail(webUrl: String, seedTitle: String = "") {
+        val url = BiliArticleUrl.resolveMobileOpusUrl(webUrl) ?: return
+        coordinator.pauseForOverlay()
+        videoPeekController.cancel()
+        navController.push(
+            AppNavEntry.ArticleDetail(
+                webUrl = url,
+                seedTitle = seedTitle,
+            ),
+        )
     }
 
     fun popNavEntry() {
@@ -339,6 +376,7 @@ fun BilibiliApp() {
             }
             AppNavEntry.Search,
             is AppNavEntry.DynamicDetail,
+            is AppNavEntry.ArticleDetail,
             is AppNavEntry.UserRelationList,
             null -> Unit
         }
@@ -641,6 +679,30 @@ fun BilibiliApp() {
         coordinator.closeFullscreen()
     }
 
+    val canPressAgainExit =
+        !navOverlayOpen &&
+            fullscreenKey == null &&
+            videoPeekController.activeRequest == null &&
+            !showLoginSheet &&
+            !historyMenuController.visible
+
+    LaunchedEffect(canPressAgainExit) {
+        if (!canPressAgainExit) {
+            pressAgainExitHintVisible = false
+        }
+    }
+
+    BackHandler(enabled = canPressAgainExit) {
+        val now = System.currentTimeMillis()
+        if (pressAgainExitHintVisible && now - lastExitBackPressAt <= PressAgainExitConfirmWindowMillis) {
+            pressAgainExitHintVisible = false
+            (context as? Activity)?.finish()
+        } else {
+            lastExitBackPressAt = now
+            pressAgainExitHintVisible = true
+        }
+    }
+
     CompositionLocalProvider(
         LocalLiquidMenuBackdrop provides bottomBarBackdrop,
         LocalVideoPeekController provides videoPeekController,
@@ -655,7 +717,8 @@ fun BilibiliApp() {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .layerBackdrop(bottomBarBackdrop),
+                    .layerBackdrop(bottomBarBackdrop)
+                    .blockHiddenTouches(!navOverlayOpen),
             ) {
                 Box(
                     Modifier
@@ -768,7 +831,7 @@ fun BilibiliApp() {
                         playUrls = playUrls,
                         coordinator = coordinator,
                         onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                        onAuthorClick = { mid -> openUserProfile(mid) },
+                        onAuthorClick = { mid, name, face -> openUserProfile(mid, name, face) },
                         contentPadding = padding,
                         pullRefreshState = historyPullRefreshState,
                         showEmbeddedPullRefreshIndicator = false,
@@ -833,6 +896,7 @@ fun BilibiliApp() {
                 onSwitchVideoPart = ::switchVideoPart,
                 onOpenProfile = ::openUserProfile,
                 onOpenDynamic = ::openDynamicDetail,
+                onOpenArticle = ::openArticleDetail,
                 onOpenRelationList = ::openUserRelationList,
                 onLoginRequired = { showLoginSheet = true },
                 onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
@@ -842,6 +906,25 @@ fun BilibiliApp() {
                 val stream = playUrls[fullscreenVideo.bvid]
                 if (stream != null) {
                     val fullscreenBackdrop = rememberLayerBackdrop()
+                    val fullscreenCid = stream.cid.takeIf { it > 0L } ?: fullscreenVideo.cid
+                    var fullscreenVideoShot by remember(fullscreenVideo.bvid, fullscreenCid) {
+                        mutableStateOf(coordinator.cachedVideoShot(fullscreenCid))
+                    }
+                    LaunchedEffect(fullscreenVideo.bvid, fullscreenVideo.aid, fullscreenCid, activeAccount?.uid) {
+                        if (fullscreenCid <= 0L) return@LaunchedEffect
+                        coordinator.cachedVideoShot(fullscreenCid)?.let {
+                            fullscreenVideoShot = it
+                            return@LaunchedEffect
+                        }
+                        val shot = api.getVideoShot(
+                            bvid = fullscreenVideo.bvid,
+                            aid = fullscreenVideo.aid,
+                            cid = fullscreenCid,
+                            credential = credential(),
+                        )
+                        coordinator.cacheVideoShot(fullscreenCid, shot)
+                        fullscreenVideoShot = shot
+                    }
                     Box(
                         Modifier
                             .fillMaxSize()
@@ -868,6 +951,12 @@ fun BilibiliApp() {
                                 )
                             },
                             portraitVideo = fullscreenVideo.isPortraitVideo,
+                            videoShot = fullscreenVideoShot,
+                            scrubPreviewAspectRatio = com.example.bilibili.player.knownVideoAspectRatio(
+                                fullscreenVideo.videoWidth,
+                                fullscreenVideo.videoHeight,
+                            ),
+                            playbackMetadata = VideoPlaybackMetadata.fromVideo(fullscreenVideo),
                         )
                     }
                 }
@@ -940,6 +1029,15 @@ fun BilibiliApp() {
                 modifier = Modifier.align(Alignment.TopCenter),
             )
 
+            if (canPressAgainExit) {
+                PressAgainExitHintOverlay(
+                    visible = pressAgainExitHintVisible,
+                    onDismiss = { pressAgainExitHintVisible = false },
+                    backdrop = bottomBarBackdrop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
             if (!navOverlayOpen) {
                 BilibiliLiquidBottomBar(
                 selectedTab = selectedTab,
@@ -992,6 +1090,7 @@ private fun AppNavStackLayers(
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
     onOpenDynamic: (BiliDynamicItem) -> Unit,
+    onOpenArticle: (String, String) -> Unit,
     onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
     onLoginRequired: () -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
@@ -1004,9 +1103,10 @@ private fun AppNavStackLayers(
                     .fillMaxSize()
                     .zIndex(90f + index),
             ) {
-                AppNavEntryContent(
-                    entry = it,
-                    isActive = index == navStack.lastIndex,
+                Box(Modifier.fillMaxSize().blockHiddenTouches(index == navStack.lastIndex)) {
+                    AppNavEntryContent(
+                        entry = it,
+                        isActive = index == navStack.lastIndex,
                     api = api,
                     credential = credential,
                     myMid = myMid,
@@ -1021,10 +1121,12 @@ private fun AppNavStackLayers(
                     onSwitchVideoPart = onSwitchVideoPart,
                     onOpenProfile = onOpenProfile,
                     onOpenDynamic = onOpenDynamic,
+                    onOpenArticle = onOpenArticle,
                     onOpenRelationList = onOpenRelationList,
                     onLoginRequired = onLoginRequired,
                     onEnsurePlayStream = onEnsurePlayStream,
                 )
+                }
             }
         }
     }
@@ -1048,6 +1150,7 @@ private fun AppNavEntryContent(
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
     onOpenDynamic: (BiliDynamicItem) -> Unit,
+    onOpenArticle: (String, String) -> Unit,
     onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
     onLoginRequired: () -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
@@ -1103,6 +1206,7 @@ private fun AppNavEntryContent(
                 coordinator = coordinator,
                 onVideoClick = { item -> onOpenVideo(item, 0) },
                 onDynamicClick = onOpenDynamic,
+                onArticleClick = onOpenArticle,
                 onEnsurePlayStream = onEnsurePlayStream,
                 onLoginRequired = onLoginRequired,
                 onOpenRelationList = { name, face, sign, tab ->
@@ -1123,6 +1227,14 @@ private fun AppNavEntryContent(
                 onAuthorClick = { profile ->
                     onOpenProfile(profile.mid, profile.name, profile.face)
                 },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        is AppNavEntry.ArticleDetail -> {
+            ArticleDetailScreen(
+                webUrl = entry.webUrl,
+                seedTitle = entry.seedTitle,
+                onBack = onPopNav,
                 modifier = Modifier.fillMaxSize(),
             )
         }
