@@ -45,6 +45,8 @@ object BilibiliJsonParser {
             ?: pages?.optJSONObject(0)?.optLong("cid")
             ?: 0L
         val dimension = data.optJSONObject("dimension")
+        val redirectUrl = data.optString("redirect_url")
+        val redirectEpid = parsePgcEpidFromUri(redirectUrl) ?: 0L
         val bvid = data.optString("bvid")
         if (bvid.isBlank()) return null
         val video = BiliVideoItem(
@@ -63,6 +65,8 @@ object BilibiliJsonParser {
             cid = cid,
             videoWidth = dimension?.optLong("width")?.toInt() ?: 0,
             videoHeight = dimension?.optLong("height")?.toInt() ?: 0,
+            epid = redirectEpid,
+            playbackReferer = redirectUrl,
         )
         return BiliVideoDetail(
             video = video,
@@ -1868,7 +1872,7 @@ object BilibiliJsonParser {
         if (payload.length() < 2) return null
         val meta = payload.optJSONArray(0) ?: return null
         val content = payload.optString(1)
-        val emoticons = parseLiveDanmakuEmoticons(meta, content)
+        val emoticons = parseLiveDanmakuEmoticons(payload, meta, content)
         if (content.isBlank() && emoticons.isEmpty()) return null
         val displayContent = content.ifBlank { emoticons.keys.firstOrNull().orEmpty() }
         if (displayContent.isBlank()) return null
@@ -1889,6 +1893,7 @@ object BilibiliJsonParser {
     }
 
     private fun parseLiveDanmakuEmoticons(
+        payload: org.json.JSONArray,
         meta: org.json.JSONArray,
         content: String,
     ): Map<String, BiliDanmakuEmoticon> {
@@ -1907,10 +1912,21 @@ object BilibiliJsonParser {
             }
         }
 
+        fun jsonObjectFrom(raw: Any?): JSONObject? =
+            when (raw) {
+                is JSONObject -> raw.takeIf { it.length() > 0 }
+                is String -> if (raw.isBlank() || raw == "{}") {
+                    null
+                } else {
+                    runCatching { JSONObject(raw) }.getOrNull()?.takeIf { it.length() > 0 }
+                }
+                else -> null
+            }
+
         fun putEmoticon(phrase: String, url: String, width: Int = 0, height: Int = 0) {
             if (phrase.isBlank() || url.isBlank()) return
             result[phrase] = BiliDanmakuEmoticon(
-                url = normalizeImageUrl(url),
+                url = normalizeSpaceImageUrl(url),
                 width = width,
                 height = height,
             )
@@ -2061,6 +2077,132 @@ object BilibiliJsonParser {
         for (index in 0 until meta.length()) {
             scanExtraObject(metaJsonAt(index))
         }
+        for (index in 0 until payload.length()) {
+            when (val raw = payload.opt(index)) {
+                is JSONObject -> scanExtraObject(raw)
+                is org.json.JSONArray -> {
+                    for (childIndex in 0 until raw.length()) {
+                        jsonObjectFrom(raw.opt(childIndex))?.let(::scanExtraObject)
+                    }
+                }
+                is String -> jsonObjectFrom(raw)?.let(::scanExtraObject)
+            }
+        }
+        return result
+    }
+
+    fun parseLiveEmoticonMap(json: JSONObject): Map<String, BiliDanmakuEmoticon> {
+        val data = json.optJSONObject("data") ?: json
+        val result = linkedMapOf<String, BiliDanmakuEmoticon>()
+
+        fun phraseCandidates(vararg rawPhrases: String): List<String> =
+            rawPhrases
+                .flatMap { raw ->
+                    val phrase = raw.trim()
+                    if (phrase.isBlank()) {
+                        emptyList()
+                    } else {
+                        listOf(
+                            phrase,
+                            phrase.removeSurrounding("[", "]"),
+                            if (phrase.startsWith("[") && phrase.endsWith("]")) phrase else "[$phrase]",
+                        )
+                    }
+                }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+        fun JSONObject.emoticonUrl(): String =
+            optString("url")
+                .ifBlank { optString("gif_url") }
+                .ifBlank { optString("icon_url") }
+                .ifBlank { optString("emoticon_url") }
+                .ifBlank { optString("webp_url") }
+                .ifBlank { optString("bulge_url") }
+                .ifBlank { optString("cover") }
+
+        fun putEmoticon(phrase: String, spec: BiliDanmakuEmoticon) {
+            if (phrase.isBlank() || spec.url.isBlank()) return
+            phraseCandidates(phrase).forEach { candidate ->
+                result[candidate] = spec
+            }
+        }
+
+        lateinit var scanEmoticonObject: (JSONObject?, String) -> Unit
+        lateinit var scanEmoticonArray: (org.json.JSONArray?) -> Unit
+        lateinit var scanEmoticonMap: (JSONObject?) -> Unit
+
+        scanEmoticonObject = scanObject@{ obj, fallbackPhrase ->
+            if (obj == null || obj.length() == 0) return@scanObject
+            val url = obj.emoticonUrl()
+            if (url.isNotBlank()) {
+                val unique = when (val raw = obj.opt("emoticon_unique")) {
+                    is String -> raw
+                    is JSONObject -> raw.optString("text")
+                    else -> ""
+                }
+                val spec = BiliDanmakuEmoticon(
+                    url = normalizeSpaceImageUrl(url),
+                    width = obj.optInt("width")
+                        .takeIf { it > 0 } ?: obj.optInt("emoticon_width"),
+                    height = obj.optInt("height")
+                        .takeIf { it > 0 } ?: obj.optInt("emoticon_height"),
+                )
+                phraseCandidates(
+                    fallbackPhrase,
+                    obj.optString("text"),
+                    obj.optString("emoji"),
+                    obj.optString("name"),
+                    obj.optString("descript"),
+                    obj.optString("emoticon_id"),
+                    unique,
+                ).forEach { putEmoticon(it, spec) }
+            }
+
+            scanEmoticonArray(obj.optJSONArray("emoticons"))
+            scanEmoticonArray(obj.optJSONArray("emoticon_list"))
+            scanEmoticonArray(obj.optJSONArray("emotes"))
+            scanEmoticonArray(obj.optJSONArray("emoji_list"))
+            scanEmoticonMap(obj.optJSONObject("emoticons"))
+            scanEmoticonMap(obj.optJSONObject("emote"))
+        }
+
+        scanEmoticonArray = scanArray@{ array ->
+            if (array == null) return@scanArray
+            for (index in 0 until array.length()) {
+                when (val raw = array.opt(index)) {
+                    is JSONObject -> scanEmoticonObject(raw, "")
+                    is org.json.JSONArray -> scanEmoticonArray(raw)
+                }
+            }
+        }
+
+        scanEmoticonMap = scanMap@{ obj ->
+            if (obj == null) return@scanMap
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                when (val raw = obj.opt(key)) {
+                    is JSONObject -> scanEmoticonObject(raw, key)
+                    is String -> {
+                        if (raw.startsWith("http") || raw.startsWith("//") || raw.startsWith("bfs/")) {
+                            putEmoticon(
+                                key,
+                                BiliDanmakuEmoticon(url = normalizeSpaceImageUrl(raw)),
+                            )
+                        }
+                    }
+                    is org.json.JSONArray -> scanEmoticonArray(raw)
+                }
+            }
+        }
+
+        scanEmoticonObject(data, "")
+        scanEmoticonArray(data.optJSONArray("data"))
+        scanEmoticonArray(data.optJSONArray("list"))
+        scanEmoticonArray(data.optJSONArray("packages"))
+        scanEmoticonArray(data.optJSONArray("emoticons"))
+        scanEmoticonMap(data.optJSONObject("emoticons"))
         return result
     }
 
@@ -2271,12 +2413,24 @@ object BilibiliJsonParser {
 
         val business = BiliHistoryBusiness.from(businessRaw)
         val bvid = item.optString("bvid").ifBlank { history?.optString("bvid").orEmpty() }
-        val epid = history?.optLong("epid")?.takeIf { it > 0L } ?: 0L
+        val webUri = item.optString("uri")
+            .ifBlank { history?.optString("uri").orEmpty() }
+        val kidValue: Long = item.optLong("kid").takeIf { it > 0L }
+            ?: history?.optLong("kid")?.takeIf { it > 0L }
+            ?: 0L
+        val fieldEpid = history?.optLong("epid")?.takeIf { it > 0L }
+            ?: history?.optLong("ep_id")?.takeIf { it > 0L }
+            ?: item.optLong("epid").takeIf { it > 0L }
+            ?: item.optLong("ep_id").takeIf { it > 0L }
+        val epid = fieldEpid
+            ?: kidValue.takeIf { business == BiliHistoryBusiness.Pgc && it > 0L }
+            ?: parsePgcEpidFromUri(webUri)
+            ?: 0L
         val historyCid = history?.optLong("cid") ?: 0L
         val aid = item.optLong("aid").takeIf { it > 0L }
             ?: history?.optLong("oid")?.takeIf { it > 0L }
             ?: 0L
-        val cid = item.optLong("cid").takeIf { it > 0L } ?: historyCid
+        val cid: Long = item.optLong("cid").takeIf { it > 0L } ?: historyCid
 
         if (business == BiliHistoryBusiness.Archive && bvid.isBlank()) return null
         if (business == BiliHistoryBusiness.Pgc && epid <= 0L && cid <= 0L) return null
@@ -2313,8 +2467,6 @@ object BilibiliJsonParser {
                 .ifBlank { author?.optString("avatar").orEmpty() },
         )
         val badge = item.optString("badge")
-        val webUri = item.optString("uri")
-        val kidValue = item.optLong("kid")
         val kid = when {
             kidValue > 0L && business == BiliHistoryBusiness.Archive -> "archive_$kidValue"
             kidValue > 0L && business == BiliHistoryBusiness.Pgc -> "pgc_$kidValue"
@@ -2346,6 +2498,24 @@ object BilibiliJsonParser {
             progressSeconds = item.optInt("progress").coerceAtLeast(0),
             durationSeconds = durationSeconds,
         )
+    }
+
+    private fun parsePgcEpidFromUri(uri: String): Long? {
+        if (uri.isBlank()) return null
+        val marker = "ep"
+        var start = uri.indexOf(marker)
+        while (start >= 0) {
+            val digitStart = start + marker.length
+            if (digitStart < uri.length && uri[digitStart].isDigit()) {
+                var digitEnd = digitStart
+                while (digitEnd < uri.length && uri[digitEnd].isDigit()) {
+                    digitEnd++
+                }
+                return uri.substring(digitStart, digitEnd).toLongOrNull()?.takeIf { it > 0L }
+            }
+            start = uri.indexOf(marker, startIndex = start + marker.length)
+        }
+        return null
     }
 
     fun parseSearchVideoPage(json: JSONObject): BiliSearchResultPage<BiliVideoItem> {

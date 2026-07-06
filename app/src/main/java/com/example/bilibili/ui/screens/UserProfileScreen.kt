@@ -97,6 +97,7 @@ import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.data.UserProfileSessionCache
+import com.example.bilibili.data.UserProfileSnapshotStore
 import com.example.bilibili.data.UserProfileUiState
 import com.example.bilibili.data.UserRelationTab
 import com.example.bilibili.player.StatusBarIconsEffect
@@ -209,9 +210,24 @@ fun UserProfileScreen(
     val scope = rememberCoroutineScope()
     var showSettings by remember { mutableStateOf(false) }
     val useSingleColumnPosts = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
+    val profileSnapshotStore = remember(context) { UserProfileSnapshotStore(context) }
+    val persistedProfileSnapshot = remember(mid, cacheProfile) {
+        if (cacheProfile && mid > 0L) {
+            profileSnapshotStore.read(mid)
+        } else {
+            null
+        }
+    }
 
     val uiState = if (cacheProfile) {
-        remember(mid) { UserProfileSessionCache.getOrCreate(mid, seedName, seedFace) }
+        remember(mid, persistedProfileSnapshot) {
+            UserProfileSessionCache.getOrCreate(
+                mid = mid,
+                seedName = seedName,
+                seedFace = seedFace,
+                persistedProfile = persistedProfileSnapshot,
+            )
+        }
     } else {
         remember(mid) { UserProfileUiState(mid, seedName, seedFace) }
     }
@@ -338,6 +354,7 @@ fun UserProfileScreen(
         }
         if (cacheProfile) {
             UserProfileSessionCache.updateProfileSnapshot(mid, uiState.profile)
+            profileSnapshotStore.write(uiState.profile)
             uiState.wallet?.let { wallet ->
                 UserProfileSessionCache.updateWalletSnapshot(mid, wallet)
             }
@@ -445,7 +462,11 @@ fun UserProfileScreen(
     LaunchedEffect(mid, cacheProfile) {
         if (mid <= 0L) return@LaunchedEffect
         val hasCachedProfile = cacheProfile &&
-            (uiState.loaded || UserProfileSessionCache.hasProfileSnapshot(mid))
+            (
+                uiState.loaded ||
+                    UserProfileSessionCache.hasProfileSnapshot(mid) ||
+                    persistedProfileSnapshot != null
+                )
         if (hasCachedProfile) {
             uiState.loading = false
             uiState.loadError = null
@@ -1844,11 +1865,11 @@ private fun ProfileAuthorNameRow(
             if (level > 0) {
                 BiliUserLevelIcon(
                     level = level,
-                    width = 20.dp,
-                    height = 13.dp,
+                    width = 22.dp,
+                    height = 14.dp,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = 2.dp, y = (-2).dp),
+                        .offset(x = 2.dp, y = 1.dp),
                 )
             }
         }

@@ -234,14 +234,16 @@ fun BilibiliApp() {
         if (video.isPgcPlayback()) {
             val epid = video.pgcEpid()
             val cid = targetCid ?: 0L
-            val referer = video.playbackReferer.ifBlank {
-                if (epid > 0L) "https://www.bilibili.com/bangumi/play/ep$epid" else BilibiliEndpoints.HOME
+            val referer = if (epid > 0L) {
+                "https://www.bilibili.com/bangumi/play/ep$epid"
+            } else {
+                video.playbackReferer.ifBlank { BilibiliEndpoints.HOME }
             }
             val stream = if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && cid > 0L) {
                 api.getPlayUrl(video.bvid, cid, credential())
-                    ?: api.getPgcPlayUrl(epid, cid, credential(), referer)
+                    ?: api.resolvePgcPlayUrl(epid, cid, credential(), referer)
             } else {
-                api.getPgcPlayUrl(epid, cid, credential(), referer)
+                api.resolvePgcPlayUrl(epid, cid, credential(), referer)
             } ?: return@runCatching null
             val resolved = stream.copy(
                 aid = video.aid.takeIf { it > 0L } ?: stream.aid,
@@ -302,22 +304,24 @@ fun BilibiliApp() {
             val seededVideo = seedVideoPartPage(video, partPage)
             val resolvedVideo = api.resolveVideoForPlayback(seededVideo, credential())
             val playStream = resolvePlayUrl(resolvedVideo)
+            playStream?.let { playUrls[resolvedVideo.playbackId()] = it }
             val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
             navController.push(AppNavEntry.VideoDetail(resolvedVideo, progressSeconds))
             if (replacingVideoDetail) {
-                coordinator.pauseInlineOnly()
+                coordinator.releaseHandoffPlayer()
+                coordinator.stopPlayback()
             } else {
                 coordinator.stopPlayback()
             }
             if (progressSeconds > 0) {
                 coordinator.savePlaybackPosition(
-                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
+                    videoPlaybackKey(resolvedVideo.playbackId(), ownerId = "detail"),
                     progressSeconds * 1000L,
                 )
             }
             if (playStream != null || replacingVideoDetail) {
                 coordinator.requestInlinePlayback(
-                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
+                    videoPlaybackKey(resolvedVideo.playbackId(), ownerId = "detail"),
                 )
             }
         }
@@ -326,56 +330,80 @@ fun BilibiliApp() {
     fun openHistoryVideo(item: BiliHistoryItem) {
         scope.launch {
             val resolvedVideo = api.resolveHistoryVideo(item, credential())
-            resolvePlayUrl(resolvedVideo)
+            val playStream = resolvePlayUrl(resolvedVideo)
+            playStream?.let { playUrls[resolvedVideo.playbackId()] = it }
             val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
             navController.push(AppNavEntry.VideoDetail(resolvedVideo, item.progressSeconds))
             if (replacingVideoDetail) {
-                coordinator.pauseInlineOnly()
+                coordinator.releaseHandoffPlayer()
+                coordinator.stopPlayback()
             } else {
                 coordinator.stopPlayback()
             }
             if (item.progressSeconds > 0) {
                 coordinator.savePlaybackPosition(
-                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
+                    videoPlaybackKey(resolvedVideo.playbackId(), ownerId = "detail"),
                     item.progressSeconds * 1000L,
                 )
             }
-            if (replacingVideoDetail) {
+            if (playStream != null || replacingVideoDetail) {
                 coordinator.requestInlinePlayback(
-                    videoPlaybackKey(resolvedVideo.bvid, ownerId = "detail"),
+                    videoPlaybackKey(resolvedVideo.playbackId(), ownerId = "detail"),
                 )
             }
         }
     }
 
+    fun replaceVideoDetail(video: BiliVideoItem, stream: BiliPlayStream) {
+        playUrls[video.playbackId()] = stream
+        navController.push(AppNavEntry.VideoDetail(video, progressSeconds = 0))
+        coordinator.releaseHandoffPlayer()
+        coordinator.stopPlayback()
+        coordinator.requestInlinePlayback(
+            videoPlaybackKey(video.playbackId(), ownerId = "detail"),
+        )
+    }
+
     fun switchVideoPart(video: BiliVideoItem, page: BiliVideoPage, stream: BiliPlayStream? = null) {
         val playbackId = video.playbackId()
+        fun videoForPage(resolved: BiliPlayStream): BiliVideoItem =
+            video.copy(
+                cid = page.cid.takeIf { it > 0L } ?: resolved.cid,
+                epid = page.epid.takeIf { it > 0L } ?: video.epid,
+                title = page.title.takeIf { it.isNotBlank() } ?: video.title,
+                durationSeconds = page.durationSeconds.takeIf { it > 0 } ?: video.durationSeconds,
+            )
         val applyStream: (BiliPlayStream) -> Unit = { resolved ->
             playUrls[playbackId] = resolved
+            playUrls[videoForPage(resolved).playbackId()] = resolved
+            coordinator.releaseHandoffPlayer()
             coordinator.requestInlinePlayback(
-                videoPlaybackKey(video.bvid, ownerId = "detail"),
+                videoPlaybackKey(playbackId, ownerId = "detail"),
             )
         }
-        stream?.copy(aid = video.aid, cid = page.cid)?.let {
-            applyStream(it)
+        stream?.let { resolved ->
+            val fixed = resolved.copy(
+                aid = video.aid.takeIf { it > 0L } ?: resolved.aid,
+                cid = page.cid.takeIf { it > 0L } ?: resolved.cid,
+            )
+            playUrls[playbackId] = fixed
+            playUrls[videoForPage(fixed).playbackId()] = fixed
             return
         }
         scope.launch {
             val resolved = if (video.isPgcPlayback() || page.epid > 0L) {
                 val epid = page.epid.takeIf { it > 0L } ?: video.pgcEpid()
-                val referer = video.playbackReferer.ifBlank {
-                    if (epid > 0L) {
-                        "https://www.bilibili.com/bangumi/play/ep$epid"
-                    } else {
-                        BilibiliEndpoints.HOME
-                    }
+                val referer = if (epid > 0L) {
+                    "https://www.bilibili.com/bangumi/play/ep$epid"
+                } else {
+                    video.playbackReferer.ifBlank { BilibiliEndpoints.HOME }
                 }
                 val cid = page.cid.takeIf { it > 0L } ?: video.cid
                 if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && cid > 0L) {
                     api.getPlayUrl(video.bvid, cid, credential())
-                        ?: api.getPgcPlayUrl(epid, cid, credential(), referer)
+                        ?: api.resolvePgcPlayUrl(epid, cid, credential(), referer)
                 } else {
-                    api.getPgcPlayUrl(epid, cid, credential(), referer)
+                    api.resolvePgcPlayUrl(epid, cid, credential(), referer)
                 }?.copy(
                     aid = video.aid.takeIf { it > 0L } ?: 0L,
                     cid = cid,
@@ -421,7 +449,7 @@ fun BilibiliApp() {
             is AppNavEntry.UserProfile -> {
                 navController.stack.lastVideoDetail()?.let { entry ->
                     coordinator.requestInlinePlayback(
-                        videoPlaybackKey(entry.video.bvid, ownerId = "detail"),
+                        videoPlaybackKey(entry.video.playbackId(), ownerId = "detail"),
                     )
                 }
             }
@@ -713,11 +741,11 @@ fun BilibiliApp() {
         else -> homePullRefreshState
     }
     val fullscreenVideo = remember(fullscreenKey, navStack, homeVideos, followVideos, hotVideos) {
-        val bvid = fullscreenKey?.substringAfter(":") ?: return@remember null
-        navStack.findVideoDetail(bvid)
+        val playbackId = fullscreenKey?.substringAfter("detail:") ?: return@remember null
+        navStack.findVideoDetail(playbackId)
             ?: run {
                 val all = homeVideos + followVideos + hotVideos
-                all.firstOrNull { it.bvid == bvid }
+                all.firstOrNull { it.playbackId() == playbackId }
             }
     }
 
@@ -871,6 +899,7 @@ fun BilibiliApp() {
                         pullRefreshState = livePullRefreshState,
                         showEmbeddedPullRefreshIndicator = true,
                         onLiveRoomOpenChange = { liveRoomOpen = it },
+                        onOpenAnchorProfile = { mid, name, face -> openUserProfile(mid, name, face) },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -952,6 +981,7 @@ fun BilibiliApp() {
                     openVideoDetail(video, progressSeconds = 0, partPage = partPage)
                 },
                 onSwitchVideoPart = ::switchVideoPart,
+                onReplaceVideo = ::replaceVideoDetail,
                 onOpenProfile = ::openUserProfile,
                 onOpenDynamic = ::openDynamicDetail,
                 onOpenArticle = ::openArticleDetail,
@@ -1024,7 +1054,7 @@ fun BilibiliApp() {
                 VideoPeekOverlay(
                     video = request.video,
                     playStream = request.playStream,
-                    playbackKey = videoPlaybackKey(request.video.bvid),
+                    playbackKey = videoPlaybackKey(request.video.playbackId()),
                     coordinator = coordinator,
                     anchorBounds = request.anchorBounds,
                     expandFromAnchor = request.expandFromAnchor,
@@ -1146,6 +1176,7 @@ private fun AppNavStackLayers(
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
+    onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
     onOpenDynamic: (BiliDynamicItem) -> Unit,
     onOpenArticle: (String, String) -> Unit,
@@ -1177,6 +1208,7 @@ private fun AppNavStackLayers(
                     onOpenVideo = onOpenVideo,
                     onOpenDescriptionVideo = onOpenDescriptionVideo,
                     onSwitchVideoPart = onSwitchVideoPart,
+                    onReplaceVideo = onReplaceVideo,
                     onOpenProfile = onOpenProfile,
                     onOpenDynamic = onOpenDynamic,
                     onOpenArticle = onOpenArticle,
@@ -1206,6 +1238,7 @@ private fun AppNavEntryContent(
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
+    onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
     onOpenDynamic: (BiliDynamicItem) -> Unit,
     onOpenArticle: (String, String) -> Unit,
@@ -1244,6 +1277,7 @@ private fun AppNavEntryContent(
                 onSwitchVideoPart = { page, stream ->
                     onSwitchVideoPart(entry.video, page, stream)
                 },
+                onReplaceVideo = onReplaceVideo,
                 onOpenUgcEpisode = { video ->
                     onOpenVideo(video, 0)
                 },

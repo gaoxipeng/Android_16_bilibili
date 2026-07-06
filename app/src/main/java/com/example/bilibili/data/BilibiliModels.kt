@@ -115,8 +115,9 @@ data class BiliVideoItem(
     }
 
     fun playbackId(): String = when {
-        bvid.isNotBlank() -> bvid
         epid > 0L -> "pgc:$epid"
+        bvid.isNotBlank() && cid > 0L -> "$bvid:cid:$cid"
+        bvid.isNotBlank() -> bvid
         aid > 0L -> "av:$aid"
         else -> title
     }

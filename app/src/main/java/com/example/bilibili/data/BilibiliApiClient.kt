@@ -241,6 +241,20 @@ class BilibiliApiClient {
         )
     }
 
+    suspend fun resolvePgcPlayUrl(
+        epid: Long,
+        cid: Long = 0L,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): BiliPlayStream? {
+        if (epid <= 0L) return null
+        val episodeReferer = referer.ifBlank { "https://www.bilibili.com/bangumi/play/ep$epid" }
+        if (cid > 0L) {
+            getPgcPlayUrl(epid, cid, credential, episodeReferer)?.let { return it }
+        }
+        return getPgcPlayUrl(epid, 0L, credential, episodeReferer)
+    }
+
     suspend fun getPgcPlayUrl(
         epid: Long,
         cid: Long = 0L,
@@ -1637,6 +1651,24 @@ class BilibiliApiClient {
                     referer = liveRoomReferer(realRoomId),
                 ).let(BilibiliJsonParser::parseLiveDanmuInfo)
             }.getOrNull()
+        }
+
+    suspend fun getLiveEmoticons(
+        roomId: Long,
+        credential: BilibiliCredential? = null,
+    ): Map<String, BiliDanmakuEmoticon> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.LIVE_EMOTICONS,
+                    params = mapOf(
+                        "platform" to "pc",
+                        "room_id" to roomId.toString(),
+                    ),
+                    credential = credential,
+                    referer = liveRoomReferer(roomId),
+                ).let(BilibiliJsonParser::parseLiveEmoticonMap)
+            }.getOrDefault(emptyMap())
         }
 
     suspend fun sendLiveDanmaku(

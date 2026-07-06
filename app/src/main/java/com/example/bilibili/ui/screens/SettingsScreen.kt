@@ -48,7 +48,7 @@ import com.example.bilibili.R
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 
-private const val AppVersionName = "0.0.1"
+private const val AppVersionName = "1.0"
 
 private val SettingsBottomBarInset = 96.dp
 private val SettingsPageBackground = Color.White
@@ -76,10 +76,22 @@ private val appHelpSections = listOf(
         items = listOf(
             "底部共有五个入口：首页、关注、直播、历史、我的。",
             "关注页顶部可在「关注 / 排行」之间切换。",
-            "直播页包含「关注 / 推荐」，点击直播间可在应用内打开直播页。",
+            "直播页顶部可在「关注 / 推荐」之间切换，点击直播间可在应用内打开直播页。",
             "向下滚动列表时，底部栏会收起到左侧小胶囊；点击小胶囊可再次展开。",
             "再次点击当前选中的首页、关注或历史，会回到顶部并刷新内容。",
             "未登录时访问关注、历史等页面，会提示先完成登录。",
+        ),
+    ),
+    HelpSection(
+        title = "直播",
+        items = listOf(
+            "推荐页支持按分区筛选直播间；关注页展示你关注的主播正在直播的房间。",
+            "直播间顶部展示主播头像、昵称、直播标题与在线人数；昵称与标题会尽量完整显示。",
+            "点击左上角头像或昵称可进入主播个人主页；已登录且非本人直播间时，昵称旁可直接关注。",
+            "右侧展示榜一、榜二、榜三观众头像；在线人数约每 5 秒自动刷新。",
+            "支持飘屏弹幕与底部弹幕列表，弹幕可包含表情；长按播放器「弹」可设置弹幕样式。",
+            "播放器控件约 5 秒后自动隐藏，点击画面可再次显示；支持全屏观看与手动刷新直播流。",
+            "向右滑动可清屏隐藏界面，向左滑动或按返回键恢复；清屏时横屏直播保持原有画面比例。",
         ),
     ),
     HelpSection(
@@ -96,7 +108,8 @@ private val appHelpSections = listOf(
         items = listOf(
             "点击底部搜索入口，可搜索视频与用户。",
             "点击 UP 主头像或昵称进入个人主页，查看投稿与动态。",
-            "个人主页点击「关注」「粉丝」可查看列表，并可直接关注或取消关注。",
+            "个人主页会缓存上次浏览的资料，再次进入时先展示缓存并后台刷新。",
+            "昵称旁显示等级徽章；点击「关注」「粉丝」可查看列表，并可直接关注或取消关注。",
             "个人主页投稿卡片显示视频发布时间；可在设置中切换单列或双列布局。",
         ),
     ),

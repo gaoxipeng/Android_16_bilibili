@@ -68,6 +68,8 @@ object BilibiliEndpoints {
         "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
     const val LIVE_DANMU_INFO =
         "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
+    const val LIVE_EMOTICONS =
+        "https://api.live.bilibili.com/xlive/web-ucenter/v2/emoticon/GetEmoticons"
     const val LIVE_ONLINE_GOLD_RANK =
         "https://api.live.bilibili.com/xlive/general-interface/v1/rank/getOnlineGoldRank"
     const val LIVE_HEARTBEAT_WEB =

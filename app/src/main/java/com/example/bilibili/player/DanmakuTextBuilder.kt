@@ -29,7 +29,8 @@ internal fun buildDanmakuMeasureText(
         )
     }
 
-    val phrases = emoticons.keys.sortedByDescending { it.length }
+    val normalizedEmoticons = rememberDanmakuEmoticonAliases(emoticons)
+    val phrases = normalizedEmoticons.keys.sortedByDescending { it.length }
     val emoticonUrls = mutableListOf<String>()
     val placeholders = mutableListOf<AnnotatedString.Range<Placeholder>>()
     val annotated = buildAnnotatedString {
@@ -37,7 +38,7 @@ internal fun buildDanmakuMeasureText(
         while (index < content.length) {
             val phrase = phrases.firstOrNull { content.startsWith(it, index) }
             if (phrase != null) {
-                val spec = emoticons[phrase]
+                val spec = normalizedEmoticons[phrase]
                 val url = spec?.url
                 if (!url.isNullOrBlank()) {
                     val (width, height) = danmakuEmoticonPlaceholderSize(
@@ -68,7 +69,7 @@ internal fun buildDanmakuMeasureText(
     }
 
     if (placeholders.isEmpty()) {
-        val directSpec = emoticons[content]
+        val directSpec = normalizedEmoticons[content]
         if (directSpec != null && directSpec.url.isNotBlank()) {
             return buildSingleEmoticonMeasureText(
                 spec = directSpec,
@@ -93,6 +94,23 @@ internal fun buildDanmakuMeasureText(
         placeholders = placeholders,
         emoticonUrls = emoticonUrls.toList(),
     )
+}
+
+private fun rememberDanmakuEmoticonAliases(
+    emoticons: Map<String, BiliDanmakuEmoticon>,
+): Map<String, BiliDanmakuEmoticon> {
+    if (emoticons.isEmpty()) return emptyMap()
+    val result = linkedMapOf<String, BiliDanmakuEmoticon>()
+    emoticons.forEach { (phrase, spec) ->
+        val trimmed = phrase.trim()
+        if (trimmed.isBlank()) return@forEach
+        result[trimmed] = spec
+        result[trimmed.removeSurrounding("[", "]")] = spec
+        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+            result["[$trimmed]"] = spec
+        }
+    }
+    return result
 }
 
 private fun buildSingleEmoticonMeasureText(

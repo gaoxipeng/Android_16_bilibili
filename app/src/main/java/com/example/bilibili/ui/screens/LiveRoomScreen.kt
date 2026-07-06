@@ -94,6 +94,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.bilibili.R
 import com.example.bilibili.data.BiliAuthorRelation
+import com.example.bilibili.data.BiliDanmakuEmoticon
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.emoticonUrlMap
 import com.example.bilibili.data.BiliLiveRankUser
@@ -138,6 +139,31 @@ private data class LiveRoomHeaderFollowState(
     val onClick: () -> Unit,
 )
 
+private fun BiliDanmakuItem.withLiveEmoticonFallback(
+    liveEmoticons: Map<String, BiliDanmakuEmoticon>,
+): BiliDanmakuItem {
+    if (content.isBlank() || liveEmoticons.isEmpty()) return this
+    val merged = linkedMapOf<String, BiliDanmakuEmoticon>()
+    merged.putAll(emoticons)
+    val spec = liveEmoticonPhraseCandidates(content)
+        .firstNotNullOfOrNull { phrase -> liveEmoticons[phrase] }
+        ?: return if (merged.isEmpty()) this else copy(emoticons = merged)
+    liveEmoticonPhraseCandidates(content).forEach { phrase ->
+        merged[phrase] = spec
+    }
+    return copy(emoticons = merged)
+}
+
+private fun liveEmoticonPhraseCandidates(phrase: String): List<String> {
+    val trimmed = phrase.trim()
+    if (trimmed.isBlank()) return emptyList()
+    return listOf(
+        trimmed,
+        trimmed.removeSurrounding("[", "]"),
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) trimmed else "[$trimmed]",
+    ).filter { it.isNotBlank() }.distinct()
+}
+
 @Composable
 fun LiveRoomScreen(
     room: BiliLiveRoom,
@@ -145,6 +171,7 @@ fun LiveRoomScreen(
     credential: BilibiliCredential?,
     coordinator: VideoPlaybackCoordinator,
     onBack: () -> Unit,
+    onOpenAnchorProfile: (mid: Long, name: String, face: String) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -169,7 +196,13 @@ fun LiveRoomScreen(
     var liveInfoCleared by remember(room.roomId) { mutableStateOf(false) }
     var anchorRelation by remember(room.roomId) { mutableStateOf(BiliAuthorRelation()) }
     var followLoading by remember(room.roomId) { mutableStateOf(false) }
-    val recentChatItems = danmakuItems
+    var liveEmoticons by remember(room.roomId) {
+        mutableStateOf<Map<String, BiliDanmakuEmoticon>>(emptyMap())
+    }
+    val liveDanmakuItems = remember(danmakuItems.size, liveEmoticons) {
+        danmakuItems.map { item -> item.withLiveEmoticonFallback(liveEmoticons) }
+    }
+    val recentChatItems = liveDanmakuItems
         .asReversed()
         .filter { it.content.isNotBlank() }
         .take(80)
@@ -214,6 +247,10 @@ fun LiveRoomScreen(
         }
         exoPlayer.addListener(listener)
         onDispose { exoPlayer.removeListener(listener) }
+    }
+
+    LaunchedEffect(room.roomId, credential) {
+        liveEmoticons = api.getLiveEmoticons(room.roomId, credential)
     }
 
     FullscreenOrientationEffect(
@@ -356,7 +393,14 @@ fun LiveRoomScreen(
     }
 
     val liveRoomTitle = detail?.title?.ifBlank { room.title } ?: room.title
-    val anchorUid = detail?.anchorUid ?: 0L
+    val anchorUid = detail?.anchorUid?.takeIf { it > 0L } ?: playInfo?.anchorUid ?: 0L
+    val anchorName = detail?.userName?.ifBlank { room.userName } ?: room.userName
+    val anchorFace = detail?.userFace?.ifBlank { room.userFace } ?: room.userFace
+    val onAnchorProfileClick = if (anchorUid > 0L) {
+        { onOpenAnchorProfile(anchorUid, anchorName, anchorFace) }
+    } else {
+        null
+    }
     val myMid = credential?.dedeUserId?.toLongOrNull()
     val showFollowButton = credential != null && anchorUid > 0L && myMid != anchorUid
     val liveRoomReferer = "https://live.bilibili.com/${room.roomId}"
@@ -449,6 +493,7 @@ fun LiveRoomScreen(
                 detail = detail,
                 onlineCount = onlineCount,
                 topRankUsers = rankUsers,
+                onAnchorClick = onAnchorProfileClick,
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (isFullscreen) {
@@ -460,7 +505,7 @@ fun LiveRoomScreen(
                     error = error,
                     playInfo = playInfo,
                     exoPlayer = exoPlayer,
-                    danmakuItems = danmakuItems,
+                    danmakuItems = liveDanmakuItems,
                     danmakuEnabled = danmakuEnabled,
                     danmakuSettings = danmakuSettings,
                     videoResizeMode = videoResizeMode,
@@ -548,7 +593,7 @@ fun LiveRoomScreen(
                     error = error,
                     playInfo = playInfo,
                     exoPlayer = exoPlayer,
-                    danmakuItems = danmakuItems,
+                    danmakuItems = liveDanmakuItems,
                     danmakuEnabled = showLiveDanmakuOverlay,
                     danmakuSettings = danmakuSettings,
                     videoResizeMode = videoResizeMode,
@@ -596,6 +641,7 @@ fun LiveRoomScreen(
                                 onlineCount = onlineCount,
                                 topRankUsers = rankUsers,
                                 followState = liveHeaderFollowState,
+                                onAnchorClick = onAnchorProfileClick,
                                 overlayStyle = true,
                                 refreshLoading = loading,
                                 overlayControlsVisible = showLivePlayerControls,
@@ -650,6 +696,7 @@ fun LiveRoomScreen(
                     onlineCount = onlineCount,
                     topRankUsers = rankUsers,
                     followState = liveHeaderFollowState,
+                    onAnchorClick = onAnchorProfileClick,
                 )
                 Box(
                     modifier = Modifier
@@ -663,7 +710,7 @@ fun LiveRoomScreen(
                         error = error,
                         playInfo = playInfo,
                         exoPlayer = exoPlayer,
-                        danmakuItems = danmakuItems,
+                        danmakuItems = liveDanmakuItems,
                         danmakuEnabled = showLiveDanmakuOverlay,
                         danmakuSettings = danmakuSettings,
                         videoResizeMode = videoResizeMode,
@@ -729,6 +776,7 @@ private fun LiveRoomHeaderSlot(
     onlineCount: Long,
     topRankUsers: List<BiliLiveRankUser>,
     followState: LiveRoomHeaderFollowState?,
+    onAnchorClick: (() -> Unit)? = null,
     overlayStyle: Boolean = false,
     refreshLoading: Boolean = false,
     overlayControlsVisible: Boolean = true,
@@ -741,6 +789,7 @@ private fun LiveRoomHeaderSlot(
             onlineCount = onlineCount,
             topRankUsers = topRankUsers,
             followState = followState,
+            onAnchorClick = onAnchorClick,
             overlayStyle = overlayStyle,
             refreshLoading = refreshLoading,
             overlayControlsVisible = overlayControlsVisible,
@@ -771,6 +820,7 @@ private fun LiveRoomResolvingLayout(
     detail: BiliLiveRoomDetail?,
     onlineCount: Long,
     topRankUsers: List<BiliLiveRankUser>,
+    onAnchorClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -785,6 +835,7 @@ private fun LiveRoomResolvingLayout(
             detail = detail,
             onlineCount = onlineCount,
             topRankUsers = topRankUsers,
+            onAnchorClick = onAnchorClick,
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding(),
@@ -1097,6 +1148,7 @@ private fun LiveRoomHeader(
     onlineCount: Long,
     topRankUsers: List<BiliLiveRankUser>,
     followState: LiveRoomHeaderFollowState? = null,
+    onAnchorClick: (() -> Unit)? = null,
     overlayStyle: Boolean = false,
     refreshLoading: Boolean = false,
     overlayControlsVisible: Boolean = true,
@@ -1111,6 +1163,11 @@ private fun LiveRoomHeader(
         offset = androidx.compose.ui.geometry.Offset(0f, 1f),
         blurRadius = 4f,
     )
+    val anchorClickModifier = if (onAnchorClick != null) {
+        Modifier.clickable(onClick = onAnchorClick)
+    } else {
+        Modifier
+    }
 
     Row(
         modifier = modifier
@@ -1134,58 +1191,48 @@ private fun LiveRoomHeader(
             url = face,
             modifier = Modifier
                 .size(40.dp)
-                .clip(CircleShape),
+                .clip(CircleShape)
+                .then(anchorClickModifier),
         )
         Spacer(Modifier.width(10.dp))
-        BoxWithConstraints(
+        Row(
             modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            val followReserve = if (followState != null) 80.dp else 0.dp
-            val textClusterMaxWidth = this.maxWidth - followReserve
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.widthIn(max = textClusterMaxWidth),
-                ) {
-                    Column(modifier = Modifier.weight(1f, fill = false)) {
-                        Text(
-                            text = authorName,
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            style = if (overlayStyle) {
-                                TextStyle(shadow = titleShadow)
-                            } else {
-                                TextStyle()
-                            },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = title,
-                            color = Color.White.copy(alpha = 0.65f),
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                shadow = if (overlayStyle) titleShadow else null,
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    followState?.let { follow ->
-                        Spacer(Modifier.width(8.dp))
-                        BilibiliFollowButton(
-                            following = follow.relation.following,
-                            followerMe = follow.relation.followerMe,
-                            loading = follow.loading,
-                            onClick = follow.onClick,
-                            compact = true,
-                            transparent = true,
-                        )
-                    }
-                }
-                Spacer(Modifier.weight(1f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = authorName,
+                    modifier = anchorClickModifier,
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    style = if (overlayStyle) {
+                        TextStyle(shadow = titleShadow)
+                    } else {
+                        TextStyle()
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = title,
+                    color = Color.White.copy(alpha = 0.65f),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        shadow = if (overlayStyle) titleShadow else null,
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            followState?.let { follow ->
+                Spacer(Modifier.width(8.dp))
+                BilibiliFollowButton(
+                    following = follow.relation.following,
+                    followerMe = follow.relation.followerMe,
+                    loading = follow.loading,
+                    onClick = follow.onClick,
+                    compact = true,
+                    transparent = true,
+                )
             }
         }
         if (topRankUsers.isNotEmpty()) {

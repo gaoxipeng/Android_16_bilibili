@@ -97,6 +97,7 @@ fun LiveScreen(
     pullRefreshState: PullToRefreshState = rememberPullToRefreshState(),
     showEmbeddedPullRefreshIndicator: Boolean = true,
     onLiveRoomOpenChange: (Boolean) -> Unit = {},
+    onOpenAnchorProfile: (mid: Long, name: String, face: String) -> Unit = { _, _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(
@@ -435,6 +436,7 @@ fun LiveScreen(
                     credential = credential,
                     coordinator = coordinator,
                     onBack = { activeRoom = null },
+                    onOpenAnchorProfile = onOpenAnchorProfile,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

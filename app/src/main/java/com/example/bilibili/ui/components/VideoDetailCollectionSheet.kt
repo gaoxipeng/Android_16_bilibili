@@ -441,8 +441,9 @@ private fun episodeMatchesCurrent(
     currentBvid: String,
     currentCid: Long,
 ): Boolean {
+    if (episodeCid > 0L && currentCid > 0L) return episodeCid == currentCid
     if (currentBvid.isNotBlank() && episodeBvid == currentBvid) return true
-    return currentCid > 0L && episodeCid == currentCid
+    return false
 }
 
 private fun computeUgcSeasonEpisodeListIndex(

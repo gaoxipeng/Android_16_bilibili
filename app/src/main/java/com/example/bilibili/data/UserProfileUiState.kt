@@ -53,7 +53,15 @@ object UserProfileSessionCache {
     fun hasProfileSnapshot(mid: Long): Boolean =
         profileSnapshots[mid]?.let(::hasMeaningfulProfile) == true
 
-    fun getOrCreate(mid: Long, seedName: String, seedFace: String): UserProfileUiState {
+    fun getOrCreate(
+        mid: Long,
+        seedName: String,
+        seedFace: String,
+        persistedProfile: BiliUserProfile? = null,
+    ): UserProfileUiState {
+        if (persistedProfile != null && !hasProfileSnapshot(mid) && hasMeaningfulProfile(persistedProfile)) {
+            profileSnapshots[mid] = persistedProfile
+        }
         cache[mid]?.let { existing ->
             if (!existing.loaded) {
                 if (seedName.isNotBlank()) {

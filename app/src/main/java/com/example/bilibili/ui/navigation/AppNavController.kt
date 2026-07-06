@@ -42,7 +42,7 @@ sealed interface AppNavEntry {
 
 internal fun AppNavEntry.stableKey(index: Int): String = when (this) {
     AppNavEntry.Search -> "search@$index"
-    is AppNavEntry.VideoDetail -> "video:${video.bvid}@$index"
+    is AppNavEntry.VideoDetail -> "video:${video.playbackId()}@$index"
     is AppNavEntry.UserProfile -> "profile:$mid@$index"
     is AppNavEntry.DynamicDetail -> "dynamic:${item.id}@$index"
     is AppNavEntry.ArticleDetail -> "article:${webUrl.hashCode()}@$index"
@@ -89,6 +89,6 @@ fun List<AppNavEntry>.topVideoDetail(): AppNavEntry.VideoDetail? =
 fun List<AppNavEntry>.lastVideoDetail(): AppNavEntry.VideoDetail? =
     lastOrNull { it is AppNavEntry.VideoDetail } as? AppNavEntry.VideoDetail
 
-fun List<AppNavEntry>.findVideoDetail(bvid: String): BiliVideoItem? =
-    lastOrNull { it is AppNavEntry.VideoDetail && it.video.bvid == bvid }
+fun List<AppNavEntry>.findVideoDetail(playbackId: String): BiliVideoItem? =
+    lastOrNull { it is AppNavEntry.VideoDetail && it.video.playbackId() == playbackId }
         ?.let { (it as AppNavEntry.VideoDetail).video }
