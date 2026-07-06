@@ -132,6 +132,7 @@ private val LiveRoomHeaderHeight = 56.dp
 private const val LIVE_ONLINE_REFRESH_INTERVAL_MS = 5_000L
 private const val LIVE_PLAYER_CONTROLS_HIDE_DELAY_MS = 5_000L
 private const val LIVE_CLEAR_SCREEN_SWIPE_THRESHOLD_PX = 72f
+private val LIVE_PLAYBACK_QN_FALLBACKS = intArrayOf(10_000, 400, 250, 150, 80, 64, 32, 16)
 
 private data class LiveRoomHeaderFollowState(
     val relation: BiliAuthorRelation,
@@ -268,21 +269,25 @@ fun LiveRoomScreen(
                 ?: throw IllegalStateException("无法获取直播间信息")
             detail = roomDetail
             roomDetail.isPortrait?.let { isPortraitStream = it }
-            val play = api.getLivePlayInfo(
-                roomId = room.roomId,
-                qn = LIVE_MAX_QN,
-                credential = credential,
-            )
-                ?: throw IllegalStateException(
-                    if (roomDetail.isLive) "当前直播间不支持该清晰度" else "主播暂未开播",
+            var play: BiliLivePlayResult? = null
+            for (fallbackQn in LIVE_PLAYBACK_QN_FALLBACKS) {
+                play = api.getLivePlayInfo(
+                    roomId = room.roomId,
+                    qn = fallbackQn,
+                    credential = credential,
                 )
-            playInfo = play
+                if (play != null) break
+            }
+            val resolvedPlay = play ?: throw IllegalStateException(
+                if (roomDetail.isLive) "当前直播间暂时无法播放" else "主播暂未开播",
+            )
+            playInfo = resolvedPlay
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
-            exoPlayer.setMediaSource(buildLiveMediaSource(context, play.streamUrl, room.roomId))
+            exoPlayer.setMediaSource(buildLiveMediaSource(context, resolvedPlay.streamUrl, room.roomId))
             exoPlayer.prepare()
             exoPlayer.play()
-            danmakuClient.connect(play)
+            danmakuClient.connect(resolvedPlay)
         }.onFailure {
             error = it.message ?: "加载失败"
         }

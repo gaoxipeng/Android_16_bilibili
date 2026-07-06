@@ -641,6 +641,7 @@ fun BilibiliApp() {
 
     fun persistLogin() {
         scope.launch {
+            val hadNoActiveAccount = activeAccount == null
             val credential = webSession.readCredentialFromCookies() ?: return@launch
             val exchangedCredential = api.exchangeAccessKey(credential)
             val profile = api.getMyInfo(exchangedCredential)
@@ -654,6 +655,9 @@ fun BilibiliApp() {
             accountStore.setActiveAccountId(account.uid)
             activeAccount = account
             api.invalidateWbiCache()
+            if (hadNoActiveAccount) {
+                selectedTab = MainTab.Home
+            }
             refreshHome()
             Toast.makeText(context, "登录成功", Toast.LENGTH_SHORT).show()
             refreshFollow()

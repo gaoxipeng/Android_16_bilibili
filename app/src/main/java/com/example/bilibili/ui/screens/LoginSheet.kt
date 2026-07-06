@@ -19,6 +19,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,6 +30,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import com.example.bilibili.ui.components.consumeTouchEvents
 import com.example.bilibili.data.BilibiliWebSession
+import kotlinx.coroutines.delay
 
 @Composable
 fun LoginSheet(
@@ -37,9 +42,22 @@ fun LoginSheet(
     if (!visible) return
 
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    var loginCompleted by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        loginCompleted = false
         session.openLogin()
+    }
+
+    LaunchedEffect(visible) {
+        while (visible && !loginCompleted) {
+            if (session.hasLoginCookie()) {
+                loginCompleted = true
+                onLoginSuccess()
+                break
+            }
+            delay(800)
+        }
     }
 
     BackHandler {
@@ -71,13 +89,14 @@ fun LoginSheet(
                 ) {
                     Text("哔哩哔哩登录", fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "在下方页面完成登录。登录成功后点击「完成登录」返回应用。",
+                        text = "在下方页面完成登录。检测到登录完成后会自动返回应用并跳转首页。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(
                             onClick = {
                                 if (session.hasLoginCookie()) {
+                                    loginCompleted = true
                                     onLoginSuccess()
                                 } else {
                                     onDismiss()
