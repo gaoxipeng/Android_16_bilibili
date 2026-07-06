@@ -211,9 +211,12 @@ fun LiveDanmakuOverlay(
                 fontSizePercent = settings.fontSizePercent,
             )
             val emojiSize = fontSize * 1.2f
+            val drawableEmoticons = item.emoticons.filterValues { spec ->
+                spec.url.isNotBlank() && emoticonBitmaps.containsKey(spec.url)
+            }
             val measureText = buildDanmakuMeasureText(
                 content = item.content,
-                emoticons = item.emoticons,
+                emoticons = drawableEmoticons,
                 emojiSize = emojiSize,
                 fontSize = fontSize,
             )
