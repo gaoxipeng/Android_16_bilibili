@@ -3,6 +3,7 @@ package com.example.bilibili.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,24 +16,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -52,7 +49,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -61,21 +57,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliLiveArea
+import com.example.bilibili.data.BiliLiveAreaGroup
 import com.example.bilibili.data.BiliLiveRoom
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.ui.FeedTabReselectHandler
 import com.example.bilibili.ui.LocalFeedTabReselectController
 import com.example.bilibili.ui.MainTab
-import com.example.bilibili.ui.components.ObserveGridNearEnd
+import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoCoverBottomScrim
 import com.example.bilibili.ui.components.VideoCoverOverlayText
+import com.example.bilibili.ui.components.VideoFeedAuthorAvatar
 import com.example.bilibili.ui.components.VideoFeedCardCorner
 import com.example.bilibili.ui.components.SlidingTextTabs
 import com.example.bilibili.ui.isScrolledToTop
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
-import com.example.bilibili.ui.theme.BiliPink
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
@@ -83,7 +80,6 @@ import kotlin.coroutines.cancellation.CancellationException
 private enum class LiveContentTab(val label: String) {
     Following("关注"),
     Recommend("推荐"),
-    Hot("人气"),
 }
 
 private val LiveAllArea = BiliLiveArea(id = 0L, name = "全部")
@@ -110,16 +106,12 @@ fun LiveScreen(
     val tabScrollPosition by remember {
         derivedStateOf { pagerState.currentPage + pagerState.currentPageOffsetFraction }
     }
-    val hotGridState = rememberLazyGridState()
-    val recommendGridState = rememberLazyGridState()
-    val followingGridState = rememberLazyGridState()
+    val recommendGridState = rememberLazyStaggeredGridState()
+    val followingGridState = rememberLazyStaggeredGridState()
 
-    var hotRooms by remember { mutableStateOf<List<BiliLiveRoom>>(emptyList()) }
-    var hotLoading by remember { mutableStateOf(false) }
-    var hotError by remember { mutableStateOf<String?>(null) }
-
-    var parentAreas by remember { mutableStateOf<List<BiliLiveArea>>(emptyList()) }
+    var areaGroups by remember { mutableStateOf<List<BiliLiveAreaGroup>>(emptyList()) }
     var selectedParentAreaId by remember { mutableLongStateOf(0L) }
+    var selectedAreaId by remember { mutableLongStateOf(0L) }
     var recommendRooms by remember { mutableStateOf<List<BiliLiveRoom>>(emptyList()) }
     var recommendPage by remember { mutableIntStateOf(1) }
     var recommendHasMore by remember { mutableStateOf(true) }
@@ -145,24 +137,8 @@ fun LiveScreen(
     val listTopInset = contentPadding.calculateTopPadding()
     val listBottomInset = contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve
 
-    suspend fun loadHot(reset: Boolean = true) {
-        if (hotLoading && reset) return
-        if (reset) {
-            hotLoading = true
-            hotError = null
-        }
-        try {
-            hotRooms = api.getLiveHotRank()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            if (reset) {
-                hotError = e.message ?: "加载失败"
-                hotRooms = emptyList()
-            }
-        } finally {
-            if (reset) hotLoading = false
-        }
+    val selectedChildAreas = remember(areaGroups, selectedParentAreaId) {
+        areaGroups.firstOrNull { it.parent.id == selectedParentAreaId }?.children.orEmpty()
     }
 
     suspend fun loadRecommend(reset: Boolean) {
@@ -171,25 +147,29 @@ fun LiveScreen(
             recommendLoading = true
             recommendError = null
             recommendPage = 1
-            recommendHasMore = true
+            recommendHasMore = selectedParentAreaId != 0L
         } else {
-            if (recommendLoadingMore || !recommendHasMore) return
+            if (recommendLoadingMore || !recommendHasMore || selectedParentAreaId == 0L) return
             recommendLoadingMore = true
         }
         try {
-            val page = if (reset) 1 else recommendPage + 1
-            val result = api.getLiveRoomList(
-                parentAreaId = selectedParentAreaId,
-                areaId = 0L,
-                page = page,
-                credential = credential,
-            )
+            val result = if (selectedParentAreaId == 0L) {
+                if (!reset) return
+                api.getLiveRecommendList(credential)
+            } else {
+                val page = if (reset) 1 else recommendPage + 1
+                api.getLiveRoomList(
+                    parentAreaId = selectedParentAreaId,
+                    areaId = selectedAreaId,
+                    page = page,
+                    credential = credential,
+                ).also { recommendPage = page }
+            }
             recommendRooms = if (reset) {
                 result.rooms
             } else {
                 (recommendRooms + result.rooms).distinctBy { it.roomId }
             }
-            recommendPage = page
             recommendHasMore = result.hasMore && result.rooms.isNotEmpty()
         } catch (e: CancellationException) {
             throw e
@@ -225,10 +205,10 @@ fun LiveScreen(
         }
     }
 
-    suspend fun loadParentAreas() {
-        if (parentAreas.isNotEmpty()) return
+    suspend fun loadAreaGroups() {
+        if (areaGroups.isNotEmpty()) return
         runCatching {
-            parentAreas = api.getLiveAreas()
+            areaGroups = api.getLiveAreaGroups()
         }
     }
 
@@ -237,16 +217,14 @@ fun LiveScreen(
             refreshing = true
             try {
                 when (LiveContentTab.entries[pagerState.currentPage]) {
-                    LiveContentTab.Hot -> loadHot(reset = true)
                     LiveContentTab.Recommend -> {
-                        loadParentAreas()
+                        loadAreaGroups()
                         loadRecommend(reset = true)
                     }
                     LiveContentTab.Following -> loadFollowing(reset = true)
                 }
                 if (scrollToTopWhenDone) {
                     when (LiveContentTab.entries[pagerState.currentPage]) {
-                        LiveContentTab.Hot -> hotGridState.animateScrollToItem(0)
                         LiveContentTab.Recommend -> recommendGridState.animateScrollToItem(0)
                         LiveContentTab.Following -> followingGridState.animateScrollToItem(0)
                     }
@@ -258,8 +236,7 @@ fun LiveScreen(
     }
 
     LaunchedEffect(Unit) {
-        loadParentAreas()
-        loadRecommend(reset = true)
+        loadAreaGroups()
         if (loggedIn && credential != null) {
             loadFollowing(reset = true)
         }
@@ -272,22 +249,21 @@ fun LiveScreen(
                     loadFollowing(reset = true)
                 }
             }
-            LiveContentTab.Hot -> {
-                if (hotRooms.isEmpty() && !hotLoading) {
-                    loadHot(reset = true)
-                }
-            }
             else -> Unit
         }
     }
 
     LaunchedEffect(selectedParentAreaId) {
+        selectedAreaId = 0L
+    }
+
+    LaunchedEffect(pagerState.currentPage, selectedParentAreaId, selectedAreaId) {
         if (pagerState.currentPage == LiveContentTab.Recommend.ordinal) {
             loadRecommend(reset = true)
         }
     }
 
-    ObserveGridNearEnd(
+    ObserveStaggeredGridNearEnd(
         gridState = recommendGridState,
         enabled = pagerState.currentPage == LiveContentTab.Recommend.ordinal &&
             recommendHasMore &&
@@ -301,7 +277,6 @@ fun LiveScreen(
         DisposableEffect(
             feedTabReselectController,
             pagerState,
-            hotGridState,
             recommendGridState,
             followingGridState,
         ) {
@@ -310,14 +285,12 @@ fun LiveScreen(
                 FeedTabReselectHandler(
                     isAtTop = {
                         when (LiveContentTab.entries[pagerState.currentPage]) {
-                            LiveContentTab.Hot -> hotGridState.isScrolledToTop()
                             LiveContentTab.Recommend -> recommendGridState.isScrolledToTop()
                             LiveContentTab.Following -> followingGridState.isScrolledToTop()
                         }
                     },
                     scrollToTop = {
                         when (LiveContentTab.entries[pagerState.currentPage]) {
-                            LiveContentTab.Hot -> hotGridState.animateScrollToItem(0)
                             LiveContentTab.Recommend -> recommendGridState.animateScrollToItem(0)
                             LiveContentTab.Following -> followingGridState.animateScrollToItem(0)
                         }
@@ -330,7 +303,6 @@ fun LiveScreen(
     }
 
     val activeRefreshing = when (LiveContentTab.entries[pagerState.currentPage]) {
-        LiveContentTab.Hot -> hotLoading
         LiveContentTab.Recommend -> recommendLoading
         LiveContentTab.Following -> followingLoading
     }
@@ -367,7 +339,6 @@ fun LiveScreen(
                             if (sameTab) {
                                 scope.launch {
                                     when (tab) {
-                                        LiveContentTab.Hot -> hotGridState.animateScrollToItem(0)
                                         LiveContentTab.Recommend -> recommendGridState.animateScrollToItem(0)
                                         LiveContentTab.Following -> followingGridState.animateScrollToItem(0)
                                     }
@@ -382,11 +353,18 @@ fun LiveScreen(
                 }
 
                 if (pagerState.currentPage == LiveContentTab.Recommend.ordinal) {
-                    LiveAreaFilterRow(
-                        areas = listOf(LiveAllArea) + parentAreas,
+                    LiveAreaTextRow(
+                        areas = listOf(LiveAllArea) + areaGroups.map { it.parent },
                         selectedAreaId = selectedParentAreaId,
                         onAreaSelected = { selectedParentAreaId = it },
                     )
+                    if (selectedParentAreaId > 0L && selectedChildAreas.isNotEmpty()) {
+                        LiveAreaTextRow(
+                            areas = listOf(LiveAllArea) + selectedChildAreas,
+                            selectedAreaId = selectedAreaId,
+                            onAreaSelected = { selectedAreaId = it },
+                        )
+                    }
                 }
 
                 HorizontalPager(
@@ -398,15 +376,6 @@ fun LiveScreen(
                     userScrollEnabled = true,
                 ) { page ->
                     when (LiveContentTab.entries[page]) {
-                        LiveContentTab.Hot -> LiveRoomGridPage(
-                            rooms = hotRooms,
-                            loading = hotLoading,
-                            error = hotError,
-                            emptyHint = "暂无人气直播",
-                            gridState = hotGridState,
-                            contentPadding = PaddingValues(bottom = listBottomInset),
-                            onRoomClick = { room -> activeRoom = room },
-                        )
                         LiveContentTab.Recommend -> LiveRoomGridPage(
                             rooms = recommendRooms,
                             loading = recommendLoading,
@@ -455,14 +424,20 @@ fun LiveScreen(
         }
 
         activeRoom?.let { room ->
-            LiveRoomScreen(
-                room = room,
-                api = api,
-                credential = credential,
-                coordinator = coordinator,
-                onBack = { activeRoom = null },
-                modifier = Modifier.fillMaxSize(),
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(20f),
+            ) {
+                LiveRoomScreen(
+                    room = room,
+                    api = api,
+                    credential = credential,
+                    coordinator = coordinator,
+                    onBack = { activeRoom = null },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
@@ -485,7 +460,7 @@ private fun LiveContentTabBar(
 }
 
 @Composable
-private fun LiveAreaFilterRow(
+private fun LiveAreaTextRow(
     areas: List<BiliLiveArea>,
     selectedAreaId: Long,
     onAreaSelected: (Long) -> Unit,
@@ -493,18 +468,21 @@ private fun LiveAreaFilterRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .background(Color.White),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(areas, key = { it.id }) { area ->
-            FilterChip(
-                selected = selectedAreaId == area.id,
-                onClick = { onAreaSelected(area.id) },
-                label = { Text(area.name) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = BiliPink.copy(alpha = 0.12f),
-                    selectedLabelColor = BiliPink,
+            val selected = selectedAreaId == area.id
+            Text(
+                text = area.name,
+                fontSize = 14.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) Color.Black else Color(0xFFBBBBBB),
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { onAreaSelected(area.id) },
                 ),
             )
         }
@@ -517,7 +495,7 @@ private fun LiveRoomGridPage(
     loading: Boolean,
     error: String?,
     emptyHint: String,
-    gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    gridState: androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState,
     contentPadding: PaddingValues,
     onRoomClick: (BiliLiveRoom) -> Unit,
     loadingMore: Boolean = false,
@@ -540,18 +518,18 @@ private fun LiveRoomGridPage(
             }
         }
         else -> {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
+            LazyVerticalStaggeredGrid(
+                columns = StaggeredGridCells.Fixed(2),
                 state = gridState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     top = 8.dp,
-                    start = 12.dp,
-                    end = 12.dp,
+                    start = HomeFeedGridHorizontalPadding,
+                    end = HomeFeedGridHorizontalPadding,
                     bottom = contentPadding.calculateBottomPadding(),
                 ),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                verticalItemSpacing = HomeFeedGridSpacing,
             ) {
                 items(rooms, key = { it.roomId }) { room ->
                     LiveRoomCard(room = room, onClick = { onRoomClick(room) })
@@ -582,7 +560,7 @@ private fun LiveRoomCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(16f / 9f),
+                    .aspectRatio(LiveFeedCoverAspectRatio),
             ) {
                 RemoteImage(
                     url = room.coverUrl,
@@ -597,9 +575,9 @@ private fun LiveRoomCard(
                         .align(Alignment.BottomCenter),
                 )
                 VideoCoverOverlayText(
-                    text = "直播",
+                    text = room.areaName.ifBlank { "直播" },
                     modifier = Modifier
-                        .align(Alignment.TopStart)
+                        .align(Alignment.BottomStart)
                         .padding(LiveFeedCoverOverlayPadding),
                 )
                 VideoCoverOverlayText(
@@ -613,45 +591,33 @@ private fun LiveRoomCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(LiveFeedMetaBackground)
-                    .padding(8.dp),
+                    .padding(LiveFeedMetaPadding),
             ) {
                 Text(
                     text = room.title.ifBlank { room.userName },
-                    maxLines = 2,
+                    maxLines = LiveFeedTitleMaxLines,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF1A1A1A),
+                    color = LiveFeedTitleColor,
                 )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    RemoteImage(
-                        url = room.userFace,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape),
+                    VideoFeedAuthorAvatar(
+                        faceUrl = room.userFace,
+                        authorName = room.userName,
                     )
+                    Spacer(Modifier.width(6.dp))
                     Text(
                         text = room.userName,
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFF999999),
+                        color = LiveFeedMetaDataColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                if (room.areaName.isNotBlank()) {
-                    Text(
-                        text = room.areaName,
-                        modifier = Modifier.padding(top = 4.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFF999999),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
             }
@@ -659,8 +625,13 @@ private fun LiveRoomCard(
     }
 }
 
+private const val LiveFeedCoverAspectRatio = 16f / 9f
+private const val LiveFeedTitleMaxLines = 2
 private val LiveFeedCardBorderColor = Color(0xFFE8E8E8)
 private val LiveFeedMetaBackground = Color(0xFFFFFFFF)
+private val LiveFeedTitleColor = Color(0xFF1A1A1A)
+private val LiveFeedMetaDataColor = Color(0xFF999999)
+private val LiveFeedMetaPadding = 8.dp
 private val LiveFeedCoverOverlayPadding = 6.dp
 private val LiveFeedCoverScrimHeightFraction = 0.45f
 

@@ -27,6 +27,7 @@ fun BilibiliFollowButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    transparent: Boolean = false,
 ) {
     val mutual = following && followerMe
     val label = when {
@@ -34,13 +35,30 @@ fun BilibiliFollowButton(
         mutual -> "互相关注"
         else -> "已关注"
     }
+    val surfaceColor = when {
+        transparent -> Color.Transparent
+        following -> Color(0xFFF0F0F0)
+        else -> BiliPink
+    }
+    val border = when {
+        transparent && following -> BorderStroke(1.dp, Color.White.copy(alpha = 0.45f))
+        transparent -> BorderStroke(1.dp, BiliPink)
+        following -> BorderStroke(1.dp, Color(0xFFD9D9D9))
+        else -> null
+    }
+    val contentColor = when {
+        transparent && following -> Color.White.copy(alpha = 0.88f)
+        transparent -> BiliPink
+        following -> Color(0xFF636363)
+        else -> Color.White
+    }
     Surface(
         onClick = onClick,
         enabled = !loading,
         modifier = modifier,
         shape = RoundedCornerShape(999.dp),
-        color = if (following) Color(0xFFF0F0F0) else BiliPink,
-        border = if (following) BorderStroke(1.dp, Color(0xFFD9D9D9)) else null,
+        color = surfaceColor,
+        border = border,
     ) {
         Box(
             modifier = Modifier
@@ -58,7 +76,7 @@ fun BilibiliFollowButton(
             if (loading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
-                    color = if (following) BiliPink else Color.White,
+                    color = contentColor,
                     strokeWidth = 2.dp,
                 )
             } else {
@@ -72,7 +90,7 @@ fun BilibiliFollowButton(
                     },
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
-                    color = if (following) Color(0xFF636363) else Color.White,
+                    color = contentColor,
                 )
             }
         }

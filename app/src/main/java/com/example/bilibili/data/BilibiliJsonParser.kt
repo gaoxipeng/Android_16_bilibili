@@ -1646,53 +1646,53 @@ object BilibiliJsonParser {
         }
     }
 
-    fun parseLiveHotRank(json: JSONObject): List<BiliLiveRoom> {
-        val list = json.optJSONObject("data")?.optJSONArray("list") ?: return emptyList()
-        return buildList(list.length()) {
-            for (index in 0 until list.length()) {
-                val item = list.optJSONObject(index) ?: continue
-                val roomId = item.optLong("roomid").takeIf { it > 0L }
-                    ?: item.optLong("room_id").takeIf { it > 0L }
-                    ?: continue
-                val onlineCount = item.optLong("online")
-                val score = item.optLong("score")
-                val userNum = item.optLong("user_num")
-                add(
-                    BiliLiveRoom(
-                        roomId = roomId,
-                        title = item.optString("title"),
-                        coverUrl = normalizeImageUrl(
-                            item.optString("cover")
-                                .ifBlank { item.optString("user_cover") }
-                                .ifBlank { item.optString("cover_from_user") }
-                                .ifBlank { item.optString("face") },
-                        ),
-                        userName = item.optString("uname")
-                            .ifBlank { item.optString("username") },
-                        userFace = normalizeImageUrl(item.optString("face")),
-                        online = when {
-                            onlineCount > 0L -> onlineCount
-                            score > 0L -> score
-                            userNum > 0L -> userNum
-                            else -> 0L
-                        },
-                        areaName = item.optString("area_v2_parent_name")
-                            .ifBlank { item.optString("area_v2_name") }
-                            .ifBlank { item.optString("area_name") },
-                    ),
-                )
-            }
-        }
+    /** 优先小分区（area_v2_name / area_name），无则回退大分区。 */
+    private fun JSONObject.liveAreaDisplayName(): String {
+        val subName = optString("area_v2_name").ifBlank { optString("area_name") }
+        if (subName.isNotBlank()) return subName
+        return optString("area_v2_parent_name").ifBlank { optString("parent_area_name") }
     }
 
-    fun parseLiveRoomInfoBrief(json: JSONObject): Pair<String, Long> {
-        val data = json.optJSONObject("data") ?: return "" to 0L
+    private fun JSONObject.livePortraitHint(): Boolean? {
+        fun fieldBoolean(name: String): Boolean? {
+            if (!has(name)) return null
+            val raw = opt(name)
+            return when (raw) {
+                is Boolean -> raw
+                is Number -> raw.toInt() == 1
+                is String -> raw == "1" || raw.equals("true", ignoreCase = true)
+                else -> null
+            }
+        }
+        return fieldBoolean("is_portrait")
+            ?: fieldBoolean("is_vertical")
+            ?: fieldBoolean("vertical")
+            ?: fieldBoolean("live_screen_type")?.takeIf { it }
+            ?: fieldBoolean("screen_type")?.takeIf { it }
+    }
+
+    fun parseLiveRoomAreaDisplayName(json: JSONObject): String {
+        val data = json.optJSONObject("data") ?: return ""
+        val roomInfo = data.optJSONObject("room_info") ?: data
+        return roomInfo.liveAreaDisplayName()
+    }
+
+    fun parseLiveRoomInfoBrief(json: JSONObject): Triple<String, Long, Boolean?> {
+        val data = json.optJSONObject("data") ?: return Triple("", 0L, null)
+        val roomInfo = data.optJSONObject("room_info")
         val cover = normalizeImageUrl(
             data.optString("user_cover")
                 .ifBlank { data.optString("keyframe") }
-                .ifBlank { data.optString("cover") },
+                .ifBlank { data.optString("cover") }
+                .ifBlank { roomInfo?.optString("user_cover").orEmpty() }
+                .ifBlank { roomInfo?.optString("keyframe").orEmpty() }
+                .ifBlank { roomInfo?.optString("cover").orEmpty() },
         )
-        return cover to data.optLong("online")
+        return Triple(
+            cover,
+            data.optLong("online").takeIf { it > 0L } ?: roomInfo?.optLong("online") ?: 0L,
+            data.livePortraitHint() ?: roomInfo?.livePortraitHint(),
+        )
     }
 
     fun parseLiveRoomDetail(json: JSONObject): BiliLiveRoomDetail? {
@@ -1719,49 +1719,61 @@ object BilibiliJsonParser {
             parentAreaName = roomInfo.optString("parent_area_name"),
             liveStatus = roomInfo.optInt("live_status"),
             description = roomInfo.optString("description"),
+            isPortrait = roomInfo.livePortraitHint() ?: data.livePortraitHint(),
         )
     }
 
     fun parseLivePlayInfo(
         json: JSONObject,
-        preferredQn: Int = 10_000,
+        qn: Int,
     ): BiliLivePlayResult? {
         val data = json.optJSONObject("data") ?: return null
         val roomId = data.optLong("room_id").takeIf { it > 0L } ?: return null
-        val playUrl = data.optJSONObject("playurl_info")?.optJSONObject("playurl")
-            ?: return null
+        val playUrlInfo = data.optJSONObject("playurl_info") ?: return null
+        val playUrl = playUrlInfo.optJSONObject("playurl") ?: return null
         val qualities = buildList {
             playUrl.optJSONArray("g_qn_desc")?.let { qnDesc ->
                 for (index in 0 until qnDesc.length()) {
                     val item = qnDesc.optJSONObject(index) ?: continue
-                    val qn = item.optInt("qn")
+                    val qualityQn = item.optInt("qn")
                     val desc = item.optString("desc")
-                    if (qn > 0 && desc.isNotBlank()) {
-                        add(BiliLiveQuality(qn = qn, label = desc))
+                    if (qualityQn > 0 && desc.isNotBlank()) {
+                        add(BiliLiveQuality(qn = qualityQn, label = desc))
                     }
                 }
             }
         }
         val streams = playUrl.optJSONArray("stream") ?: return null
-        data class StreamCandidate(val priority: Int, val url: String, val qn: Int)
+        data class LiveStreamCandidate(
+            val qnMatchPriority: Int,
+            val codecPriority: Int,
+            val protocolPriority: Int,
+            val formatPriority: Int,
+            val url: String,
+        )
 
         val candidates = buildList {
             for (streamIndex in 0 until streams.length()) {
                 val stream = streams.optJSONObject(streamIndex) ?: continue
+                val protocolName = stream.optString("protocol_name")
+                val protocolPriority = when (protocolName) {
+                    "http_stream" -> 0
+                    "http_hls" -> 1
+                    else -> 2
+                }
                 val formats = stream.optJSONArray("format") ?: continue
                 for (formatIndex in 0 until formats.length()) {
                     val format = formats.optJSONObject(formatIndex) ?: continue
                     val formatName = format.optString("format_name")
-                    val priority = when (formatName) {
-                        "fmp4" -> 0
+                    val formatPriority = when (formatName) {
+                        "flv" -> 0
                         "ts" -> 1
-                        "flv" -> 2
+                        "fmp4" -> 2
                         else -> 3
                     }
                     val codecs = format.optJSONArray("codec") ?: continue
                     for (codecIndex in 0 until codecs.length()) {
                         val codec = codecs.optJSONObject(codecIndex) ?: continue
-                        val currentQn = codec.optInt("current_qn")
                         val acceptQn = buildList {
                             codec.optJSONArray("accept_qn")?.let { qnArray ->
                                 for (qnIndex in 0 until qnArray.length()) {
@@ -1769,11 +1781,17 @@ object BilibiliJsonParser {
                                 }
                             }
                         }
-                        val targetQn = when {
-                            acceptQn.contains(preferredQn) -> preferredQn
-                            currentQn > 0 -> currentQn
-                            acceptQn.firstOrNull() ?: 0 > 0 -> acceptQn.first()
-                            else -> preferredQn
+                        if (acceptQn.isEmpty()) continue
+                        val codecName = codec.optString("codec_name")
+                        val codecPriority = when {
+                            codecName.equals("avc", ignoreCase = true) -> 0
+                            codecName.equals("hevc", ignoreCase = true) -> 1
+                            else -> continue
+                        }
+                        val qnMatchPriority = if (acceptQn.contains(qn)) {
+                            0
+                        } else {
+                            1 + acceptQn.minOf { kotlin.math.abs(it - qn) }
                         }
                         val baseUrl = codec.optString("base_url")
                         val urlInfo = codec.optJSONArray("url_info") ?: continue
@@ -1782,7 +1800,7 @@ object BilibiliJsonParser {
                             val host = info.optString("host").trimEnd('/')
                             val extra = info.optString("extra")
                             if (host.isBlank() || baseUrl.isBlank()) continue
-                            val fullUrl = buildString {
+                            val url = buildString {
                                 append(host)
                                 if (!baseUrl.startsWith("/")) append('/')
                                 append(baseUrl)
@@ -1791,23 +1809,35 @@ object BilibiliJsonParser {
                                     append(extra)
                                 }
                             }
-                            add(StreamCandidate(priority, fullUrl, targetQn))
+                            add(
+                                LiveStreamCandidate(
+                                    qnMatchPriority = qnMatchPriority,
+                                    codecPriority = codecPriority,
+                                    protocolPriority = protocolPriority,
+                                    formatPriority = formatPriority,
+                                    url = url,
+                                ),
+                            )
                         }
                     }
                 }
             }
         }
         val best = candidates.minWithOrNull(
-            compareBy<StreamCandidate> { it.priority }
-                .thenBy { abs(it.qn - preferredQn) },
+            compareBy<LiveStreamCandidate> { it.codecPriority }
+                .thenBy { it.qnMatchPriority }
+                .thenBy { it.protocolPriority }
+                .thenBy { it.formatPriority },
         ) ?: return null
+        val deliveredQn = playUrlInfo.optJSONObject("expected_quality")?.optInt("qn")
+            ?.takeIf { it > 0 } ?: qn
         return BiliLivePlayResult(
             roomId = roomId,
             realRoomId = roomId,
             anchorUid = data.optLong("uid"),
             liveStatus = data.optInt("live_status"),
             streamUrl = best.url,
-            currentQn = best.qn,
+            currentQn = deliveredQn,
             qualities = qualities,
         )
     }
@@ -1838,7 +1868,11 @@ object BilibiliJsonParser {
         if (payload.length() < 2) return null
         val meta = payload.optJSONArray(0) ?: return null
         val content = payload.optString(1)
-        if (content.isBlank()) return null
+        val emoticons = parseLiveDanmakuEmoticons(meta, content)
+        if (content.isBlank() && emoticons.isEmpty()) return null
+        val displayContent = content.ifBlank { emoticons.keys.firstOrNull().orEmpty() }
+        if (displayContent.isBlank()) return null
+        val userInfo = payload.optJSONArray(2)
         val mode = meta.optInt(1, BiliDanmakuMode.Scroll.value)
         val fontSize = meta.optInt(2, 25)
         val color = meta.optInt(3, 0xFFFFFF)
@@ -1847,8 +1881,246 @@ object BilibiliJsonParser {
             mode = mode,
             fontSize = fontSize,
             colorArgb = color or 0xFF000000.toInt(),
-            content = content,
+            content = displayContent,
+            senderId = userInfo?.optLong(0) ?: 0L,
+            senderName = userInfo?.optString(1).orEmpty(),
+            emoticons = emoticons,
         )
+    }
+
+    private fun parseLiveDanmakuEmoticons(
+        meta: org.json.JSONArray,
+        content: String,
+    ): Map<String, BiliDanmakuEmoticon> {
+        val result = linkedMapOf<String, BiliDanmakuEmoticon>()
+
+        fun metaJsonAt(index: Int): JSONObject? {
+            if (index >= meta.length()) return null
+            return when (val raw = meta.opt(index)) {
+                is JSONObject -> raw.takeIf { it.length() > 0 }
+                is String -> if (raw.isBlank() || raw == "{}") {
+                    null
+                } else {
+                    runCatching { JSONObject(raw) }.getOrNull()?.takeIf { it.length() > 0 }
+                }
+                else -> null
+            }
+        }
+
+        fun putEmoticon(phrase: String, url: String, width: Int = 0, height: Int = 0) {
+            if (phrase.isBlank() || url.isBlank()) return
+            result[phrase] = BiliDanmakuEmoticon(
+                url = normalizeImageUrl(url),
+                width = width,
+                height = height,
+            )
+        }
+
+        fun JSONObject.emoticonUrl(): String =
+            optString("url")
+                .ifBlank { optString("gif_url") }
+                .ifBlank { optString("icon_url") }
+                .ifBlank { optString("emoticon_url") }
+                .ifBlank { optString("webp_url") }
+                .ifBlank { optString("bulge_url") }
+                .ifBlank { optString("jump_url") }
+                .ifBlank { optString("cover") }
+
+        fun phraseCandidates(vararg rawPhrases: String): List<String> =
+            rawPhrases
+                .flatMap { raw ->
+                    val phrase = raw.trim()
+                    if (phrase.isBlank()) {
+                        emptyList()
+                    } else {
+                        listOf(
+                            phrase,
+                            phrase.removeSurrounding("[", "]"),
+                            if (phrase.startsWith("[") && phrase.endsWith("]")) phrase else "[$phrase]",
+                        )
+                    }
+                }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+        fun putEmoticonForPhrases(
+            phrases: List<String>,
+            url: String,
+            width: Int = 0,
+            height: Int = 0,
+        ) {
+            phrases.forEach { phrase ->
+                putEmoticon(phrase, url, width, height)
+            }
+        }
+
+        fun addEmotsObject(emots: JSONObject?) {
+            if (emots == null) return
+            val keys = emots.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                when (val raw = emots.opt(key)) {
+                    is JSONObject -> {
+                        val url = raw.emoticonUrl()
+                        if (url.isNotBlank()) {
+                            putEmoticonForPhrases(
+                                phrases = phraseCandidates(
+                                    key,
+                                    raw.optString("text"),
+                                    raw.optString("emoji"),
+                                    raw.optString("name"),
+                                    raw.optString("emoticon_unique"),
+                                ),
+                                url = url,
+                                width = raw.optInt("width"),
+                                height = raw.optInt("height"),
+                            )
+                        }
+                    }
+                    is String -> {
+                        if (raw.startsWith("http") || raw.startsWith("//")) {
+                            putEmoticonForPhrases(phraseCandidates(key), raw)
+                        }
+                    }
+                }
+            }
+        }
+
+        fun addEmoticonObject(emoticon: JSONObject?, phrase: String = content) {
+            if (emoticon == null || emoticon.length() == 0) return
+            val url = emoticon.emoticonUrl()
+            if (url.isBlank()) return
+            val unique = when (val raw = emoticon.opt("emoticon_unique")) {
+                is String -> raw
+                is JSONObject -> raw.optString("text")
+                else -> ""
+            }
+            val text = emoticon.optString("text")
+                .ifBlank { phrase }
+                .ifBlank { unique }
+            putEmoticonForPhrases(
+                phrases = phraseCandidates(
+                    text,
+                    phrase,
+                    unique,
+                    emoticon.optString("emoji"),
+                    emoticon.optString("name"),
+                ),
+                url = url,
+                width = emoticon.optInt("width"),
+                height = emoticon.optInt("height"),
+            )
+        }
+
+        fun addEmoticonArray(array: org.json.JSONArray?) {
+            if (array == null) return
+            for (index in 0 until array.length()) {
+                addEmoticonObject(array.optJSONObject(index), content)
+            }
+        }
+
+        fun scanExtraObject(obj: JSONObject?) {
+            if (obj == null || obj.length() == 0) return
+            addEmotsObject(obj.optJSONObject("emots"))
+            addEmotsObject(obj.optJSONObject("emoticons"))
+            addEmotsObject(obj.optJSONObject("emote"))
+            addEmoticonObject(obj.optJSONObject("emoticon"), obj.optString("content").ifBlank { content })
+            addEmoticonObject(obj.optJSONObject("emoji"), obj.optString("content").ifBlank { content })
+            addEmoticonArray(obj.optJSONArray("emoticon_list"))
+            addEmoticonArray(obj.optJSONArray("emotes"))
+            addEmoticonArray(obj.optJSONArray("emojis"))
+            addEmoticonObject(obj, obj.optString("content").ifBlank { content })
+        }
+
+        metaJsonAt(12)?.let(::addEmotsObject)
+        metaJsonAt(13)?.let { addEmoticonObject(it, content) }
+        metaJsonAt(14)?.let(::addEmotsObject)
+        metaJsonAt(15)?.let { data ->
+            scanExtraObject(data)
+            val extra = data.optString("extra")
+            if (extra.isNotBlank()) {
+                runCatching { JSONObject(extra) }.getOrNull()?.let { extraJson ->
+                    scanExtraObject(extraJson)
+                    val extraContent = extraJson.optString("content").ifBlank { content }
+                    if (extraJson.optString("emoticon_unique").isNotBlank()) {
+                        metaJsonAt(13)?.let { emoticonMeta ->
+                            val url = emoticonMeta.emoticonUrl()
+                            if (url.isNotBlank() && extraContent.isNotBlank()) {
+                                putEmoticonForPhrases(
+                                    phrases = phraseCandidates(extraContent),
+                                    url = url,
+                                    width = emoticonMeta.optInt("width"),
+                                    height = emoticonMeta.optInt("height"),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (index in 0 until meta.length()) {
+            scanExtraObject(metaJsonAt(index))
+        }
+        return result
+    }
+
+    fun parseLiveOnlineGoldRank(json: JSONObject): BiliLiveOnlineGoldRank {
+        val data = json.optJSONObject("data") ?: return BiliLiveOnlineGoldRank()
+        val onlineNum = data.optLong("onlineNum").takeIf { it > 0L }
+            ?: data.optLong("online_num")
+        val users = parseLiveOnlineRankUsers(
+            data.optJSONArray("OnlineRankItem") ?: data.optJSONArray("list"),
+        )
+        return BiliLiveOnlineGoldRank(
+            onlineNum = onlineNum,
+            users = users,
+        )
+    }
+
+    fun parseLiveOnlineRankList(json: JSONObject): List<BiliLiveRankUser> {
+        val data = json.optJSONObject("data") ?: json
+        return parseLiveOnlineRankUsers(
+            data.optJSONArray("list") ?: data.optJSONArray("OnlineRankItem"),
+        )
+    }
+
+    private fun parseLiveOnlineRankUsers(list: org.json.JSONArray?): List<BiliLiveRankUser> {
+        if (list == null) return emptyList()
+        return buildList {
+            for (index in 0 until list.length()) {
+                val item = list.optJSONObject(index) ?: continue
+                val uid = item.optLong("uid")
+                val rank = item.optInt("userRank").takeIf { it > 0 }
+                    ?: item.optInt("rank", index + 1)
+                val face = normalizeImageUrl(
+                    item.optString("face")
+                        .ifBlank {
+                            item.optJSONObject("uinfo")
+                                ?.optJSONObject("base")
+                                ?.optString("face")
+                                .orEmpty()
+                        },
+                )
+                val uname = item.optString("uname")
+                    .ifBlank { item.optString("name") }
+                    .ifBlank {
+                        item.optJSONObject("uinfo")
+                            ?.optJSONObject("base")
+                            ?.optString("name")
+                            .orEmpty()
+                    }
+                if (uid <= 0L || face.isBlank() || uname.isBlank()) continue
+                add(
+                    BiliLiveRankUser(
+                        uid = uid,
+                        face = face,
+                        uname = uname,
+                        rank = rank,
+                        guardLevel = item.optInt("guard_level"),
+                    ),
+                )
+            }
+        }.sortedBy { it.rank }.take(3)
     }
 
     fun parseLiveRoomPage(json: JSONObject): BiliLiveRoomPage {
@@ -1864,18 +2136,69 @@ object BilibiliJsonParser {
         )
     }
 
-    fun parseLiveAreas(json: JSONObject): List<BiliLiveArea> {
+    fun parseLiveAreaGroups(json: JSONObject): List<BiliLiveAreaGroup> {
         val data = json.optJSONArray("data") ?: return emptyList()
         return buildList(data.length()) {
             for (index in 0 until data.length()) {
-                val parent = data.optJSONObject(index) ?: continue
-                val parentId = parent.optLong("id")
-                val parentName = parent.optString("name")
-                if (parentId > 0L && parentName.isNotBlank()) {
-                    add(BiliLiveArea(id = parentId, name = parentName))
+                val parentJson = data.optJSONObject(index) ?: continue
+                val parentId = parentJson.optLong("id")
+                val parentName = parentJson.optString("name")
+                if (parentId <= 0L || parentName.isBlank()) continue
+                val children = buildList {
+                    parentJson.optJSONArray("list")?.let { list ->
+                        for (childIndex in 0 until list.length()) {
+                            val child = list.optJSONObject(childIndex) ?: continue
+                            val childId = child.optLong("id")
+                            val childName = child.optString("name")
+                            if (childId > 0L && childName.isNotBlank()) {
+                                add(
+                                    BiliLiveArea(
+                                        id = childId,
+                                        name = childName,
+                                        parentId = parentId,
+                                    ),
+                                )
+                            }
+                        }
+                    }
                 }
+                add(
+                    BiliLiveAreaGroup(
+                        parent = BiliLiveArea(id = parentId, name = parentName),
+                        children = children,
+                    ),
+                )
             }
         }
+    }
+
+    fun parseLiveRecommendList(json: JSONObject): BiliLiveRoomPage {
+        val list = json.optJSONObject("data")?.optJSONArray("recommend_room_list")
+            ?: org.json.JSONArray()
+        val rooms = buildList(list.length()) {
+            for (index in 0 until list.length()) {
+                val item = list.optJSONObject(index) ?: continue
+                val roomId = item.optLong("roomid").takeIf { it > 0L } ?: continue
+                add(
+                    BiliLiveRoom(
+                        roomId = roomId,
+                        title = item.optString("title"),
+                        coverUrl = normalizeImageUrl(item.optString("cover")),
+                        userName = item.optString("uname"),
+                        userFace = normalizeImageUrl(item.optString("face")),
+                        online = item.optLong("online"),
+                        areaName = item.optString("area_v2_parent_name")
+                            .ifBlank { item.optString("area_v2_name") },
+                        isPortrait = item.livePortraitHint(),
+                    ),
+                )
+            }
+        }
+        return BiliLiveRoomPage(
+            rooms = rooms,
+            page = 1,
+            hasMore = false,
+        )
     }
 
     fun parseLiveFollowing(json: JSONObject): List<BiliLiveRoom> {
@@ -1893,10 +2216,13 @@ object BilibiliJsonParser {
                 val roomId = item.optLong("roomid").takeIf { it > 0L }
                     ?: item.optLong("room_id").takeIf { it > 0L }
                     ?: continue
+                val roomInfo = item.optJSONObject("room_info")
+                val areaSource = roomInfo ?: item
                 add(
                     BiliLiveRoom(
                         roomId = roomId,
-                        title = item.optString("title"),
+                        title = item.optString("title")
+                            .ifBlank { roomInfo?.optString("title").orEmpty() },
                         coverUrl = normalizeImageUrl(
                             item.optString("cover")
                                 .ifBlank { item.optString("user_cover") }
@@ -1906,8 +2232,9 @@ object BilibiliJsonParser {
                             .ifBlank { item.optString("username") },
                         userFace = normalizeImageUrl(item.optString("face")),
                         online = item.optLong("online"),
-                        areaName = item.optString("area_name")
-                            .ifBlank { item.optString("area_v2_parent_name") },
+                        areaName = areaSource.liveAreaDisplayName()
+                            .ifBlank { item.liveAreaDisplayName() },
+                        isPortrait = item.livePortraitHint() ?: roomInfo?.livePortraitHint(),
                     ),
                 )
             }

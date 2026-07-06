@@ -468,13 +468,17 @@ fun SurfaceLiquidMenuCard(
     cornerRadius: Dp = 14.dp,
     blurRadius: Dp = LiquidMenuGlassBlurRadius,
     surfaceColor: Color? = null,
+    useMenuGlassStyle: Boolean = false,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
     val isLightTheme = !isSystemInDarkTheme()
     val shape = RoundedCornerShape(cornerRadius)
-    val resolvedSurfaceColor = surfaceColor ?: liquidSurfaceColor(isLightTheme)
+    val resolvedSurfaceColor = surfaceColor ?: when {
+        useMenuGlassStyle -> liquidMenuSurfaceColor(isLightTheme)
+        else -> liquidSurfaceColor(isLightTheme)
+    }
     val borderColor = liquidMenuBorderColor(isLightTheme)
 
     if (resolvedBackdrop != null) {
@@ -485,9 +489,13 @@ fun SurfaceLiquidMenuCard(
                     backdrop = resolvedBackdrop,
                     shape = { shape },
                     effects = {
-                        vibrancy()
-                        lens(12f.dp.toPx(), 24f.dp.toPx())
-                        blur(blurRadius.toPx(), TileMode.Decal)
+                        if (useMenuGlassStyle) {
+                            liquidMenuGlassEffects()
+                        } else {
+                            vibrancy()
+                            lens(12f.dp.toPx(), 24f.dp.toPx())
+                            blur(blurRadius.toPx(), TileMode.Decal)
+                        }
                     },
                     highlight = null,
                     shadow = null,

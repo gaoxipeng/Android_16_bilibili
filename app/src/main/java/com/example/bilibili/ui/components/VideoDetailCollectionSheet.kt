@@ -2,11 +2,14 @@ package com.example.bilibili.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -17,45 +20,76 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import androidx.compose.foundation.isSystemInDarkTheme
-import com.example.bilibili.ui.liquidglass.liquidSheetSurfaceColor
 import com.example.bilibili.data.BiliUgcSeason
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BiliVideoPage
+import com.example.bilibili.ui.liquidglass.LiquidMenuBorderWidth
+import com.example.bilibili.ui.liquidglass.SurfaceLiquidMenuCard
+import com.example.bilibili.ui.liquidglass.liquidMenuBorderColor
 import com.example.bilibili.ui.theme.BiliPink
+import com.kyant.backdrop.Backdrop
 import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
+import dev.chrisbanes.haze.materials.HazeMaterials
 import kotlinx.coroutines.flow.first
+import kotlin.math.roundToInt
+
+private val CollectionPanelCompanionGap = 8.dp
+private val CollectionPanelCornerRadius = 14.dp
+private val CollectionPanelHorizontalMargin = 16.dp
+private val CollectionPanelHeaderHeight = 38.dp
+private val CollectionPanelMaxListHeight = 320.dp
+private val CollectionPanelEpisodeRowHeight = 46.dp
+
+private fun collectionPanelSurfaceColor(isLightTheme: Boolean) =
+    if (isLightTheme) {
+        Color.White.copy(alpha = 0.94f)
+    } else {
+        Color(0xFF1C1C1E).copy(alpha = 0.88f)
+    }
 
 @Composable
+@OptIn(ExperimentalHazeMaterialsApi::class)
 fun VideoDetailCollectionSheet(
     visible: Boolean,
     sheetTitle: String,
-    hazeState: HazeState,
+    anchorBoundsInRoot: Rect,
+    menuBackdrop: Backdrop,
+    hazeState: HazeState? = null,
     ugcSeason: BiliUgcSeason? = null,
     highlightSectionId: Long? = null,
     pages: List<BiliVideoPage> = emptyList(),
@@ -68,18 +102,99 @@ fun VideoDetailCollectionSheet(
     onPartClick: (BiliVideoPage) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    var displayedAnchor by remember { mutableStateOf(Rect.Zero) }
+
+    if (!visible && displayedAnchor == Rect.Zero) return
+
     BackHandler(enabled = visible, onBack = onDismiss)
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .zIndex(1000f),
     ) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(),
-            exit = fadeOut(),
+        val density = LocalDensity.current
+        val marginPx = with(density) { CollectionPanelHorizontalMargin.toPx() }
+        val gapPx = with(density) { CollectionPanelCompanionGap.toPx() }
+        val screenWidthPx = with(density) { maxWidth.toPx() }
+        val screenHeightPx = with(density) { maxHeight.toPx() }
+        val fallbackAnchor = remember(screenWidthPx, screenHeightPx, marginPx) {
+            val top = screenHeightPx * 0.38f
+            val height = with(density) { 44.dp.toPx() }
+            Rect(
+                left = marginPx,
+                top = top,
+                right = screenWidthPx - marginPx,
+                bottom = top + height,
+            )
+        }
+        val anchor = when {
+            anchorBoundsInRoot.width > 0f -> anchorBoundsInRoot
+            displayedAnchor.width > 0f -> displayedAnchor
+            visible -> fallbackAnchor
+            else -> return@BoxWithConstraints
+        }
+
+        LaunchedEffect(visible, anchorBoundsInRoot) {
+            if (visible && anchorBoundsInRoot.width > 0f) {
+                displayedAnchor = anchorBoundsInRoot
+            }
+        }
+        val panelWidthPx = screenWidthPx - marginPx * 2f
+        val headerHeightPx = with(density) { CollectionPanelHeaderHeight.toPx() }
+        val verticalPaddingPx = with(density) { 12.dp.toPx() }
+        val maxListHeightPx = with(density) { CollectionPanelMaxListHeight.toPx() }
+        val panelHeightPx = headerHeightPx + maxListHeightPx + verticalPaddingPx
+
+        val hasSpaceBelow = anchor.bottom + gapPx + panelHeightPx <= screenHeightPx - marginPx
+        val targetY = if (hasSpaceBelow) {
+            anchor.bottom + gapPx
+        } else {
+            anchor.top - gapPx - panelHeightPx
+        }
+        val maxY = (screenHeightPx - panelHeightPx - marginPx).coerceAtLeast(marginPx)
+        val panelOffsetY = targetY.coerceIn(marginPx, maxY).roundToInt()
+        val panelOffsetX = marginPx.roundToInt()
+        val panelWidth = with(density) { panelWidthPx.toDp() }
+        val isLightTheme = !isSystemInDarkTheme()
+        val panelSurfaceColor = collectionPanelSurfaceColor(isLightTheme)
+        val panelShape = RoundedCornerShape(CollectionPanelCornerRadius)
+        val panelBorderColor = liquidMenuBorderColor(isLightTheme)
+        val panelHazeStyle = HazeMaterials.thick(containerColor = panelSurfaceColor)
+
+        val listState = rememberLazyListState()
+
+        LaunchedEffect(
+            visible,
+            ugcSeason,
+            pages,
+            currentBvid,
+            currentCid,
+            highlightSectionId,
         ) {
+            if (!visible) return@LaunchedEffect
+            val targetIndex = when {
+                ugcSeason != null -> computeUgcSeasonEpisodeListIndex(
+                    ugcSeason = ugcSeason,
+                    highlightSectionId = highlightSectionId,
+                    currentBvid = currentBvid,
+                    currentCid = currentCid,
+                )
+                pages.isNotEmpty() -> pages.indexOfFirst { it.cid == currentCid }.takeIf { it >= 0 }
+                else -> null
+            } ?: return@LaunchedEffect
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { it > targetIndex }
+            val listHeightPx = maxListHeightPx
+            val itemHeightPx = with(density) { CollectionPanelEpisodeRowHeight.roundToPx() }
+            val scrollOffset = -(listHeightPx / 2 - itemHeightPx / 2).roundToInt()
+            listState.animateScrollToItem(
+                index = targetIndex,
+                scrollOffset = scrollOffset,
+            )
+        }
+
+        if (visible) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -90,159 +205,166 @@ fun VideoDetailCollectionSheet(
                     ),
             )
         }
+
         AnimatedVisibility(
             visible = visible,
-            enter = slideInVertically { it } + fadeIn(),
-            exit = slideOutVertically { it } + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(tween(120)) + slideInVertically(tween(140)) { it / 4 },
+            exit = fadeOut(tween(100)),
+            modifier = Modifier
+                .offset { IntOffset(panelOffsetX, panelOffsetY) }
+                .width(panelWidth),
         ) {
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-            ) {
-                val sheetHeight = maxHeight * 0.55f
-                val headerHeight = 44.dp
-                val listHeight = sheetHeight - headerHeight - ActionMenuCardInset * 2
-                val listState = rememberLazyListState()
-                val density = LocalDensity.current
-
-                LaunchedEffect(
-                    visible,
-                    ugcSeason,
-                    pages,
-                    currentBvid,
-                    currentCid,
-                    highlightSectionId,
-                ) {
-                    if (!visible) return@LaunchedEffect
-                    val targetIndex = when {
-                        ugcSeason != null -> computeUgcSeasonEpisodeListIndex(
-                            ugcSeason = ugcSeason,
-                            highlightSectionId = highlightSectionId,
-                            currentBvid = currentBvid,
-                            currentCid = currentCid,
-                        )
-                        pages.isNotEmpty() -> pages.indexOfFirst { it.cid == currentCid }.takeIf { it >= 0 }
-                        else -> null
-                    } ?: return@LaunchedEffect
-                    snapshotFlow { listState.layoutInfo.totalItemsCount }
-                        .first { it > targetIndex }
-                    val listHeightPx = with(density) { listHeight.roundToPx() }
-                    val itemHeightPx = with(density) { 58.dp.roundToPx() }
-                    val scrollOffset = -(listHeightPx / 2 - itemHeightPx / 2)
-                    listState.animateScrollToItem(
-                        index = targetIndex,
-                        scrollOffset = scrollOffset,
-                    )
-                }
-
-                val isLightTheme = !isSystemInDarkTheme()
-
-                ActionFrostedCard(
+            if (hazeState != null) {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(sheetHeight),
-                    hazeState = hazeState,
-                    effectBlurRadius = ActionSheetBlurRadius,
-                    effectContainerColor = liquidSheetSurfaceColor(isLightTheme),
+                        .clip(panelShape)
+                        .hazeEffect(state = hazeState) {
+                            style = panelHazeStyle
+                            blurRadius = ActionMenuBlurRadius
+                        }
+                        .border(LiquidMenuBorderWidth, panelBorderColor, panelShape)
+                        .padding(vertical = 6.dp),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+                    CollectionSheetPanelContent(
+                        sheetTitle = sheetTitle,
+                        listState = listState,
+                        ugcSeason = ugcSeason,
+                        highlightSectionId = highlightSectionId,
+                        pages = pages,
+                        currentBvid = currentBvid,
+                        currentCid = currentCid,
+                        authorName = authorName,
+                        authorMid = authorMid,
+                        onDismiss = onDismiss,
+                        onUgcEpisodeClick = onUgcEpisodeClick,
+                        onPartClick = onPartClick,
+                    )
+                }
+            } else {
+                SurfaceLiquidMenuCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    backdrop = menuBackdrop,
+                    cornerRadius = CollectionPanelCornerRadius,
+                    useMenuGlassStyle = true,
+                    surfaceColor = panelSurfaceColor,
+                    contentPadding = PaddingValues(vertical = 6.dp),
+                ) {
+                    CollectionSheetPanelContent(
+                        sheetTitle = sheetTitle,
+                        listState = listState,
+                        ugcSeason = ugcSeason,
+                        highlightSectionId = highlightSectionId,
+                        pages = pages,
+                        currentBvid = currentBvid,
+                        currentCid = currentCid,
+                        authorName = authorName,
+                        authorMid = authorMid,
+                        onDismiss = onDismiss,
+                        onUgcEpisodeClick = onUgcEpisodeClick,
+                        onPartClick = onPartClick,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollectionSheetPanelContent(
+    sheetTitle: String,
+    listState: LazyListState,
+    ugcSeason: BiliUgcSeason?,
+    highlightSectionId: Long?,
+    pages: List<BiliVideoPage>,
+    currentBvid: String,
+    currentCid: Long,
+    authorName: String,
+    authorMid: Long,
+    onDismiss: () -> Unit,
+    onUgcEpisodeClick: (BiliVideoItem) -> Unit,
+    onPartClick: (BiliVideoPage) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(CollectionPanelHeaderHeight)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = sheetTitle,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = CollectionPanelMaxListHeight),
+    ) {
+        if (ugcSeason != null) {
+            val sections = ugcSeason.sectionsToShow(highlightSectionId)
+            val showSectionHeaders = sections.size > 1
+            sections.forEach { section ->
+                if (showSectionHeaders && section.title.isNotBlank()) {
+                    item(key = "section-header-${section.id}") {
                         Text(
-                            text = sheetTitle,
-                            modifier = Modifier.weight(1f),
-                            fontSize = 15.sp,
-                            lineHeight = 20.sp,
+                            text = section.title,
+                            modifier = Modifier.padding(
+                                horizontal = 14.dp,
+                                vertical = 6.dp,
+                            ),
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "关闭",
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(listHeight),
-                    ) {
-                        if (ugcSeason != null) {
-                            val sections = ugcSeason.sectionsToShow(highlightSectionId)
-                            val showSectionHeaders = sections.size > 1
-                            sections.forEach { section ->
-                                if (showSectionHeaders && section.title.isNotBlank()) {
-                                    item(key = "section-header-${section.id}") {
-                                        Text(
-                                            text = section.title,
-                                            modifier = Modifier.padding(
-                                                horizontal = 8.dp,
-                                                vertical = 8.dp,
-                                            ),
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                                itemsIndexed(
-                                    items = section.episodes,
-                                    key = { _, episode ->
-                                        "ugc-${section.id}-${episode.bvid}-${episode.id}"
-                                    },
-                                ) { index, episode ->
-                                    CollectionSheetEpisodeRow(
-                                        index = index + 1,
-                                        title = episode.title,
-                                        durationSeconds = episode.durationSeconds,
-                                        selected = episodeMatchesCurrent(
-                                            episodeBvid = episode.bvid,
-                                            episodeCid = episode.cid,
-                                            currentBvid = currentBvid,
-                                            currentCid = currentCid,
-                                        ),
-                                        onClick = {
-                                            onDismiss()
-                                            onUgcEpisodeClick(
-                                                episode.toVideoItem(authorName, authorMid),
-                                            )
-                                        },
-                                    )
-                                }
-                            }
-                        } else {
-                            itemsIndexed(
-                                items = pages,
-                                key = { _, page -> "part-${page.page}-${page.cid}" },
-                            ) { index, page ->
-                                CollectionSheetEpisodeRow(
-                                    index = page.page.takeIf { it > 0 } ?: (index + 1),
-                                    title = page.title.ifBlank { "P${index + 1}" },
-                                    durationSeconds = page.durationSeconds,
-                                    selected = page.cid == currentCid,
-                                    onClick = {
-                                        onDismiss()
-                                        onPartClick(page)
-                                    },
-                                )
-                            }
-                        }
                     }
                 }
+                itemsIndexed(
+                    items = section.episodes,
+                    key = { _, episode ->
+                        "ugc-${section.id}-${episode.bvid}-${episode.id}"
+                    },
+                ) { index, episode ->
+                    CollectionSheetEpisodeRow(
+                        index = index + 1,
+                        title = episode.title,
+                        durationSeconds = episode.durationSeconds,
+                        selected = episodeMatchesCurrent(
+                            episodeBvid = episode.bvid,
+                            episodeCid = episode.cid,
+                            currentBvid = currentBvid,
+                            currentCid = currentCid,
+                        ),
+                        onClick = {
+                            onDismiss()
+                            onUgcEpisodeClick(
+                                episode.toVideoItem(authorName, authorMid),
+                            )
+                        },
+                    )
+                }
+            }
+        } else {
+            itemsIndexed(
+                items = pages,
+                key = { _, page -> "part-${page.page}-${page.cid}" },
+            ) { index, page ->
+                CollectionSheetEpisodeRow(
+                    index = page.page.takeIf { it > 0 } ?: (index + 1),
+                    title = page.title.ifBlank { "P${index + 1}" },
+                    durationSeconds = page.durationSeconds,
+                    selected = page.cid == currentCid,
+                    onClick = {
+                        onDismiss()
+                        onPartClick(page)
+                    },
+                )
             }
         }
     }
@@ -257,12 +379,17 @@ private fun CollectionSheetEpisodeRow(
     onClick: () -> Unit,
 ) {
     val titleColor = if (selected) BiliPink else MaterialTheme.colorScheme.onSurface
+    val indexBackground = if (selected) {
+        BiliPink.copy(alpha = 0.12f)
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(percent = 50))
+            .height(CollectionPanelEpisodeRowHeight)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -270,36 +397,38 @@ private fun CollectionSheetEpisodeRow(
             modifier = Modifier
                 .size(width = 26.dp, height = 20.dp)
                 .clip(RoundedCornerShape(4.dp))
-                .background(
-                    if (selected) {
-                        BiliPink.copy(alpha = 0.12f)
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f)
-                    },
-                ),
+                .background(indexBackground),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = index.toString(),
-                fontSize = 11.sp,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontSize = 11.sp,
+                    lineHeight = 11.sp,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                ),
                 fontWeight = FontWeight.Medium,
                 color = titleColor,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
             )
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title.ifBlank { "未命名" },
-                fontSize = 14.sp,
+                style = MaterialTheme.typography.bodyMedium,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 color = titleColor,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (durationSeconds > 0) {
                 Text(
                     text = formatCollectionSheetDuration(durationSeconds),
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

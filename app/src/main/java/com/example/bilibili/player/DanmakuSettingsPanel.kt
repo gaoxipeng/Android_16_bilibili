@@ -1,11 +1,13 @@
 package com.example.bilibili.player
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,8 +15,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,7 +47,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.DanmakuSettings
 import com.example.bilibili.data.DanmakuSpeedLevel
-import com.example.bilibili.ui.liquidglass.SurfaceLiquidMenuCard
+import com.example.bilibili.ui.components.ActionFrostedCard
+import com.example.bilibili.ui.components.ActionMenuSurfaceColor
+import com.example.bilibili.ui.components.ImageActionMenuBlurRadius
 import com.kyant.backdrop.Backdrop
 import kotlin.math.roundToInt
 
@@ -89,6 +97,9 @@ fun DanmakuSettingsOverlay(
     onDismiss: () -> Unit,
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
+    maxHeightFraction: Float = 0.72f,
+    contentVerticalPadding: Dp = DanmakuSettingsPanelPadding,
+    rowSpacing: Dp = DanmakuSettingsRowSpacing,
 ) {
     if (!visible) return
 
@@ -101,6 +112,11 @@ fun DanmakuSettingsOverlay(
             .fillMaxSize()
             .zIndex(20f),
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.35f)),
+        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -130,71 +146,83 @@ fun DanmakuSettingsOverlay(
                     }
                 },
         )
-        SurfaceLiquidMenuCard(
+        BoxWithConstraints(
             modifier = Modifier
                 .align(Alignment.Center)
                 .widthIn(max = DanmakuSettingsPanelWidth)
                 .fillMaxWidth(0.86f)
                 .zIndex(1f),
-            backdrop = backdrop,
-            cornerRadius = DanmakuSettingsPanelCornerRadius,
-            contentPadding = PaddingValues(DanmakuSettingsPanelPadding),
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(DanmakuSettingsRowSpacing),
+            ActionFrostedCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxHeight * maxHeightFraction),
+                backdrop = backdrop,
+                effectBlurRadius = ImageActionMenuBlurRadius,
+                effectContainerColor = ActionMenuSurfaceColor,
             ) {
-                DanmakuSettingRow(
-                    title = "显示区域",
-                    valueLabel = DanmakuSettings.displayAreaLabel(settings.displayAreaPercent),
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(
+                            horizontal = DanmakuSettingsPanelPadding,
+                            vertical = contentVerticalPadding,
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(rowSpacing),
                 ) {
-                    DanmakuSteppedSlider(
-                        stepCount = DanmakuSettings.DISPLAY_AREA_OPTIONS.size,
-                        selectedIndex = settings.displayAreaIndex,
-                        onSelectedIndexChange = { index ->
-                            onSettingsChange(settings.withDisplayAreaIndex(index))
-                        },
-                    )
-                }
-                DanmakuSettingRow(
-                    title = "不透明度",
-                    valueLabel = "${settings.opacityPercent}%",
-                ) {
-                    DanmakuContinuousSlider(
-                        value = settings.opacityPercent.toFloat(),
-                        valueRange = 10f..100f,
-                        stepSize = 5f,
-                        onValueChange = { value ->
-                            onSettingsChange(settings.copy(opacityPercent = value.roundToInt()))
-                        },
-                    )
-                }
-                DanmakuSettingRow(
-                    title = "弹幕字号",
-                    valueLabel = "${settings.fontSizePercent}%",
-                ) {
-                    DanmakuContinuousSlider(
-                        value = settings.fontSizePercent.toFloat(),
-                        valueRange = 50f..170f,
-                        stepSize = 5f,
-                        onValueChange = { value ->
-                            onSettingsChange(settings.copy(fontSizePercent = value.roundToInt()))
-                        },
-                    )
-                }
-                DanmakuSettingRow(
-                    title = "弹幕速度",
-                    valueLabel = settings.speedLevel.label,
-                ) {
-                    DanmakuSteppedSlider(
-                        stepCount = DanmakuSpeedLevel.entries.size,
-                        selectedIndex = settings.speedLevel.ordinal,
-                        onSelectedIndexChange = { index ->
-                            onSettingsChange(
-                                settings.copy(speedLevel = DanmakuSpeedLevel.fromIndex(index)),
-                            )
-                        },
-                    )
+                    DanmakuSettingRow(
+                        title = "显示区域",
+                        valueLabel = DanmakuSettings.displayAreaLabel(settings.displayAreaPercent),
+                    ) {
+                        DanmakuSteppedSlider(
+                            stepCount = DanmakuSettings.DISPLAY_AREA_OPTIONS.size,
+                            selectedIndex = settings.displayAreaIndex,
+                            onSelectedIndexChange = { index ->
+                                onSettingsChange(settings.withDisplayAreaIndex(index))
+                            },
+                        )
+                    }
+                    DanmakuSettingRow(
+                        title = "不透明度",
+                        valueLabel = "${settings.opacityPercent}%",
+                    ) {
+                        DanmakuContinuousSlider(
+                            value = settings.opacityPercent.toFloat(),
+                            valueRange = 10f..100f,
+                            stepSize = 5f,
+                            onValueChange = { value ->
+                                onSettingsChange(settings.copy(opacityPercent = value.roundToInt()))
+                            },
+                        )
+                    }
+                    DanmakuSettingRow(
+                        title = "弹幕字号",
+                        valueLabel = "${settings.fontSizePercent}%",
+                    ) {
+                        DanmakuContinuousSlider(
+                            value = settings.fontSizePercent.toFloat(),
+                            valueRange = 50f..170f,
+                            stepSize = 5f,
+                            onValueChange = { value ->
+                                onSettingsChange(settings.copy(fontSizePercent = value.roundToInt()))
+                            },
+                        )
+                    }
+                    DanmakuSettingRow(
+                        title = "弹幕速度",
+                        valueLabel = settings.speedLevel.label,
+                    ) {
+                        DanmakuSteppedSlider(
+                            stepCount = DanmakuSpeedLevel.entries.size,
+                            selectedIndex = settings.speedLevel.ordinal,
+                            onSelectedIndexChange = { index ->
+                                onSettingsChange(
+                                    settings.copy(speedLevel = DanmakuSpeedLevel.fromIndex(index)),
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }

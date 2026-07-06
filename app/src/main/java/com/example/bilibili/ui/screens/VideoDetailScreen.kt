@@ -110,6 +110,8 @@ import com.example.bilibili.ui.format.formatBiliCommentTime
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.format.formatBiliPublishTime
 import com.example.bilibili.ui.theme.BiliPink
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
@@ -285,6 +287,7 @@ fun VideoDetailScreen(
     var moreMenuAnchor by remember(seedVideo.bvid) { mutableStateOf(Rect.Zero) }
     var showCollectionSheet by remember(seedVideo.bvid) { mutableStateOf(false) }
     var collectionSheetState by remember(seedVideo.bvid) { mutableStateOf<VideoCollectionSheetState?>(null) }
+    var collectionAnchor by remember(seedVideo.bvid) { mutableStateOf(Rect.Zero) }
     var sheetUgcSeason by remember(seedVideo.bvid) { mutableStateOf<BiliUgcSeason?>(null) }
     var activePart by remember(seedVideo.bvid, seedVideo.cid) { mutableStateOf<BiliVideoPage?>(null) }
     var activeEpid by remember(seedVideo.playbackId(), seedVideo.epid) { mutableStateOf(seedVideo.pgcEpid()) }
@@ -842,6 +845,7 @@ fun VideoDetailScreen(
     val isVideoFullscreen = coordinator.fullscreenKey == playbackKey
     val configuration = LocalConfiguration.current
     val hazeState = rememberHazeState()
+    val collectionMenuBackdrop = rememberLayerBackdrop()
     var autoFullscreenByRotation by remember(playbackKey) { mutableStateOf(false) }
     var suppressAutoFullscreenUntilPortrait by remember(playbackKey) { mutableStateOf(false) }
     var closeAutoFullscreenAfterPortrait by remember(playbackKey) { mutableStateOf(false) }
@@ -929,7 +933,8 @@ fun VideoDetailScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .hazeSource(state = hazeState),
+            .hazeSource(state = hazeState)
+            .layerBackdrop(collectionMenuBackdrop),
     ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -1337,7 +1342,8 @@ fun VideoDetailScreen(
                             item(key = "intro-ugc-season") {
                                 VideoDetailUgcSeasonSection(
                                     season = season,
-                                    onGroupClick = { sectionId ->
+                                    onGroupClick = { sectionId, anchorBounds ->
+                                        collectionAnchor = anchorBounds
                                         collectionSheetState = VideoCollectionSheetState.UgcSeason(
                                             season = season,
                                             highlightSectionId = sectionId,
@@ -1354,7 +1360,8 @@ fun VideoDetailScreen(
                                     VideoDetailMultiPartSection(
                                         title = currentVideo.title,
                                         partCount = pages.size,
-                                        onClick = {
+                                        onClick = { anchorBounds ->
+                                            collectionAnchor = anchorBounds
                                             collectionSheetState = VideoCollectionSheetState.MultiPart(pages)
                                             showCollectionSheet = true
                                         },
@@ -1564,6 +1571,8 @@ fun VideoDetailScreen(
         VideoDetailCollectionSheet(
             visible = showCollectionSheet,
             sheetTitle = sheetTitle,
+            anchorBoundsInRoot = collectionAnchor,
+            menuBackdrop = collectionMenuBackdrop,
             hazeState = hazeState,
             ugcSeason = when (sheetState) {
                 is VideoCollectionSheetState.UgcSeason -> sheetUgcSeason ?: sheetState.season

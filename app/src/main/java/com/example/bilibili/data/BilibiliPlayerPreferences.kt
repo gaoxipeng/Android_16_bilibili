@@ -45,6 +45,13 @@ class BilibiliPlayerPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_BACKGROUND_PLAYBACK, enabled).apply()
     }
 
+    fun readLiveQualityId(): String =
+        prefs.getString(KEY_LIVE_QUALITY_ID, DEFAULT_LIVE_QUALITY_ID) ?: DEFAULT_LIVE_QUALITY_ID
+
+    fun setLiveQualityId(qualityId: String) {
+        prefs.edit().putString(KEY_LIVE_QUALITY_ID, qualityId).apply()
+    }
+
     private companion object {
         private const val PREFS_NAME = "bilibili_player_prefs"
         private const val KEY_BACKGROUND_PLAYBACK = "background_playback_enabled"
@@ -53,5 +60,7 @@ class BilibiliPlayerPreferences(context: Context) {
         private const val KEY_DANMAKU_OPACITY = "danmaku_opacity"
         private const val KEY_DANMAKU_FONT_SIZE = "danmaku_font_size"
         private const val KEY_DANMAKU_SPEED = "danmaku_speed"
+        private const val KEY_LIVE_QUALITY_ID = "live_quality_id"
+        private const val DEFAULT_LIVE_QUALITY_ID = "auto"
     }
 }

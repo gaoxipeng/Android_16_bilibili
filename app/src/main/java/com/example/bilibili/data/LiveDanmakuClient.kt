@@ -46,8 +46,11 @@ class LiveDanmakuClient(
     private val _danmaku = MutableSharedFlow<BiliDanmakuItem>(extraBufferCapacity = 256)
     val danmaku: SharedFlow<BiliDanmakuItem> = _danmaku.asSharedFlow()
 
-    private val _onlineCount = MutableStateFlow(0L)
-    val onlineCount: StateFlow<Long> = _onlineCount.asStateFlow()
+    private val _onlineRankTop3 = MutableStateFlow<List<BiliLiveRankUser>>(emptyList())
+    val onlineRankTop3: StateFlow<List<BiliLiveRankUser>> = _onlineRankTop3.asStateFlow()
+
+    private val _popularity = MutableStateFlow(0L)
+    val popularity: StateFlow<Long> = _popularity.asStateFlow()
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -134,7 +137,7 @@ class LiveDanmakuClient(
                 }
                 PACKET_HEARTBEAT_RESPONSE -> {
                     heartbeatCounter.set(30)
-                    packet.view?.let { _onlineCount.value = it.toLong() }
+                    packet.view?.let { _popularity.value = it.toLong() }
                 }
                 PACKET_NOTICE -> {
                     val cmd = packet.json?.optString("cmd").orEmpty()
@@ -146,11 +149,13 @@ class LiveDanmakuClient(
                                 }
                             }
                         }
-                        cmd == "WATCHED_CHANGE" -> {
-                            packet.json?.optJSONObject("data")
-                                ?.optLong("num")
-                                ?.takeIf { it > 0L }
-                                ?.let { _onlineCount.value = it }
+                        cmd == "ONLINE_RANK_V2" -> {
+                            packet.json?.let { payload ->
+                                val users = BilibiliJsonParser.parseLiveOnlineRankList(payload)
+                                if (users.isNotEmpty()) {
+                                    _onlineRankTop3.value = users
+                                }
+                            }
                         }
                         cmd in listOf("LIVE", "PREPARING", "CUT_OFF", "CUT_OFF_V2", "ROOM_CHANGE") -> {
                             scope.launch { _roomEvents.emit(cmd) }

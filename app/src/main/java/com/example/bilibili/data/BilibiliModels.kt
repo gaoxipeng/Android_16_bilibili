@@ -49,12 +49,24 @@ data class BiliVideoShot(
     val totalTiles: Int get() = images.size * tilesPerImage
 }
 
+data class BiliDanmakuEmoticon(
+    val url: String,
+    val width: Int = 0,
+    val height: Int = 0,
+)
+
+fun Map<String, BiliDanmakuEmoticon>.emoticonUrlMap(): Map<String, String> =
+    mapValues { (_, spec) -> spec.url }
+
 data class BiliDanmakuItem(
     val timeMs: Long,
     val mode: Int,
     val fontSize: Int,
     val colorArgb: Int,
     val content: String,
+    val senderId: Long = 0L,
+    val senderName: String = "",
+    val emoticons: Map<String, BiliDanmakuEmoticon> = emptyMap(),
 ) {
     val id: Int = (timeMs xor (content.hashCode().toLong()) xor mode.toLong()).toInt()
 }
@@ -118,12 +130,18 @@ data class BiliLiveRoom(
     val userFace: String,
     val online: Long,
     val areaName: String = "",
+    val isPortrait: Boolean? = null,
 )
 
 data class BiliLiveArea(
     val id: Long,
     val name: String,
     val parentId: Long = 0L,
+)
+
+data class BiliLiveAreaGroup(
+    val parent: BiliLiveArea,
+    val children: List<BiliLiveArea> = emptyList(),
 )
 
 data class BiliLiveRoomPage(
@@ -149,6 +167,19 @@ data class BiliLivePlayResult(
     val isLive: Boolean get() = liveStatus == 1
 }
 
+data class BiliLiveOnlineGoldRank(
+    val onlineNum: Long = 0L,
+    val users: List<BiliLiveRankUser> = emptyList(),
+)
+
+data class BiliLiveRankUser(
+    val uid: Long,
+    val face: String,
+    val uname: String,
+    val rank: Int,
+    val guardLevel: Int = 0,
+)
+
 data class BiliLiveRoomDetail(
     val roomId: Long,
     val title: String,
@@ -161,6 +192,7 @@ data class BiliLiveRoomDetail(
     val parentAreaName: String,
     val liveStatus: Int,
     val description: String = "",
+    val isPortrait: Boolean? = null,
 ) {
     val isLive: Boolean get() = liveStatus == 1
 }

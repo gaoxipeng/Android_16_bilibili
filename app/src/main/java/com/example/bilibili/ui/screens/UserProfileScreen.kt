@@ -336,6 +336,12 @@ fun UserProfileScreen(
             videosDeferred.await()
             walletDeferred.await()
         }
+        if (cacheProfile) {
+            UserProfileSessionCache.updateProfileSnapshot(mid, uiState.profile)
+            uiState.wallet?.let { wallet ->
+                UserProfileSessionCache.updateWalletSnapshot(mid, wallet)
+            }
+        }
         coroutineScope.launch {
             runCatching { refreshProfileIpLocation() }
         }
@@ -437,8 +443,16 @@ fun UserProfileScreen(
     }
 
     LaunchedEffect(mid, cacheProfile) {
-        if (cacheProfile && uiState.loaded) {
+        if (mid <= 0L) return@LaunchedEffect
+        val hasCachedProfile = cacheProfile &&
+            (uiState.loaded || UserProfileSessionCache.hasProfileSnapshot(mid))
+        if (hasCachedProfile) {
             uiState.loading = false
+            uiState.loadError = null
+            runCatching {
+                loadProfile(resetLists = uiState.videos.isEmpty() && uiState.dynamics.isEmpty())
+            }.onFailure { uiState.loadError = it.message }
+            uiState.loaded = true
             return@LaunchedEffect
         }
         uiState.loading = true
@@ -1815,21 +1829,26 @@ private fun ProfileAuthorNameRow(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .padding(end = if (wallet != null || !ipLocation.isNullOrBlank()) 8.dp else 0.dp),
         ) {
             Text(
                 text = name,
                 style = nameStyle,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(end = if (level > 0) 24.dp else 0.dp),
             )
             if (level > 0) {
                 BiliUserLevelIcon(
                     level = level,
-                    width = 30.dp,
-                    height = 19.dp,
+                    width = 20.dp,
+                    height = 13.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 2.dp, y = (-2).dp),
                 )
             }
         }

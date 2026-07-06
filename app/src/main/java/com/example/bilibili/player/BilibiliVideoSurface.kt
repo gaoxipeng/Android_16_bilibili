@@ -790,7 +790,7 @@ fun BilibiliVideoSurface(
                         text = resolvedPlaybackMetadata.title,
                         color = Color.White,
                         style = TextStyle(
-                            fontSize = 14.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Medium,
                         ),
                         maxLines = 1,

@@ -15,9 +15,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -28,7 +36,7 @@ import com.example.bilibili.ui.theme.BiliPink
 @Composable
 fun VideoDetailUgcSeasonSection(
     season: BiliUgcSeason,
-    onGroupClick: (sectionId: Long?) -> Unit,
+    onGroupClick: (sectionId: Long?, anchorBounds: Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -48,7 +56,9 @@ fun VideoDetailUgcSeasonSection(
                             ?: season.episodeCount
                     }
                 }个视频",
-                onClick = { onGroupClick(group.sectionId) },
+                onClick = { anchorBounds ->
+                    onGroupClick(group.sectionId, anchorBounds)
+                },
             )
         }
     }
@@ -58,7 +68,7 @@ fun VideoDetailUgcSeasonSection(
 fun VideoDetailMultiPartSection(
     title: String,
     partCount: Int,
-    onClick: () -> Unit,
+    onClick: (anchorBounds: Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     VideoDetailCollectionChip(
@@ -75,15 +85,21 @@ fun VideoDetailMultiPartSection(
 private fun VideoDetailCollectionChip(
     title: String,
     countLabel: String,
-    onClick: () -> Unit,
+    onClick: (Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val chipBackground = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f)
+    var layoutCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(chipBackground)
-            .clickable(onClick = onClick)
+            .onGloballyPositioned { coordinates ->
+                layoutCoordinates = coordinates
+            }
+            .clickable {
+                onClick(layoutCoordinates?.boundsInRoot() ?: Rect.Zero)
+            }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

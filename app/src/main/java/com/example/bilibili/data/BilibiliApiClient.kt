@@ -1448,19 +1448,15 @@ class BilibiliApiClient {
         }.getOrDefault(false)
     }
 
-    suspend fun getLiveHotRank(): List<BiliLiveRoom> =
-        withContext(Dispatchers.IO) {
-            val rooms = getJson(BilibiliEndpoints.LIVE_HOT_RANK, emptyMap())
-                .let(BilibiliJsonParser::parseLiveHotRank)
-            enrichLiveRoomDetails(rooms)
-        }
-
     private suspend fun enrichLiveRoomDetails(rooms: List<BiliLiveRoom>): List<BiliLiveRoom> {
         if (rooms.isEmpty()) return rooms
         return coroutineScope {
             rooms.map { room ->
                 async {
-                    if (room.coverUrl.isNotBlank() && !room.coverUrl.contains("/bfs/face/")) {
+                    val needsCover = room.coverUrl.isBlank() || room.coverUrl.contains("/bfs/face/")
+                    val needsArea = room.areaName.isBlank()
+                    val needsPortrait = room.isPortrait == null
+                    if (!needsCover && !needsArea && !needsPortrait) {
                         return@async room
                     }
                     runCatching {
@@ -1468,14 +1464,18 @@ class BilibiliApiClient {
                             url = BilibiliEndpoints.LIVE_ROOM_GET_INFO,
                             params = mapOf("room_id" to room.roomId.toString()),
                         )
-                        val (cover, online) = BilibiliJsonParser.parseLiveRoomInfoBrief(json)
+                        val (cover, online, isPortrait) = BilibiliJsonParser.parseLiveRoomInfoBrief(json)
+                        val areaName = BilibiliJsonParser.parseLiveRoomAreaDisplayName(json)
+                            .ifBlank { room.areaName }
                         room.copy(
-                            coverUrl = cover.ifBlank { room.coverUrl },
+                            coverUrl = if (needsCover) cover.ifBlank { room.coverUrl } else room.coverUrl,
                             online = when {
                                 room.online > 0L -> room.online
                                 online > 0L -> online
                                 else -> room.online
                             },
+                            areaName = areaName,
+                            isPortrait = room.isPortrait ?: isPortrait,
                         )
                     }.getOrDefault(room)
                 }
@@ -1483,10 +1483,26 @@ class BilibiliApiClient {
         }
     }
 
-    suspend fun getLiveAreas(): List<BiliLiveArea> =
+    suspend fun getLiveAreaGroups(): List<BiliLiveAreaGroup> =
         withContext(Dispatchers.IO) {
             getJson(BilibiliEndpoints.LIVE_AREA_GET_LIST, emptyMap())
-                .let(BilibiliJsonParser::parseLiveAreas)
+                .let(BilibiliJsonParser::parseLiveAreaGroups)
+        }
+
+    suspend fun getLiveRecommendList(
+        credential: BilibiliCredential? = null,
+    ): BiliLiveRoomPage =
+        withContext(Dispatchers.IO) {
+            val page = getJson(
+                url = BilibiliEndpoints.LIVE_RECOMMEND_LIST,
+                params = mapOf(
+                    "platform" to "web",
+                    "web_location" to "333.1007",
+                ),
+                credential = credential,
+                referer = BilibiliEndpoints.LIVE_HOME,
+            ).let(BilibiliJsonParser::parseLiveRecommendList)
+            page.copy(rooms = enrichLiveRoomDetails(page.rooms))
         }
 
     suspend fun getLiveRoomList(
@@ -1554,6 +1570,28 @@ class BilibiliApiClient {
             }.getOrNull()
         }
 
+    suspend fun getLiveOnlineGoldRank(
+        roomId: Long,
+        anchorUid: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliLiveOnlineGoldRank =
+        withContext(Dispatchers.IO) {
+            if (anchorUid <= 0L) return@withContext BiliLiveOnlineGoldRank()
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.LIVE_ONLINE_GOLD_RANK,
+                    params = mapOf(
+                        "roomId" to roomId.toString(),
+                        "ruid" to anchorUid.toString(),
+                        "page" to "1",
+                        "pageSize" to "3",
+                    ),
+                    credential = credential,
+                    referer = liveRoomReferer(roomId),
+                ).let(BilibiliJsonParser::parseLiveOnlineGoldRank)
+            }.getOrDefault(BiliLiveOnlineGoldRank())
+        }
+
     suspend fun getLivePlayInfo(
         roomId: Long,
         qn: Int = 10_000,
@@ -1571,10 +1609,14 @@ class BilibiliApiClient {
                         "format" to "0,1,2",
                         "codec" to "0,1",
                         "qn" to qn.toString(),
+                        "dolby" to "5",
+                        "https_url_req" to "1",
                     ),
                     credential = credential,
                     referer = liveRoomReferer(roomId),
-                ).let { json -> BilibiliJsonParser.parseLivePlayInfo(json, preferredQn = qn) }
+                ).let { json ->
+                    BilibiliJsonParser.parseLivePlayInfo(json = json, qn = qn)
+                }
             }.getOrNull()
         }
 
@@ -1609,7 +1651,11 @@ class BilibiliApiClient {
                     form = mapOf(
                         "roomid" to roomId.toString(),
                         "msg" to message,
-                        "rnd" to System.currentTimeMillis().toString(),
+                        "rnd" to (System.currentTimeMillis() / 1000L).toString(),
+                        "color" to "16777215",
+                        "fontsize" to "25",
+                        "mode" to "1",
+                        "bubble" to "0",
                         "csrf" to credential.biliJct,
                         "csrf_token" to credential.biliJct,
                     ),
@@ -1618,6 +1664,21 @@ class BilibiliApiClient {
                 )
                 true
             }.getOrDefault(false)
+        }
+
+    suspend fun getLiveRoomOnline(
+        roomId: Long,
+        credential: BilibiliCredential? = null,
+    ): Long =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.LIVE_ROOM_GET_INFO,
+                    params = mapOf("room_id" to roomId.toString()),
+                    credential = credential,
+                    referer = liveRoomReferer(roomId),
+                ).let { BilibiliJsonParser.parseLiveRoomInfoBrief(it).second }
+            }.getOrDefault(0L)
         }
 
     suspend fun sendLiveHeartbeat(realRoomId: Long, displayRoomId: Long) {

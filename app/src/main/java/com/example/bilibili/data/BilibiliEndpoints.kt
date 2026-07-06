@@ -54,7 +54,8 @@ object BilibiliEndpoints {
     const val DANMAKU_LIST = "https://api.bilibili.com/x/v1/dm/list.so"
     const val DANMAKU_SEG = "https://api.bilibili.com/x/v2/dm/web/seg.so"
     const val DANMAKU_XML = "https://comment.bilibili.com"
-    const val LIVE_HOT_RANK = "https://api.live.bilibili.com/xlive/web-interface/v1/index/getHotRankList"
+    const val LIVE_RECOMMEND_LIST =
+        "https://api.live.bilibili.com/xlive/web-interface/v1/webMain/getMoreRecList"
     const val LIVE_ROOM_LIST = "https://api.live.bilibili.com/xlive/web-interface/v1/second/getList"
     const val LIVE_AREA_GET_LIST = "https://api.live.bilibili.com/room/v1/Area/getList"
     const val LIVE_FOLLOWING = "https://api.live.bilibili.com/xlive/app-interface/v1/relation/liveAnchor"
@@ -67,6 +68,8 @@ object BilibiliEndpoints {
         "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
     const val LIVE_DANMU_INFO =
         "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
+    const val LIVE_ONLINE_GOLD_RANK =
+        "https://api.live.bilibili.com/xlive/general-interface/v1/rank/getOnlineGoldRank"
     const val LIVE_HEARTBEAT_WEB =
         "https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat"
     const val LIVE_HOME = "https://live.bilibili.com/"

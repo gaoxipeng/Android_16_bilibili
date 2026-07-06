@@ -46,6 +46,12 @@ class UserProfileUiState(
 
 object UserProfileSessionCache {
     private val cache = mutableMapOf<Long, UserProfileUiState>()
+    private val profileSnapshots = mutableMapOf<Long, BiliUserProfile>()
+    private var walletSnapshot: BiliUserWallet? = null
+    private var walletSnapshotMid: Long = 0L
+
+    fun hasProfileSnapshot(mid: Long): Boolean =
+        profileSnapshots[mid]?.let(::hasMeaningfulProfile) == true
 
     fun getOrCreate(mid: Long, seedName: String, seedFace: String): UserProfileUiState {
         cache[mid]?.let { existing ->
@@ -59,14 +65,56 @@ object UserProfileSessionCache {
             }
             return existing
         }
-        return UserProfileUiState(mid, seedName, seedFace).also { cache[mid] = it }
+
+        val state = UserProfileUiState(mid, seedName, seedFace)
+        profileSnapshots[mid]?.let { snapshot ->
+            state.profile = snapshot
+            state.loaded = true
+            state.loading = false
+        }
+        if (walletSnapshotMid == mid) {
+            state.wallet = walletSnapshot
+        }
+        cache[mid] = state
+        return state
+    }
+
+    fun updateProfileSnapshot(mid: Long, profile: BiliUserProfile) {
+        if (!hasMeaningfulProfile(profile)) return
+        profileSnapshots[mid] = profile
+        cache[mid]?.let {
+            it.profile = profile
+            it.loaded = true
+            it.loading = false
+        }
+    }
+
+    fun updateWalletSnapshot(mid: Long, wallet: BiliUserWallet?) {
+        walletSnapshotMid = mid
+        walletSnapshot = wallet
+        cache[mid]?.wallet = wallet
     }
 
     fun clear(mid: Long? = null) {
         if (mid == null) {
             cache.clear()
+            profileSnapshots.clear()
+            walletSnapshot = null
+            walletSnapshotMid = 0L
         } else {
             cache.remove(mid)
+            profileSnapshots.remove(mid)
+            if (walletSnapshotMid == mid) {
+                walletSnapshot = null
+                walletSnapshotMid = 0L
+            }
         }
     }
+
+    private fun hasMeaningfulProfile(profile: BiliUserProfile): Boolean =
+        profile.following > 0L ||
+            profile.follower > 0L ||
+            profile.likes > 0L ||
+            profile.videoCount > 0L ||
+            profile.level > 0
 }
