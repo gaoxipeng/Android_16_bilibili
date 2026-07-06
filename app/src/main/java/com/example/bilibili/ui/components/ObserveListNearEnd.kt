@@ -1,5 +1,6 @@
 package com.example.bilibili.ui.components
 
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.runtime.Composable
@@ -17,6 +18,28 @@ fun ObserveListNearEnd(
         if (!enabled) return@LaunchedEffect
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible to layoutInfo.totalItemsCount
+        }
+            .distinctUntilChanged()
+            .collect { (lastVisible, total) ->
+                if (total > 0 && lastVisible >= total - 4) {
+                    onNearEnd()
+                }
+            }
+    }
+}
+
+@Composable
+fun ObserveGridNearEnd(
+    gridState: LazyGridState,
+    enabled: Boolean = true,
+    onNearEnd: () -> Unit,
+) {
+    LaunchedEffect(gridState, enabled) {
+        if (!enabled) return@LaunchedEffect
+        snapshotFlow {
+            val layoutInfo = gridState.layoutInfo
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             lastVisible to layoutInfo.totalItemsCount
         }

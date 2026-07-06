@@ -61,6 +61,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -135,6 +136,12 @@ fun BilibiliVideoSurface(
     }
     var isBuffering by remember(playbackKey, streamToken) {
         mutableStateOf(initialHandoffPlayer?.playbackState == Player.STATE_BUFFERING || initialHandoffPlayer == null)
+    }
+    var playbackState by remember(playbackKey, streamToken) {
+        mutableIntStateOf(initialHandoffPlayer?.playbackState ?: Player.STATE_IDLE)
+    }
+    var playWhenReady by remember(playbackKey, streamToken) {
+        mutableStateOf(initialHandoffPlayer?.playWhenReady ?: true)
     }
     var selectedSpeed by remember(playbackKey) { mutableStateOf(1f) }
     var controlsVisible by remember(playbackKey) { mutableStateOf(initialControlsVisible) }
@@ -246,6 +253,9 @@ fun BilibiliVideoSurface(
             }
             positionMs = handedOff.currentPosition.coerceAtLeast(0L)
             durationMs = handedOff.duration.coerceAtLeast(0L)
+            playbackState = handedOff.playbackState
+            playWhenReady = handedOff.playWhenReady
+            isPlaying = handedOff.isPlaying
             isBuffering = handedOff.playbackState == Player.STATE_BUFFERING
             handedOff.videoSize.let { videoSize ->
                 if (videoSize.width > 0 && videoSize.height > 0) {
@@ -351,6 +361,15 @@ fun BilibiliVideoSurface(
 
     WatchHistoryEffect(stream = stream, player = activePlayer)
 
+    VideoPlaybackKeepScreenOnEffect(
+        playbackKey = playbackKey,
+        playbackEnabled = playbackEnabled,
+        playerHandedOff = playerHandedOff,
+        playWhenReady = playWhenReady,
+        playbackState = playbackState,
+        coordinator = coordinator,
+    )
+
     val resolvedPlaybackMetadata = playbackMetadata ?: VideoPlaybackMetadata(
         title = "哔哩哔哩视频",
         artist = "哔哩哔哩",
@@ -404,6 +423,7 @@ fun BilibiliVideoSurface(
             activePlayer.playWhenReady = false
             activePlayer.pause()
             isPlaying = false
+            playWhenReady = false
         }
         when {
             isPeekPlayback -> coordinator.registerPeekPauseHandler(playbackKey, pauseHandler)
@@ -413,6 +433,7 @@ fun BilibiliVideoSurface(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                playWhenReady = activePlayer.playWhenReady
                 positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
                 val duration = activePlayer.duration
                 if (duration > 0L) {
@@ -420,16 +441,22 @@ fun BilibiliVideoSurface(
                 }
             }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                isBuffering = playbackState == Player.STATE_BUFFERING
-                if (playbackState == Player.STATE_READY) {
+            override fun onPlaybackStateChanged(state: Int) {
+                playbackState = state
+                isBuffering = state == Player.STATE_BUFFERING
+                if (state == Player.STATE_READY) {
                     durationMs = activePlayer.duration.coerceAtLeast(0L)
                     isBuffering = false
                     positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
                 }
-                if (playbackState == Player.STATE_ENDED) {
+                if (state == Player.STATE_ENDED) {
+                    playWhenReady = activePlayer.playWhenReady
                     onPlaybackEnded?.invoke()
                 }
+            }
+
+            override fun onPlayWhenReadyChanged(newPlayWhenReady: Boolean, reason: Int) {
+                playWhenReady = newPlayWhenReady
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -745,14 +772,32 @@ fun BilibiliVideoSurface(
                     .align(Alignment.TopStart)
                     .zIndex(10f),
             ) {
-                VideoOverlayTextButton(
-                    text = "关闭",
-                    onClick = onCloseFullscreen,
+                Row(
                     modifier = Modifier
-                        .padding(start = 60.dp, top = 20.dp, end = 12.dp, bottom = 12.dp)
-                        .widthIn(min = 54.dp)
-                        .height(VideoControlBarHeight),
-                )
+                        .fillMaxWidth()
+                        .padding(start = 60.dp, top = 20.dp, end = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    VideoOverlayTextButton(
+                        text = "关闭",
+                        onClick = onCloseFullscreen,
+                        modifier = Modifier
+                            .widthIn(min = 54.dp)
+                            .height(VideoControlBarHeight),
+                    )
+                    Text(
+                        text = resolvedPlaybackMetadata.title,
+                        color = Color.White,
+                        style = TextStyle(
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         } else if (showFullscreenButton) {
             AnimatedVisibility(

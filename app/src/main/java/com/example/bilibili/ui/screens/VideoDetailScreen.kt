@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -74,6 +75,7 @@ import com.example.bilibili.data.BiliVideoRelation
 import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.BilibiliEndpoints
 import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.player.BilibiliVideoSurface
 import com.example.bilibili.player.LightContentStatusBarEffect
@@ -83,6 +85,7 @@ import com.example.bilibili.player.rememberVideoControlBackdrop
 import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.knownVideoAspectRatio
 import com.example.bilibili.player.videoPlaybackKey
+import com.example.bilibili.ui.components.CommentAuthorHeaderRow
 import com.example.bilibili.ui.components.BiliCommentImageStrip
 import com.example.bilibili.ui.components.BiliCommentText
 import com.example.bilibili.ui.components.BiliRichText
@@ -284,6 +287,7 @@ fun VideoDetailScreen(
     var collectionSheetState by remember(seedVideo.bvid) { mutableStateOf<VideoCollectionSheetState?>(null) }
     var sheetUgcSeason by remember(seedVideo.bvid) { mutableStateOf<BiliUgcSeason?>(null) }
     var activePart by remember(seedVideo.bvid, seedVideo.cid) { mutableStateOf<BiliVideoPage?>(null) }
+    var activeEpid by remember(seedVideo.playbackId(), seedVideo.epid) { mutableStateOf(seedVideo.pgcEpid()) }
     var overridePlayStream by remember(seedVideo.bvid, seedVideo.cid) { mutableStateOf<BiliPlayStream?>(null) }
 
     val pagerState = rememberPagerState(initialPage = 0) { VideoDetailTab.entries.size }
@@ -443,62 +447,146 @@ fun VideoDetailScreen(
         }
     }
 
-    LaunchedEffect(seedVideo.bvid, credential?.dedeUserId) {
+    suspend fun resolvePagePlayStream(cid: Long, pageEpid: Long = 0L): BiliPlayStream? {
+        val epid = pageEpid.takeIf { it > 0L } ?: activeEpid
+        val video = detail?.video ?: seedVideo
+        val targetCid = cid.takeIf { it > 0L } ?: video.cid.takeIf { it > 0L } ?: 0L
+        val referer = video.playbackReferer.ifBlank {
+            if (epid > 0L) {
+                "https://www.bilibili.com/bangumi/play/ep$epid"
+            } else {
+                BilibiliEndpoints.HOME
+            }
+        }
+        if (seedVideo.isPgcPlayback() || epid > 0L) {
+            if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && targetCid > 0L) {
+                api.getPlayUrl(video.bvid, targetCid, credential)?.let { stream ->
+                    return stream.copy(
+                        aid = video.aid.takeIf { it > 0L } ?: stream.aid,
+                        cid = targetCid,
+                    )
+                }
+            }
+            return api.getPgcPlayUrl(epid, targetCid, credential, referer)?.copy(
+                aid = video.aid.takeIf { it > 0L } ?: 0L,
+                cid = targetCid,
+            )
+        }
+        return api.getPlayUrl(seedVideo.bvid, targetCid, credential)
+    }
+
+    LaunchedEffect(seedVideo.playbackId(), activeEpid, credential?.dedeUserId) {
         authorCard = placeholderAuthorCard(seedVideo)
         runCatching {
             coroutineScope {
-                val authorMid = seedVideo.authorMid
-                val profileDeferred = async {
-                    runCatching { api.getUserInfo(authorMid, credential) }.getOrNull()
-                }
-                val navnumDeferred = async { api.getUserNavnum(authorMid, credential) }
-                val relationDeferred = async {
-                    credential?.let { cred ->
-                        runCatching { api.getRelationStat(authorMid, cred) }
-                            .getOrDefault(BiliAuthorRelation())
-                    } ?: BiliAuthorRelation()
-                }
-                val detailDeferred = async { api.getVideoDetail(seedVideo.bvid, credential) }
+                if (seedVideo.isPgcPlayback() && activeEpid > 0L) {
+                    val loadedDetail = api.getPgcVideoDetail(activeEpid, credential)
+                        ?: error("无法加载番剧详情")
+                    val authorMid = loadedDetail.video.authorMid
+                    val profileDeferred = async {
+                        runCatching { api.getUserInfo(authorMid, credential) }.getOrNull()
+                    }
+                    val navnumDeferred = async { api.getUserNavnum(authorMid, credential) }
+                    val relationDeferred = async {
+                        credential?.let { cred ->
+                            runCatching { api.getRelationStat(authorMid, cred) }
+                                .getOrDefault(BiliAuthorRelation())
+                        } ?: BiliAuthorRelation()
+                    }
 
-                launch {
-                    val profile = profileDeferred.await()
-                    val videoCount = navnumDeferred.await()
-                    val relation = relationDeferred.await()
-                    val placeholder = authorCard.profile
-                    authorCard = BiliAuthorCard(
-                        profile = BiliUserProfile(
-                            mid = authorMid,
-                            name = profile?.name?.takeIf { it.isNotBlank() } ?: placeholder.name,
-                            face = profile?.face.orEmpty(),
-                            sign = profile?.sign.orEmpty(),
-                            level = profile?.level ?: 0,
-                            follower = profile?.follower ?: 0,
-                            videoCount = videoCount,
+                    launch {
+                        val profile = profileDeferred.await()
+                        val videoCount = navnumDeferred.await()
+                        val relation = relationDeferred.await()
+                        val placeholder = authorCard.profile
+                        authorCard = BiliAuthorCard(
+                            profile = BiliUserProfile(
+                                mid = authorMid,
+                                name = profile?.name?.takeIf { it.isNotBlank() } ?: placeholder.name,
+                                face = profile?.face.orEmpty(),
+                                sign = profile?.sign.orEmpty(),
+                                level = profile?.level ?: 0,
+                                follower = profile?.follower ?: 0,
+                                videoCount = videoCount,
+                            ),
+                            relation = relation,
+                        )
+                    }
+
+                    detail = loadedDetail
+                    commentCount = loadedDetail.replyCount
+                    videoRelation = BilibiliJsonParser.mergeVideoRelations(
+                        loadedDetail.userRelation,
+                        api.getVideoArchiveRelation(
+                            bvid = loadedDetail.video.bvid,
+                            aid = loadedDetail.video.aid,
+                            credential = credential,
                         ),
-                        relation = relation,
                     )
-                }
 
-                val loadedDetail = detailDeferred.await() ?: error("无法加载视频详情")
-                detail = api.hydrateVideoUgcSeason(loadedDetail, credential)
-                commentCount = loadedDetail.replyCount
-                videoRelation = BilibiliJsonParser.mergeVideoRelations(
-                    loadedDetail.userRelation,
-                    api.getVideoArchiveRelation(
-                        bvid = loadedDetail.video.bvid,
-                        aid = loadedDetail.video.aid,
-                        credential = credential,
-                    ),
-                )
+                    val video = loadedDetail.video
+                    launch {
+                        onlineCount = api.getVideoOnlineCount(
+                            video.bvid,
+                            video.aid,
+                            video.cid,
+                            credential,
+                        )
+                    }
+                } else {
+                    val authorMid = seedVideo.authorMid
+                    val profileDeferred = async {
+                        runCatching { api.getUserInfo(authorMid, credential) }.getOrNull()
+                    }
+                    val navnumDeferred = async { api.getUserNavnum(authorMid, credential) }
+                    val relationDeferred = async {
+                        credential?.let { cred ->
+                            runCatching { api.getRelationStat(authorMid, cred) }
+                                .getOrDefault(BiliAuthorRelation())
+                        } ?: BiliAuthorRelation()
+                    }
+                    val detailDeferred = async { api.getVideoDetail(seedVideo.bvid, credential) }
 
-                val video = loadedDetail.video
-                launch {
-                    onlineCount = api.getVideoOnlineCount(
-                        video.bvid,
-                        video.aid,
-                        video.cid,
-                        credential,
+                    launch {
+                        val profile = profileDeferred.await()
+                        val videoCount = navnumDeferred.await()
+                        val relation = relationDeferred.await()
+                        val placeholder = authorCard.profile
+                        authorCard = BiliAuthorCard(
+                            profile = BiliUserProfile(
+                                mid = authorMid,
+                                name = profile?.name?.takeIf { it.isNotBlank() } ?: placeholder.name,
+                                face = profile?.face.orEmpty(),
+                                sign = profile?.sign.orEmpty(),
+                                level = profile?.level ?: 0,
+                                follower = profile?.follower ?: 0,
+                                videoCount = videoCount,
+                            ),
+                            relation = relation,
+                        )
+                    }
+
+                    val loadedDetail = detailDeferred.await() ?: error("无法加载视频详情")
+                    detail = api.hydrateVideoUgcSeason(loadedDetail, credential)
+                    commentCount = loadedDetail.replyCount
+                    videoRelation = BilibiliJsonParser.mergeVideoRelations(
+                        loadedDetail.userRelation,
+                        api.getVideoArchiveRelation(
+                            bvid = loadedDetail.video.bvid,
+                            aid = loadedDetail.video.aid,
+                            credential = credential,
+                        ),
                     )
+
+                    val video = loadedDetail.video
+                    launch {
+                        onlineCount = api.getVideoOnlineCount(
+                            video.bvid,
+                            video.aid,
+                            video.cid,
+                            credential,
+                        )
+                    }
                 }
             }
         }.onFailure { error ->
@@ -603,6 +691,42 @@ fun VideoDetailScreen(
     val streamMatchesTarget = playbackTargetCid == null ||
         currentStream?.cid?.takeIf { it > 0L } == playbackTargetCid
 
+    val handleCommentLinkClick: (BiliLinkTarget) -> Unit = { target ->
+        when (target) {
+            is BiliLinkTarget.UserSpace -> {
+                onAuthorClick(
+                    BiliUserProfile(
+                        mid = target.mid,
+                        name = "",
+                        face = "",
+                        sign = "",
+                        level = 0,
+                    ),
+                )
+            }
+            is BiliLinkTarget.Video -> {
+                onOpenDescriptionVideo(
+                    BiliVideoItem(
+                        bvid = target.bvid,
+                        aid = target.aid,
+                        title = "",
+                        coverUrl = "",
+                        authorName = currentVideo.authorName,
+                        authorMid = currentVideo.authorMid,
+                        viewCount = 0,
+                        danmakuCount = 0,
+                        likeCount = 0,
+                        durationSeconds = 0,
+                    ),
+                    target.partPage,
+                )
+            }
+            is BiliLinkTarget.External -> {
+                ExternalUrlOpener.open(context, target.url)
+            }
+        }
+    }
+
     var videoShot by remember(currentVideo.bvid, currentCid) { mutableStateOf<BiliVideoShot?>(null) }
     LaunchedEffect(currentVideo.bvid, currentVideo.aid, currentCid, credential?.dedeUserId) {
         val cid = currentCid.takeIf { it > 0L } ?: return@LaunchedEffect
@@ -632,7 +756,7 @@ fun VideoDetailScreen(
             ?: return@LaunchedEffect
 
         runCatching {
-            val stream = api.getPlayUrl(seedVideo.bvid, targetCid, credential)
+            val stream = resolvePagePlayStream(targetCid)
                 ?: return@LaunchedEffect
             overridePlayStream = stream.copy(
                 aid = seedVideo.aid.takeIf { it > 0L } ?: stream.aid,
@@ -663,7 +787,7 @@ fun VideoDetailScreen(
         }
 
         runCatching {
-            val stream = api.getPlayUrl(seedVideo.bvid, page.cid, credential)
+            val stream = resolvePagePlayStream(page.cid, page.epid)
                 ?: return@LaunchedEffect
             overridePlayStream = stream.copy(aid = seedVideo.aid, cid = page.cid)
             coordinator.requestInlinePlayback(playbackKey)
@@ -677,10 +801,25 @@ fun VideoDetailScreen(
     }
 
     fun switchToPart(page: BiliVideoPage) {
-        if (page.cid == currentCid) return
+        if (page.cid == currentCid && page.epid <= 0L) return
         scope.launch {
             runCatching {
-                val stream = api.getPlayUrl(seedVideo.bvid, page.cid, credential)
+                if (page.epid > 0L && page.epid != activeEpid) {
+                    activeEpid = page.epid
+                    val loadedDetail = api.getPgcVideoDetail(page.epid, credential)
+                        ?: error("无法加载番剧详情")
+                    detail = loadedDetail
+                    loadedCommentsKey = null
+                    comments = emptyList()
+                    commentsEnd = false
+                    expandedCommentRoots = emptySet()
+                    loadedSubReplies = emptyMap()
+                    subRepliesLoading = emptySet()
+                    subRepliesEnd = emptySet()
+                } else if (page.cid == currentCid) {
+                    return@launch
+                }
+                val stream = resolvePagePlayStream(page.cid, page.epid)
                     ?: error("无法获取播放地址")
                 val resolvedStream = stream.copy(aid = seedVideo.aid, cid = page.cid)
                 activePart = page
@@ -1278,7 +1417,9 @@ fun VideoDetailScreen(
                                         VideoCommentRow(
                                             comment = entry.comment,
                                             depth = 0,
+                                            videoAuthorMid = currentVideo.authorMid,
                                             onAuthorClick = onAuthorClick,
+                                            onLinkClick = handleCommentLinkClick,
                                             onCommentImageClick = { pictures, index, bounds ->
                                                 commentImageViewer = CommentImageViewerRequest(
                                                     images = pictures.map(BiliViewerImage::fromCommentPicture),
@@ -1292,7 +1433,9 @@ fun VideoDetailScreen(
                                         VideoCommentRow(
                                             comment = entry.reply,
                                             depth = 1,
+                                            videoAuthorMid = currentVideo.authorMid,
                                             onAuthorClick = onAuthorClick,
+                                            onLinkClick = handleCommentLinkClick,
                                             onCommentImageClick = { pictures, index, bounds ->
                                                 commentImageViewer = CommentImageViewerRequest(
                                                     images = pictures.map(BiliViewerImage::fromCommentPicture),
@@ -1586,11 +1729,14 @@ private fun VideoDetailStatsSection(
 private fun VideoCommentRow(
     comment: BiliCommentItem,
     depth: Int = 0,
+    videoAuthorMid: Long = 0L,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
     onCommentImageClick: (List<BiliCommentPicture>, Int, Rect) -> Unit = { _, _, _ -> },
+    onLinkClick: ((BiliLinkTarget) -> Unit)? = null,
 ) {
     val rowStart = CommentRowOuterStart + (depth * 24).dp
     val canOpenProfile = comment.authorMid > 0L
+    val isVideoAuthor = videoAuthorMid > 0L && comment.authorMid == videoAuthorMid
     val openProfile = {
         if (canOpenProfile) {
             onAuthorClick(
@@ -1623,26 +1769,20 @@ private fun VideoCommentRow(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Row(
-                modifier = Modifier.clickable(enabled = canOpenProfile, onClick = openProfile),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = comment.authorName,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = CommentAuthorFontSize,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (comment.level > 0) {
-                    BiliUserLevelIcon(level = comment.level)
-                }
-            }
+            CommentAuthorHeaderRow(
+                authorName = comment.authorName,
+                level = comment.level,
+                isVideoAuthor = isVideoAuthor,
+                isPinned = comment.isPinned,
+                onClick = openProfile,
+                canOpenProfile = canOpenProfile,
+            )
             if (shouldShowCommentText(comment.content, comment.pictures)) {
                 BiliCommentText(
                     text = comment.content,
                     emoticons = comment.emoticons,
                     style = MaterialTheme.typography.bodyMedium,
+                    onLinkClick = onLinkClick,
                 )
             }
             if (comment.pictures.isNotEmpty()) {

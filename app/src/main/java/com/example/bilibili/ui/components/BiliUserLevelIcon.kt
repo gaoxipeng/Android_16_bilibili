@@ -11,6 +11,11 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
+private const val LevelIconViewportX = 20f
+private const val LevelIconViewportY = 250f
+private const val LevelIconViewportWidth = 955f
+private const val LevelIconViewportHeight = 525f
+
 @Composable
 fun BiliUserLevelIcon(
     level: Int,
@@ -39,18 +44,26 @@ private fun userLevelIcon(
     name: String,
     fillColor: Color,
     pathData: String,
-): ImageVector = ImageVector.Builder(
-    name = name,
-    defaultWidth = 24.dp,
-    defaultHeight = 24.dp,
-    viewportWidth = 1024f,
-    viewportHeight = 1024f,
-).apply {
-    addPath(
-        fill = SolidColor(fillColor),
-        pathData = PathParser().parsePathString(pathData).toNodes(),
-    )
-}.build()
+): ImageVector {
+    val defaultWidth = 34.dp
+    val defaultHeight = defaultWidth * LevelIconViewportHeight / LevelIconViewportWidth
+    return ImageVector.Builder(
+        name = name,
+        defaultWidth = defaultWidth,
+        defaultHeight = defaultHeight,
+        viewportWidth = LevelIconViewportWidth,
+        viewportHeight = LevelIconViewportHeight,
+    ).apply {
+        addGroup(
+            translationX = -LevelIconViewportX,
+            translationY = -LevelIconViewportY,
+        )
+        addPath(
+            fill = SolidColor(fillColor),
+            pathData = PathParser().parsePathString(pathData).toNodes(),
+        )
+    }.build()
+}
 
 private val BiliUserLevel1Icon: ImageVector by lazy {
     userLevelIcon(

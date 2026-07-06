@@ -37,6 +37,8 @@ import com.example.bilibili.data.BiliDynamicItem
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliAccountStore
 import com.example.bilibili.data.BilibiliApiClient
+import com.example.bilibili.data.BilibiliEndpoints
+import com.example.bilibili.data.BiliVideoPage
 import com.example.bilibili.data.BilibiliHomeFeedStore
 import com.example.bilibili.data.CachedHomeFeed
 import com.example.bilibili.data.BilibiliPlayerPreferences
@@ -49,6 +51,7 @@ import com.example.bilibili.player.LocalVideoPeekController
 import com.example.bilibili.player.LocalBilibiliCredential
 import com.example.bilibili.player.LocalWatchHistoryReporter
 import com.example.bilibili.player.WatchHistoryReporter
+import com.example.bilibili.player.PlaybackKeepScreenOnWindowEffect
 import com.example.bilibili.player.VideoPeekController
 import com.example.bilibili.player.VideoPeekOverlay
 import com.example.bilibili.player.VideoPlaybackCoordinator
@@ -74,14 +77,13 @@ import com.example.bilibili.ui.screens.HistoryScreen
 import com.example.bilibili.ui.screens.rememberHistoryMenuController
 import com.example.bilibili.ui.screens.HomeScreen
 import com.example.bilibili.ui.screens.HomeSearchCapsule
-import com.example.bilibili.ui.screens.HotScreen
+import com.example.bilibili.ui.screens.LiveScreen
 import com.example.bilibili.ui.screens.LoginSheet
 import com.example.bilibili.ui.screens.SearchScreen
 import com.example.bilibili.ui.screens.UserProfileScreen
 import com.example.bilibili.ui.screens.UserRelationListScreen
 import com.example.bilibili.ui.screens.ArticleDetailScreen
 import com.example.bilibili.ui.screens.DynamicDetailScreen
-import com.example.bilibili.data.BiliVideoPage
 import com.example.bilibili.ui.screens.VideoDetailScreen
 import com.example.bilibili.ui.screens.MineScreen
 import com.example.bilibili.ui.liquidglass.LocalLiquidMenuBackdrop
@@ -129,6 +131,7 @@ fun BilibiliApp() {
     LaunchedEffect(Unit) {
         VideoPlaybackMediaBridge.initialize(context)
     }
+    PlaybackKeepScreenOnWindowEffect(coordinator)
     val videoPeekController = remember { VideoPeekController() }
 
     var selectedTab by remember { mutableStateOf(MainTab.Home) }
@@ -175,6 +178,7 @@ fun BilibiliApp() {
     val navController = remember { AppNavController() }
     var feedRefreshHint by remember { mutableStateOf<String?>(null) }
     var feedSearchVisible by remember { mutableStateOf(true) }
+    var liveRoomOpen by remember { mutableStateOf(false) }
     var pressAgainExitHintVisible by remember { mutableStateOf(false) }
     var lastExitBackPressAt by remember { mutableStateOf(0L) }
 
@@ -183,6 +187,7 @@ fun BilibiliApp() {
     val homePullRefreshState = rememberPullToRefreshState()
     val followPullRefreshState = rememberPullToRefreshState()
     val hotPullRefreshState = rememberPullToRefreshState()
+    val livePullRefreshState = rememberPullToRefreshState()
     val historyPullRefreshState = rememberPullToRefreshState()
     var historyPullRefreshing by remember { mutableStateOf(false) }
     val watchHistoryReporter = remember(api) { WatchHistoryReporter(api) }
@@ -214,18 +219,43 @@ fun BilibiliApp() {
     fun credential() = activeAccount?.credential
 
     suspend fun resolvePlayUrl(video: BiliVideoItem): BiliPlayStream? = runCatching {
+        val playbackId = video.playbackId()
         val targetCid = video.cid.takeIf { it > 0L }
-        playUrls[video.bvid]?.let { cached ->
-            if (cached.aid > 0L && cached.cid > 0L && (targetCid == null || cached.cid == targetCid)) {
-                return@runCatching cached
+        playUrls[playbackId]?.let { cached ->
+            val cacheValid = if (video.isPgcPlayback()) {
+                cached.videoUrl.isNotBlank() &&
+                    (targetCid == null || targetCid == 0L || cached.cid == targetCid)
+            } else {
+                cached.aid > 0L && cached.cid > 0L &&
+                    (targetCid == null || cached.cid == targetCid)
             }
+            if (cacheValid) return@runCatching cached
+        }
+        if (video.isPgcPlayback()) {
+            val epid = video.pgcEpid()
+            val cid = targetCid ?: 0L
+            val referer = video.playbackReferer.ifBlank {
+                if (epid > 0L) "https://www.bilibili.com/bangumi/play/ep$epid" else BilibiliEndpoints.HOME
+            }
+            val stream = if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && cid > 0L) {
+                api.getPlayUrl(video.bvid, cid, credential())
+                    ?: api.getPgcPlayUrl(epid, cid, credential(), referer)
+            } else {
+                api.getPgcPlayUrl(epid, cid, credential(), referer)
+            } ?: return@runCatching null
+            val resolved = stream.copy(
+                aid = video.aid.takeIf { it > 0L } ?: stream.aid,
+                cid = cid.takeIf { it > 0L } ?: stream.cid,
+            )
+            playUrls[playbackId] = resolved
+            return@runCatching resolved
         }
         val detail = api.getVideoView(video.bvid, credential()) ?: return@runCatching null
         val cid = targetCid ?: detail.cid.takeIf { it > 0L } ?: return@runCatching null
         val aid = video.aid.takeIf { it > 0L } ?: detail.aid
         val stream = api.getPlayUrl(video.bvid, cid, credential()) ?: return@runCatching null
         val resolved = stream.copy(aid = aid, cid = cid)
-        playUrls[video.bvid] = resolved
+        playUrls[playbackId] = resolved
         resolved
     }.getOrNull()
 
@@ -319,8 +349,9 @@ fun BilibiliApp() {
     }
 
     fun switchVideoPart(video: BiliVideoItem, page: BiliVideoPage, stream: BiliPlayStream? = null) {
+        val playbackId = video.playbackId()
         val applyStream: (BiliPlayStream) -> Unit = { resolved ->
-            playUrls[video.bvid] = resolved
+            playUrls[playbackId] = resolved
             coordinator.requestInlinePlayback(
                 videoPlaybackKey(video.bvid, ownerId = "detail"),
             )
@@ -330,9 +361,29 @@ fun BilibiliApp() {
             return
         }
         scope.launch {
-            val resolved = api.getPlayUrl(video.bvid, page.cid, credential())
-                ?.copy(aid = video.aid, cid = page.cid)
-                ?: return@launch
+            val resolved = if (video.isPgcPlayback() || page.epid > 0L) {
+                val epid = page.epid.takeIf { it > 0L } ?: video.pgcEpid()
+                val referer = video.playbackReferer.ifBlank {
+                    if (epid > 0L) {
+                        "https://www.bilibili.com/bangumi/play/ep$epid"
+                    } else {
+                        BilibiliEndpoints.HOME
+                    }
+                }
+                val cid = page.cid.takeIf { it > 0L } ?: video.cid
+                if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && cid > 0L) {
+                    api.getPlayUrl(video.bvid, cid, credential())
+                        ?: api.getPgcPlayUrl(epid, cid, credential(), referer)
+                } else {
+                    api.getPgcPlayUrl(epid, cid, credential(), referer)
+                }?.copy(
+                    aid = video.aid.takeIf { it > 0L } ?: 0L,
+                    cid = cid,
+                )
+            } else {
+                api.getPlayUrl(video.bvid, page.cid, credential())
+                    ?.copy(aid = video.aid, cid = page.cid)
+            } ?: return@launch
             applyStream(resolved)
         }
     }
@@ -538,13 +589,24 @@ fun BilibiliApp() {
         }
     }
 
-    fun refreshHot() {
+    fun refreshHot(showRefreshHint: Boolean = false) {
         scope.launch {
             hotLoading = true
             hotError = null
+            val previousItems = hotVideos
             runCatching {
                 hotVideos = api.getSiteRanking()
-            }.onFailure { hotError = it.message }
+                if (showRefreshHint) {
+                    feedRefreshHint = if (hotVideos.isNotEmpty()) {
+                        feedRefreshHintMessage(previousItems, hotVideos)
+                    } else {
+                        null
+                    }
+                }
+            }.onFailure {
+                hotError = it.message
+                if (showRefreshHint) feedRefreshHint = null
+            }
             hotLoading = false
         }
     }
@@ -587,7 +649,6 @@ fun BilibiliApp() {
             }
             refreshFollow()
         }
-        refreshHot()
     }
 
     LaunchedEffect(selectedTab) {
@@ -595,7 +656,7 @@ fun BilibiliApp() {
         when (selectedTab) {
             MainTab.Home -> Unit
             MainTab.Following -> if (activeAccount != null && followVideos.isEmpty()) refreshFollow()
-            MainTab.Hot -> if (hotVideos.isEmpty()) refreshHot()
+            MainTab.Live -> Unit
             MainTab.History -> Unit
             MainTab.Mine -> Unit
         }
@@ -603,7 +664,7 @@ fun BilibiliApp() {
 
     LaunchedEffect(homeVideos) {
         homeVideos.take(10).forEach { video ->
-            if (playUrls[video.bvid] == null) {
+            if (playUrls[video.playbackId()] == null) {
                 launch { resolvePlayUrl(video) }
             }
         }
@@ -611,7 +672,15 @@ fun BilibiliApp() {
 
     LaunchedEffect(followVideos) {
         followVideos.take(10).forEach { video ->
-            if (playUrls[video.bvid] == null) {
+            if (playUrls[video.playbackId()] == null) {
+                launch { resolvePlayUrl(video) }
+            }
+        }
+    }
+
+    LaunchedEffect(hotVideos) {
+        hotVideos.take(10).forEach { video ->
+            if (playUrls[video.playbackId()] == null) {
                 launch { resolvePlayUrl(video) }
             }
         }
@@ -629,29 +698,18 @@ fun BilibiliApp() {
     val topVideoDetailEntry = navStack.lastVideoDetail()
     val showFeedSearchBar = !navOverlayOpen && when (selectedTab) {
         MainTab.Home -> activeAccount != null
-        MainTab.Following -> activeAccount != null
-        MainTab.Hot -> true
         else -> false
     }
     val feedPullRefreshVisible = !navOverlayOpen && when (selectedTab) {
         MainTab.Home -> activeAccount != null
-        MainTab.Following -> activeAccount != null
-        MainTab.Hot -> true
-        MainTab.History -> activeAccount != null
         else -> false
     }
     val feedPullRefreshing = when (selectedTab) {
         MainTab.Home -> homeLoading
-        MainTab.Following -> followLoading
-        MainTab.Hot -> hotLoading
-        MainTab.History -> historyPullRefreshing
         else -> false
     }
     val feedPullRefreshState = when (selectedTab) {
         MainTab.Home -> homePullRefreshState
-        MainTab.Following -> followPullRefreshState
-        MainTab.Hot -> hotPullRefreshState
-        MainTab.History -> historyPullRefreshState
         else -> homePullRefreshState
     }
     val fullscreenVideo = remember(fullscreenKey, navStack, homeVideos, followVideos, hotVideos) {
@@ -681,6 +739,7 @@ fun BilibiliApp() {
 
     val canPressAgainExit =
         !navOverlayOpen &&
+            !liveRoomOpen &&
             fullscreenKey == null &&
             videoPeekController.activeRequest == null &&
             !showLoginSheet &&
@@ -765,55 +824,54 @@ fun BilibiliApp() {
                 MainTab.Following -> FeedTabReselectScope(MainTab.Following, feedTabReselectController) {
                     FollowingScreen(
                     loggedIn = activeAccount != null,
-                    videos = followVideos,
-                    playUrls = playUrls,
-                    loading = followLoading,
-                    loadingMore = followLoadingMore,
-                    hasMore = followHasMore,
-                    error = followError,
+                    followVideos = followVideos,
+                    followPlayUrls = playUrls,
+                    followLoading = followLoading,
+                    followLoadingMore = followLoadingMore,
+                    followHasMore = followHasMore,
+                    followError = followError,
                     onLoginClick = {
                         showLoginSheet = true
                     },
-                    onRefresh = ::refreshFollow,
-                    onPullRefresh = { refreshFollow(showRefreshHint = true) },
-                    onLoadMore = ::loadMoreFollow,
+                    onRefreshFollow = ::refreshFollow,
+                    onPullRefreshFollow = { refreshFollow(showRefreshHint = true) },
+                    onLoadMoreFollow = ::loadMoreFollow,
+                    rankVideos = hotVideos,
+                    rankPlayUrls = playUrls,
+                    rankLoading = hotLoading,
+                    rankError = hotError,
+                    onRefreshRank = ::refreshHot,
+                    onPullRefreshRank = { refreshHot(showRefreshHint = true) },
                     onVideoClick = { video -> openVideoDetail(video) },
                     onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                    onAuthorClick = { mid ->
+                    onFollowAuthorClick = { mid ->
                         val video = followVideos.firstOrNull { it.authorMid == mid }
                         openUserProfile(mid, video?.authorName.orEmpty())
                     },
-                    coordinator = coordinator,
-                    contentPadding = padding,
-                    showSearchBar = showFeedSearchBar,
-                    onSearchVisibleChange = { feedSearchVisible = it },
-                    onSearchClick = ::openSearch,
-                    pullRefreshState = followPullRefreshState,
-                    showEmbeddedPullRefreshIndicator = false,
-                    feedColumnCount = feedColumnCount,
-                    )
-                }
-                MainTab.Hot -> FeedTabReselectScope(MainTab.Hot, feedTabReselectController) {
-                    HotScreen(
-                    videos = hotVideos,
-                    playUrls = playUrls,
-                    loading = hotLoading,
-                    error = hotError,
-                    onRefresh = ::refreshHot,
-                    onVideoClick = { video -> openVideoDetail(video) },
-                    onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                    onAuthorClick = { mid ->
+                    onRankAuthorClick = { mid ->
                         val video = hotVideos.firstOrNull { it.authorMid == mid }
                         openUserProfile(mid, video?.authorName.orEmpty())
                     },
                     coordinator = coordinator,
                     contentPadding = padding,
-                    showSearchBar = showFeedSearchBar,
-                    onSearchVisibleChange = { feedSearchVisible = it },
-                    onSearchClick = ::openSearch,
-                    pullRefreshState = hotPullRefreshState,
-                    showEmbeddedPullRefreshIndicator = false,
+                    followPullRefreshState = followPullRefreshState,
+                    rankPullRefreshState = hotPullRefreshState,
+                    showEmbeddedPullRefreshIndicator = true,
                     feedColumnCount = feedColumnCount,
+                    )
+                }
+                MainTab.Live -> FeedTabReselectScope(MainTab.Live, feedTabReselectController) {
+                    LiveScreen(
+                        api = api,
+                        credential = credential(),
+                        loggedIn = activeAccount != null,
+                        coordinator = coordinator,
+                        onLoginClick = { showLoginSheet = true },
+                        contentPadding = padding,
+                        pullRefreshState = livePullRefreshState,
+                        showEmbeddedPullRefreshIndicator = true,
+                        onLiveRoomOpenChange = { liveRoomOpen = it },
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
                 MainTab.History -> FeedTabReselectScope(MainTab.History, feedTabReselectController) {
@@ -903,7 +961,7 @@ fun BilibiliApp() {
             )
 
             if (fullscreenKey != null && fullscreenVideo != null && videoPeekController.activeRequest == null) {
-                val stream = playUrls[fullscreenVideo.bvid]
+                val stream = playUrls[fullscreenVideo.playbackId()]
                 if (stream != null) {
                     val fullscreenBackdrop = rememberLayerBackdrop()
                     val fullscreenCid = stream.cid.takeIf { it > 0L } ?: fullscreenVideo.cid
@@ -1038,7 +1096,7 @@ fun BilibiliApp() {
                 )
             }
 
-            if (!navOverlayOpen) {
+            if (!navOverlayOpen && !liveRoomOpen) {
                 BilibiliLiquidBottomBar(
                 selectedTab = selectedTab,
                 onTabClick = ::handleBottomTabClick,
@@ -1174,7 +1232,7 @@ private fun AppNavEntryContent(
         is AppNavEntry.VideoDetail -> {
             VideoDetailScreen(
                 seedVideo = entry.video,
-                playStream = playUrls[entry.video.bvid],
+                playStream = playUrls[entry.video.playbackId()],
                 api = api,
                 coordinator = coordinator,
                 credential = credential,
@@ -1226,6 +1284,9 @@ private fun AppNavEntryContent(
                 onBack = onPopNav,
                 onAuthorClick = { profile ->
                     onOpenProfile(profile.mid, profile.name, profile.face)
+                },
+                onOpenVideo = { video, partPage ->
+                    onOpenDescriptionVideo(video, partPage)
                 },
                 modifier = Modifier.fillMaxSize(),
             )

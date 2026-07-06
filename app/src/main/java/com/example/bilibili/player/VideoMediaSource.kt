@@ -22,8 +22,10 @@ fun buildVideoMediaSource(
     context: Context,
     stream: BiliPlayStream,
     playbackMetadata: VideoPlaybackMetadata? = null,
+    referer: String = BilibiliEndpoints.HOME,
+    origin: String = "https://www.bilibili.com",
 ): MediaSource {
-    val factory = bilibiliDataSourceFactory(context)
+    val factory = bilibiliDataSourceFactory(context, referer = referer, origin = origin)
     val mediaMetadata = playbackMetadata?.toMediaMetadata()
     val videoSource = createStreamMediaSource(factory, stream.videoUrl, mediaMetadata)
     val audioUrl = stream.audioUrl?.takeIf { it.isNotBlank() && it != stream.videoUrl }
@@ -31,6 +33,20 @@ fun buildVideoMediaSource(
     val audioSource = ProgressiveMediaSource.Factory(factory)
         .createMediaSource(MediaItem.fromUri(audioUrl))
     return MergingMediaSource(videoSource, audioSource)
+}
+
+fun buildLiveMediaSource(
+    context: Context,
+    streamUrl: String,
+    roomId: Long,
+): MediaSource {
+    val referer = "${BilibiliEndpoints.LIVE_HOME}$roomId"
+    val factory = bilibiliDataSourceFactory(
+        context = context,
+        referer = referer,
+        origin = BilibiliEndpoints.LIVE_HOME.trimEnd('/'),
+    )
+    return createStreamMediaSource(factory, streamUrl)
 }
 
 private fun createStreamMediaSource(
@@ -56,12 +72,16 @@ private fun createStreamMediaSource(
     }
 }
 
-private fun bilibiliDataSourceFactory(context: Context): DefaultDataSource.Factory {
+private fun bilibiliDataSourceFactory(
+    context: Context,
+    referer: String = BilibiliEndpoints.HOME,
+    origin: String = "https://www.bilibili.com",
+): DefaultDataSource.Factory {
     val cookie = CookieManager.getInstance().getCookie(BilibiliEndpoints.HOME).orEmpty()
     val headers = buildMap {
         put("Accept", "*/*")
-        put("Referer", BilibiliEndpoints.HOME)
-        put("Origin", "https://www.bilibili.com")
+        put("Referer", referer)
+        put("Origin", origin)
         put("User-Agent", BilibiliEndpoints.USER_AGENT)
         if (cookie.isNotBlank()) put("Cookie", cookie)
     }

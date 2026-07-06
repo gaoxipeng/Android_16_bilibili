@@ -202,7 +202,7 @@ private fun BilibiliTabIcon(
     val icon: ImageVector = when (tab) {
         MainTab.Home -> BilibiliHomeIcon
         MainTab.Following -> BilibiliFollowingIcon
-        MainTab.Hot -> BilibiliHotIcon
+        MainTab.Live -> BilibiliLiveIcon
         MainTab.History -> BilibiliHistoryIcon
         MainTab.Mine -> BilibiliMineIcon
     }
@@ -214,9 +214,9 @@ private fun BilibiliTabIcon(
     )
 }
 
-private val BilibiliHotIcon: ImageVector by lazy {
+private val BilibiliLiveIcon: ImageVector by lazy {
     ImageVector.Builder(
-        name = "BilibiliHot",
+        name = "BilibiliLive",
         defaultWidth = 24.dp,
         defaultHeight = 24.dp,
         viewportWidth = 1024f,

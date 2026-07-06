@@ -2,6 +2,7 @@ package com.example.bilibili.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.abs
 
 object BilibiliJsonParser {
     fun parseVideosFromFeed(json: JSONObject): List<BiliVideoItem> {
@@ -89,6 +90,10 @@ object BilibiliJsonParser {
                         cid = cid,
                         title = pageObj.optString("part"),
                         durationSeconds = pageObj.optLong("duration").toInt(),
+                        epid = pageObj.optLong("ep_id")
+                            .takeIf { it > 0L }
+                            ?: pageObj.optLong("id").takeIf { it > 0L }
+                            ?: 0L,
                     ),
                 )
             }
@@ -524,14 +529,18 @@ object BilibiliJsonParser {
     fun parseCommentPage(json: JSONObject): BiliCommentPage {
         val data = json.optJSONObject("data") ?: return BiliCommentPage(emptyList())
         val cursor = data.optJSONObject("cursor")
+        val pinned = parsePinnedCommentItems(data)
+        val pinnedIds = pinned.map { it.id }.toSet()
         val replies = data.optJSONArray("replies") ?: JSONArray()
-        val comments = buildList(replies.length()) {
+        val regular = buildList(replies.length()) {
             for (index in 0 until replies.length()) {
                 replies.optJSONObject(index)
                     ?.let { parseCommentItem(it, includeInlineReplies = true) }
+                    ?.takeIf { it.id !in pinnedIds }
                     ?.let(::add)
             }
         }
+        val comments = pinned + regular
         val paginationReply = parseCommentPaginationReply(cursor)
         val nextCursor = parseCommentNextCursor(cursor, paginationReply)
         val totalCount = cursor?.optLong("all_count")
@@ -669,16 +678,49 @@ object BilibiliJsonParser {
         )
     }
 
+    private fun parsePinnedCommentItems(data: JSONObject): List<BiliCommentItem> {
+        val result = mutableListOf<BiliCommentItem>()
+        val seen = mutableSetOf<Long>()
+
+        fun append(raw: JSONObject?) {
+            val item = raw?.let {
+                parseCommentItem(it, includeInlineReplies = true, isPinned = true)
+            } ?: return
+            if (seen.add(item.id)) {
+                result += item
+            }
+        }
+
+        data.optJSONObject("top")?.let { top ->
+            append(top.optJSONObject("upper"))
+            append(top.optJSONObject("admin"))
+            append(top.optJSONObject("vote"))
+        }
+        data.optJSONObject("upper")?.let { upper ->
+            append(upper.optJSONObject("top"))
+        }
+        data.optJSONArray("top_replies")?.let { topReplies ->
+            for (index in 0 until topReplies.length()) {
+                append(topReplies.optJSONObject(index))
+            }
+        }
+        return result
+    }
+
     private fun parseCommentItem(
         json: JSONObject,
         nested: Boolean = false,
         includeInlineReplies: Boolean = false,
+        isPinned: Boolean = false,
     ): BiliCommentItem? {
         val member = json.optJSONObject("member") ?: return null
         val content = json.optJSONObject("content") ?: JSONObject()
         val message = content.optString("message")
         val pictures = content.parseCommentPictures()
-        if (message.isBlank() && pictures.isEmpty() && !nested) return null
+        val emoticons = content.parseEmoteMap()
+        if (message.isBlank() && pictures.isEmpty() && emoticons.isEmpty() && !includeInlineReplies) {
+            return null
+        }
         val nestedReplies = json.optJSONArray("replies") ?: JSONArray()
         return BiliCommentItem(
             id = json.optLong("rpid"),
@@ -693,7 +735,7 @@ object BilibiliJsonParser {
             ipLocation = normalizeIpLocation(
                 json.optJSONObject("reply_control")?.optString("location"),
             ),
-            emoticons = content.parseEmoteMap(),
+            emoticons = emoticons,
             pictures = pictures,
             replies = if (includeInlineReplies) {
                 buildList(nestedReplies.length()) {
@@ -706,6 +748,7 @@ object BilibiliJsonParser {
             } else {
                 emptyList()
             },
+            isPinned = isPinned,
         )
     }
 
@@ -1608,22 +1651,271 @@ object BilibiliJsonParser {
         return buildList(list.length()) {
             for (index in 0 until list.length()) {
                 val item = list.optJSONObject(index) ?: continue
+                val roomId = item.optLong("roomid").takeIf { it > 0L }
+                    ?: item.optLong("room_id").takeIf { it > 0L }
+                    ?: continue
+                val onlineCount = item.optLong("online")
+                val score = item.optLong("score")
+                val userNum = item.optLong("user_num")
                 add(
                     BiliLiveRoom(
-                        roomId = item.optLong("roomid"),
+                        roomId = roomId,
                         title = item.optString("title"),
                         coverUrl = normalizeImageUrl(
-                            item.optString("cover").ifBlank { item.optString("user_cover") },
+                            item.optString("cover")
+                                .ifBlank { item.optString("user_cover") }
+                                .ifBlank { item.optString("cover_from_user") }
+                                .ifBlank { item.optString("face") },
                         ),
-                        userName = item.optString("uname"),
+                        userName = item.optString("uname")
+                            .ifBlank { item.optString("username") },
                         userFace = normalizeImageUrl(item.optString("face")),
-                        online = item.optLong("online"),
-                        areaName = item.optString("area_name"),
+                        online = when {
+                            onlineCount > 0L -> onlineCount
+                            score > 0L -> score
+                            userNum > 0L -> userNum
+                            else -> 0L
+                        },
+                        areaName = item.optString("area_v2_parent_name")
+                            .ifBlank { item.optString("area_v2_name") }
+                            .ifBlank { item.optString("area_name") },
                     ),
                 )
             }
         }
     }
+
+    fun parseLiveRoomInfoBrief(json: JSONObject): Pair<String, Long> {
+        val data = json.optJSONObject("data") ?: return "" to 0L
+        val cover = normalizeImageUrl(
+            data.optString("user_cover")
+                .ifBlank { data.optString("keyframe") }
+                .ifBlank { data.optString("cover") },
+        )
+        return cover to data.optLong("online")
+    }
+
+    fun parseLiveRoomDetail(json: JSONObject): BiliLiveRoomDetail? {
+        val data = json.optJSONObject("data") ?: return null
+        val roomInfo = data.optJSONObject("room_info") ?: return null
+        val anchorInfo = data.optJSONObject("anchor_info")?.optJSONObject("base_info")
+        val roomId = roomInfo.optLong("room_id").takeIf { it > 0L } ?: return null
+        return BiliLiveRoomDetail(
+            roomId = roomId,
+            title = roomInfo.optString("title"),
+            coverUrl = normalizeImageUrl(
+                roomInfo.optString("cover")
+                    .ifBlank { roomInfo.optString("keyframe") },
+            ),
+            userName = anchorInfo?.optString("uname")
+                ?: roomInfo.optString("uname"),
+            userFace = normalizeImageUrl(
+                anchorInfo?.optString("face")
+                    ?: roomInfo.optString("face"),
+            ),
+            anchorUid = roomInfo.optLong("uid"),
+            online = roomInfo.optLong("online"),
+            areaName = roomInfo.optString("area_name"),
+            parentAreaName = roomInfo.optString("parent_area_name"),
+            liveStatus = roomInfo.optInt("live_status"),
+            description = roomInfo.optString("description"),
+        )
+    }
+
+    fun parseLivePlayInfo(
+        json: JSONObject,
+        preferredQn: Int = 10_000,
+    ): BiliLivePlayResult? {
+        val data = json.optJSONObject("data") ?: return null
+        val roomId = data.optLong("room_id").takeIf { it > 0L } ?: return null
+        val playUrl = data.optJSONObject("playurl_info")?.optJSONObject("playurl")
+            ?: return null
+        val qualities = buildList {
+            playUrl.optJSONArray("g_qn_desc")?.let { qnDesc ->
+                for (index in 0 until qnDesc.length()) {
+                    val item = qnDesc.optJSONObject(index) ?: continue
+                    val qn = item.optInt("qn")
+                    val desc = item.optString("desc")
+                    if (qn > 0 && desc.isNotBlank()) {
+                        add(BiliLiveQuality(qn = qn, label = desc))
+                    }
+                }
+            }
+        }
+        val streams = playUrl.optJSONArray("stream") ?: return null
+        data class StreamCandidate(val priority: Int, val url: String, val qn: Int)
+
+        val candidates = buildList {
+            for (streamIndex in 0 until streams.length()) {
+                val stream = streams.optJSONObject(streamIndex) ?: continue
+                val formats = stream.optJSONArray("format") ?: continue
+                for (formatIndex in 0 until formats.length()) {
+                    val format = formats.optJSONObject(formatIndex) ?: continue
+                    val formatName = format.optString("format_name")
+                    val priority = when (formatName) {
+                        "fmp4" -> 0
+                        "ts" -> 1
+                        "flv" -> 2
+                        else -> 3
+                    }
+                    val codecs = format.optJSONArray("codec") ?: continue
+                    for (codecIndex in 0 until codecs.length()) {
+                        val codec = codecs.optJSONObject(codecIndex) ?: continue
+                        val currentQn = codec.optInt("current_qn")
+                        val acceptQn = buildList {
+                            codec.optJSONArray("accept_qn")?.let { qnArray ->
+                                for (qnIndex in 0 until qnArray.length()) {
+                                    add(qnArray.optInt(qnIndex))
+                                }
+                            }
+                        }
+                        val targetQn = when {
+                            acceptQn.contains(preferredQn) -> preferredQn
+                            currentQn > 0 -> currentQn
+                            acceptQn.firstOrNull() ?: 0 > 0 -> acceptQn.first()
+                            else -> preferredQn
+                        }
+                        val baseUrl = codec.optString("base_url")
+                        val urlInfo = codec.optJSONArray("url_info") ?: continue
+                        for (urlIndex in 0 until urlInfo.length()) {
+                            val info = urlInfo.optJSONObject(urlIndex) ?: continue
+                            val host = info.optString("host").trimEnd('/')
+                            val extra = info.optString("extra")
+                            if (host.isBlank() || baseUrl.isBlank()) continue
+                            val fullUrl = buildString {
+                                append(host)
+                                if (!baseUrl.startsWith("/")) append('/')
+                                append(baseUrl)
+                                if (extra.isNotBlank()) {
+                                    if (baseUrl.contains('?')) append('&') else append('?')
+                                    append(extra)
+                                }
+                            }
+                            add(StreamCandidate(priority, fullUrl, targetQn))
+                        }
+                    }
+                }
+            }
+        }
+        val best = candidates.minWithOrNull(
+            compareBy<StreamCandidate> { it.priority }
+                .thenBy { abs(it.qn - preferredQn) },
+        ) ?: return null
+        return BiliLivePlayResult(
+            roomId = roomId,
+            realRoomId = roomId,
+            anchorUid = data.optLong("uid"),
+            liveStatus = data.optInt("live_status"),
+            streamUrl = best.url,
+            currentQn = best.qn,
+            qualities = qualities,
+        )
+    }
+
+    fun parseLiveDanmuInfo(json: JSONObject): BiliLiveDanmuInfo? {
+        val data = json.optJSONObject("data") ?: return null
+        val token = data.optString("token")
+        val hostList = data.optJSONArray("host_list") ?: return null
+        val hosts = buildList {
+            for (index in 0 until hostList.length()) {
+                val item = hostList.optJSONObject(index) ?: continue
+                val host = item.optString("host")
+                if (host.isBlank()) continue
+                add(
+                    BiliLiveDanmuHost(
+                        host = host,
+                        wssPort = item.optInt("wss_port", 443),
+                        wsPort = item.optInt("ws_port", 2244),
+                    ),
+                )
+            }
+        }
+        if (token.isBlank() || hosts.isEmpty()) return null
+        return BiliLiveDanmuInfo(token = token, hosts = hosts)
+    }
+
+    fun parseLiveDanmakuMessage(payload: org.json.JSONArray): BiliDanmakuItem? {
+        if (payload.length() < 2) return null
+        val meta = payload.optJSONArray(0) ?: return null
+        val content = payload.optString(1)
+        if (content.isBlank()) return null
+        val mode = meta.optInt(1, BiliDanmakuMode.Scroll.value)
+        val fontSize = meta.optInt(2, 25)
+        val color = meta.optInt(3, 0xFFFFFF)
+        return BiliDanmakuItem(
+            timeMs = System.currentTimeMillis(),
+            mode = mode,
+            fontSize = fontSize,
+            colorArgb = color or 0xFF000000.toInt(),
+            content = content,
+        )
+    }
+
+    fun parseLiveRoomPage(json: JSONObject): BiliLiveRoomPage {
+        val data = json.optJSONObject("data")
+        val list = data?.optJSONArray("list") ?: org.json.JSONArray()
+        val page = data?.optInt("page", 1) ?: 1
+        val hasMore = data?.optInt("has_more", 0) == 1 ||
+            data?.optBoolean("has_more", false) == true
+        return BiliLiveRoomPage(
+            rooms = parseLiveRoomItems(list),
+            page = page,
+            hasMore = hasMore,
+        )
+    }
+
+    fun parseLiveAreas(json: JSONObject): List<BiliLiveArea> {
+        val data = json.optJSONArray("data") ?: return emptyList()
+        return buildList(data.length()) {
+            for (index in 0 until data.length()) {
+                val parent = data.optJSONObject(index) ?: continue
+                val parentId = parent.optLong("id")
+                val parentName = parent.optString("name")
+                if (parentId > 0L && parentName.isNotBlank()) {
+                    add(BiliLiveArea(id = parentId, name = parentName))
+                }
+            }
+        }
+    }
+
+    fun parseLiveFollowing(json: JSONObject): List<BiliLiveRoom> {
+        val data = json.optJSONObject("data") ?: return emptyList()
+        val rooms = data.optJSONArray("rooms")
+            ?: data.optJSONArray("list")
+            ?: return emptyList()
+        return parseLiveRoomItems(rooms)
+    }
+
+    private fun parseLiveRoomItems(list: org.json.JSONArray): List<BiliLiveRoom> {
+        return buildList(list.length()) {
+            for (index in 0 until list.length()) {
+                val item = list.optJSONObject(index) ?: continue
+                val roomId = item.optLong("roomid").takeIf { it > 0L }
+                    ?: item.optLong("room_id").takeIf { it > 0L }
+                    ?: continue
+                add(
+                    BiliLiveRoom(
+                        roomId = roomId,
+                        title = item.optString("title"),
+                        coverUrl = normalizeImageUrl(
+                            item.optString("cover")
+                                .ifBlank { item.optString("user_cover") }
+                                .ifBlank { item.optString("cover_from_user") },
+                        ),
+                        userName = item.optString("uname")
+                            .ifBlank { item.optString("username") },
+                        userFace = normalizeImageUrl(item.optString("face")),
+                        online = item.optLong("online"),
+                        areaName = item.optString("area_name")
+                            .ifBlank { item.optString("area_v2_parent_name") },
+                    ),
+                )
+            }
+        }
+    }
+
+    fun parseLiveAreaList(json: JSONObject): List<BiliLiveRoom> =
+        parseLiveRoomPage(json).rooms
 
     fun parseWatchHistoryPage(json: JSONObject): BiliHistoryPage {
         val data = json.optJSONObject("data") ?: return BiliHistoryPage(emptyList(), null)
@@ -1645,13 +1937,35 @@ object BilibiliJsonParser {
     }
 
     private fun parseHistoryItem(item: JSONObject): BiliHistoryItem? {
-        val history = item.optJSONObject("history") ?: return null
-        if (history.optString("business") != "archive") return null
-        val bvid = history.optString("bvid")
-        if (bvid.isBlank()) return null
-        val aid = history.optLong("oid")
-        if (aid <= 0L) return null
-        val title = item.optString("title").ifBlank { item.optString("show_title") }
+        val history = item.optJSONObject("history")
+        val businessRaw = history?.optString("business").orEmpty()
+            .ifBlank { item.optString("business") }
+        if (businessRaw != "archive" && businessRaw != "pgc") return null
+
+        val business = BiliHistoryBusiness.from(businessRaw)
+        val bvid = item.optString("bvid").ifBlank { history?.optString("bvid").orEmpty() }
+        val epid = history?.optLong("epid")?.takeIf { it > 0L } ?: 0L
+        val historyCid = history?.optLong("cid") ?: 0L
+        val aid = item.optLong("aid").takeIf { it > 0L }
+            ?: history?.optLong("oid")?.takeIf { it > 0L }
+            ?: 0L
+        val cid = item.optLong("cid").takeIf { it > 0L } ?: historyCid
+
+        if (business == BiliHistoryBusiness.Archive && bvid.isBlank()) return null
+        if (business == BiliHistoryBusiness.Pgc && epid <= 0L && cid <= 0L) return null
+
+        val primaryTitle = item.optString("title").ifBlank { item.optString("show_title") }
+        val episodeTitle = item.optString("show_title").ifBlank { item.optString("long_title") }
+        val displayTitle = when {
+            business == BiliHistoryBusiness.Pgc &&
+                episodeTitle.isNotBlank() &&
+                episodeTitle != primaryTitle &&
+                primaryTitle.isNotBlank() -> "$primaryTitle · $episodeTitle"
+            primaryTitle.isNotBlank() -> primaryTitle
+            else -> episodeTitle
+        }
+        if (displayTitle.isBlank()) return null
+
         val cover = item.optString("cover").ifBlank {
             item.optJSONArray("covers")?.optString(0).orEmpty()
         }
@@ -1671,21 +1985,39 @@ object BilibiliJsonParser {
                 .ifBlank { author?.optString("face").orEmpty() }
                 .ifBlank { author?.optString("avatar").orEmpty() },
         )
+        val badge = item.optString("badge")
+        val webUri = item.optString("uri")
+        val kidValue = item.optLong("kid")
+        val kid = when {
+            kidValue > 0L && business == BiliHistoryBusiness.Archive -> "archive_$kidValue"
+            kidValue > 0L && business == BiliHistoryBusiness.Pgc -> "pgc_$kidValue"
+            business == BiliHistoryBusiness.Pgc && epid > 0L -> "pgc_$epid"
+            aid > 0L -> "archive_$aid"
+            else -> ""
+        }
+        val durationSeconds = item.optInt("duration").takeIf { it > 0 }
+            ?: parseDurationText(item.optString("duration_text")).takeIf { it > 0 }
+            ?: 0
+
         return BiliHistoryItem(
-            kid = "archive_$aid",
+            kid = kid,
+            business = business,
             bvid = bvid,
             aid = aid,
-            cid = history.optLong("cid"),
-            page = history.optInt("page"),
-            partTitle = history.optString("part"),
-            title = title,
+            cid = cid,
+            epid = epid,
+            page = history?.optInt("page") ?: 0,
+            partTitle = history?.optString("part").orEmpty(),
+            title = displayTitle,
             coverUrl = normalizeImageUrl(cover),
             authorName = authorName,
             authorMid = authorMid,
             authorFace = authorFace,
+            badge = badge,
+            webUri = webUri,
             viewAtSeconds = item.optLong("view_at"),
             progressSeconds = item.optInt("progress").coerceAtLeast(0),
-            durationSeconds = item.optInt("duration").coerceAtLeast(0),
+            durationSeconds = durationSeconds,
         )
     }
 
@@ -1779,26 +2111,6 @@ object BilibiliJsonParser {
 
     private fun stripSearchHighlight(raw: String): String =
         raw.replace(Regex("<[^>]+>"), "").trim()
-
-    fun parseLiveAreaList(json: JSONObject): List<BiliLiveRoom> {
-        val list = json.optJSONObject("data")?.optJSONArray("list") ?: return emptyList()
-        return buildList(list.length()) {
-            for (index in 0 until list.length()) {
-                val item = list.optJSONObject(index) ?: continue
-                add(
-                    BiliLiveRoom(
-                        roomId = item.optLong("roomid"),
-                        title = item.optString("title"),
-                        coverUrl = normalizeImageUrl(item.optString("cover")),
-                        userName = item.optString("uname"),
-                        userFace = normalizeImageUrl(item.optString("face")),
-                        online = item.optLong("online"),
-                        areaName = item.optString("area_name"),
-                    ),
-                )
-            }
-        }
-    }
 
     fun parseFollowingVideoFeed(json: JSONObject): BiliFollowingFeedPage {
         val data = json.optJSONObject("data")
@@ -1980,4 +2292,272 @@ object BilibiliJsonParser {
             url.startsWith("http://") -> "https://${url.removePrefix("http://")}"
             else -> url
         }
+
+    fun parseSearchBangumiPage(json: JSONObject): BiliSearchResultPage<BiliSearchBangumi> {
+        val data = json.optJSONObject("data") ?: return BiliSearchResultPage.empty()
+        val page = data.optInt("page", 1).coerceAtLeast(1)
+        val numPages = data.optInt("numPages", page).coerceAtLeast(page)
+        val result = data.optJSONArray("result") ?: return BiliSearchResultPage.empty()
+        val items = buildList(result.length()) {
+            for (index in 0 until result.length()) {
+                parseSearchBangumiItem(result.optJSONObject(index) ?: continue)?.let(::add)
+            }
+        }
+        return BiliSearchResultPage(items = items, page = page, hasMore = page < numPages)
+    }
+
+    fun parseSearchAllPgcMedia(json: JSONObject): List<BiliSearchBangumi> {
+        val data = json.optJSONObject("data") ?: return emptyList()
+        val groups = data.optJSONArray("result") ?: return emptyList()
+        return buildList {
+            for (index in 0 until groups.length()) {
+                val group = groups.optJSONObject(index) ?: continue
+                val resultType = group.optString("result_type")
+                if (resultType != "media_bangumi" && resultType != "media_ft") continue
+                val list = group.optJSONArray("data") ?: continue
+                for (itemIndex in 0 until list.length()) {
+                    parseSearchBangumiItem(list.optJSONObject(itemIndex) ?: continue)?.let(::add)
+                }
+            }
+        }
+    }
+
+    fun parsePgcSeasonFirstEpid(json: JSONObject): Long {
+        val result = json.optJSONObject("result")
+            ?: json.optJSONObject("data")?.optJSONObject("result")
+            ?: json.optJSONObject("data")
+            ?: return 0L
+        val episodes = result.optJSONArray("episodes") ?: return 0L
+        for (index in 0 until episodes.length()) {
+            val episode = episodes.optJSONObject(index) ?: continue
+            val epid = episode.optLong("ep_id")
+                .takeIf { it > 0L }
+                ?: episode.optLong("id").takeIf { it > 0L }
+                ?: episode.optLong("epid").takeIf { it > 0L }
+                ?: 0L
+            if (epid > 0L) return epid
+        }
+        return 0L
+    }
+
+    fun parsePgcEpisodeContext(json: JSONObject, epid: Long): BiliPGCEpisodeContext? {
+        if (epid <= 0L) return null
+        val result = json.optJSONObject("result")
+            ?: json.optJSONObject("data")?.optJSONObject("result")
+            ?: json.optJSONObject("data")
+            ?: return null
+        val episodes = result.optJSONArray("episodes") ?: return null
+        var episode: JSONObject? = null
+        for (index in 0 until episodes.length()) {
+            val candidate = episodes.optJSONObject(index) ?: continue
+            val candidateEpid = candidate.optLong("id")
+                .takeIf { it > 0L }
+                ?: candidate.optLong("ep_id").takeIf { it > 0L }
+                ?: 0L
+            if (candidateEpid == epid) {
+                episode = candidate
+                break
+            }
+        }
+        val resolvedEpisode = episode ?: return null
+        val seasonId = result.optLong("season_id")
+        val seasonTitle = result.optString("title").ifBlank { result.optString("season_title") }
+        val episodeTitle = resolvedEpisode.optString("title")
+        val longTitle = resolvedEpisode.optString("long_title")
+        val aid = resolvedEpisode.optLong("aid")
+        val bvid = resolvedEpisode.optString("bvid")
+        val cid = resolvedEpisode.optLong("cid")
+        if (aid <= 0L || bvid.isBlank() || cid <= 0L) return null
+
+        val styles = result.optJSONArray("styles")?.let { array ->
+            buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    val value = array.optString(index).trim()
+                    if (value.isNotBlank()) add(value)
+                }
+            }.joinToString(" / ")
+        }.orEmpty().ifBlank { result.optString("styles") }
+
+        val areas = result.optJSONArray("areas")?.let { array ->
+            buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    val area = array.optJSONObject(index) ?: continue
+                    val name = area.optString("name").trim()
+                    if (name.isNotBlank()) add(name)
+                }
+            }.joinToString(" / ")
+        }.orEmpty().ifBlank { result.optString("areas") }
+
+        val pages = buildList(episodes.length()) {
+            for (index in 0 until episodes.length()) {
+                val pageEpisode = episodes.optJSONObject(index) ?: continue
+                val pageEpid = pageEpisode.optLong("id")
+                    .takeIf { it > 0L }
+                    ?: pageEpisode.optLong("ep_id").takeIf { it > 0L }
+                    ?: 0L
+                val pageCid = pageEpisode.optLong("cid")
+                if (pageEpid <= 0L || pageCid <= 0L) continue
+                val pageLongTitle = pageEpisode.optString("long_title")
+                val pageShortTitle = pageEpisode.optString("title")
+                val title = pageLongTitle.ifBlank { pageShortTitle }.ifBlank { "第${index + 1}话" }
+                val durationMs = pageEpisode.optLong("duration")
+                val durationSeconds = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
+                add(
+                    BiliVideoPage(
+                        page = index + 1,
+                        cid = pageCid,
+                        title = title,
+                        durationSeconds = durationSeconds,
+                        epid = pageEpid,
+                    ),
+                )
+            }
+        }
+
+        val durationMs = resolvedEpisode.optLong("duration")
+        val durationSeconds = if (durationMs > 0L) {
+            (durationMs / 1000L).toInt()
+        } else {
+            resolvedEpisode.optInt("duration")
+        }
+
+        return BiliPGCEpisodeContext(
+            epid = epid,
+            seasonId = seasonId,
+            seasonTitle = seasonTitle,
+            episodeTitle = episodeTitle,
+            longTitle = longTitle,
+            aid = aid,
+            bvid = bvid,
+            cid = cid,
+            coverUrl = normalizeImageUrl(
+                resolvedEpisode.optString("cover").ifBlank { result.optString("cover") },
+            ),
+            durationSeconds = durationSeconds,
+            evaluate = result.optString("evaluate"),
+            styles = styles,
+            areas = areas,
+            pages = pages,
+        )
+    }
+
+    private fun parseSearchBangumiItem(item: JSONObject): BiliSearchBangumi? {
+        val itemType = item.optString("type")
+        if (itemType.isNotBlank() && itemType != "media_bangumi" && itemType != "media_ft") {
+            return null
+        }
+        val seasonId = item.optLong("season_id").takeIf { it > 0L }
+            ?: item.optLong("pgc_season_id").takeIf { it > 0L }
+            ?: 0L
+        if (seasonId <= 0L) return null
+        val title = stripSearchHighlight(item.optString("title"))
+        if (title.isBlank()) return null
+
+        val eps = item.optJSONArray("eps")
+        var firstEpid = 0L
+        if (eps != null) {
+            for (index in 0 until eps.length()) {
+                val ep = eps.optJSONObject(index) ?: continue
+                val epid = ep.optLong("id").takeIf { it > 0L }
+                    ?: ep.optLong("epid").takeIf { it > 0L }
+                    ?: 0L
+                if (epid > 0L) {
+                    firstEpid = epid
+                    break
+                }
+            }
+        }
+        if (firstEpid <= 0L) {
+            val firstEp = item.optJSONObject("first_ep")
+            if (firstEp != null) {
+                firstEpid = firstEp.optLong("id").takeIf { it > 0L }
+                    ?: firstEp.optLong("ep_id").takeIf { it > 0L }
+                    ?: firstEp.optLong("epid").takeIf { it > 0L }
+                    ?: 0L
+            }
+        }
+        if (firstEpid <= 0L) {
+            firstEpid = epidFromBangumiSearchItem(item, eps)
+        }
+
+        return BiliSearchBangumi(
+            seasonId = seasonId,
+            mediaId = item.optLong("media_id"),
+            title = title,
+            subtitle = stripSearchHighlight(item.optString("org_title")),
+            coverUrl = normalizeImageUrl(item.optString("cover")),
+            areas = stripSearchHighlight(item.optString("areas")),
+            styles = stripSearchHighlight(item.optString("styles")),
+            badge = membershipBadgeFromSearchItem(item),
+            categoryName = pgcCategoryName(item),
+            indexShow = stripSearchHighlight(
+                item.optString("index_show").ifBlank { item.optString("fix_pubtime_str") },
+            ),
+            webUrl = normalizeImageUrl(
+                item.optString("goto_url").ifBlank { item.optString("url") },
+            ),
+            firstEpid = firstEpid,
+        )
+    }
+
+    private fun membershipBadgeFromSearchItem(item: JSONObject): String {
+        val angleTitle = stripSearchHighlight(item.optString("angle_title"))
+        if (angleTitle.isNotBlank()) return angleTitle
+        val displayInfo = item.optJSONArray("display_info")
+        if (displayInfo != null) {
+            for (index in 0 until displayInfo.length()) {
+                val text = stripSearchHighlight(displayInfo.optJSONObject(index)?.optString("text").orEmpty())
+                if (text.isNotBlank()) return text
+            }
+        }
+        val badges = item.optJSONArray("badges")
+        if (badges != null) {
+            for (index in 0 until badges.length()) {
+                val text = stripSearchHighlight(badges.optJSONObject(index)?.optString("text").orEmpty())
+                if (text.isNotBlank()) return text
+            }
+        }
+        return ""
+    }
+
+    private fun pgcCategoryName(item: JSONObject): String {
+        val seasonTypeName = stripSearchHighlight(item.optString("season_type_name"))
+        if (seasonTypeName.isNotBlank()) return seasonTypeName
+        return when (item.optInt("media_type").takeIf { it > 0 } ?: item.optInt("season_type")) {
+            1 -> "番剧"
+            2 -> "电影"
+            3 -> "纪录片"
+            4 -> "国创"
+            5 -> "电视剧"
+            7 -> "综艺"
+            else -> "影视"
+        }
+    }
+
+    private fun epidFromBangumiSearchItem(item: JSONObject, eps: org.json.JSONArray?): Long {
+        val hitEpids = item.optString("hit_epids")
+        if (hitEpids.isNotBlank()) {
+            val first = hitEpids.split(',').firstOrNull()?.trim().orEmpty()
+            first.toLongOrNull()?.takeIf { it > 0L }?.let { return it }
+        }
+        val urlCandidates = buildList {
+            add(item.optString("goto_url"))
+            add(item.optString("url"))
+            if (eps != null) {
+                for (index in 0 until eps.length()) {
+                    add(eps.optJSONObject(index)?.optString("url").orEmpty())
+                }
+            }
+        }
+        for (candidate in urlCandidates) {
+            if (candidate.isBlank()) continue
+            epidFromBangumiPlayUrl(candidate)?.let { return it }
+        }
+        return 0L
+    }
+
+    private fun epidFromBangumiPlayUrl(url: String): Long? {
+        val match = Regex("""/ep(\d+)""").find(url) ?: return null
+        return match.groupValues.getOrNull(1)?.toLongOrNull()
+    }
 }

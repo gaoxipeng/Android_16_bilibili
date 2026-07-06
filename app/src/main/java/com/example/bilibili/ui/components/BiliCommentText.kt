@@ -10,19 +10,45 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.bilibili.ui.theme.BiliBlue
+import com.example.bilibili.util.BiliLinkTarget
+import com.example.bilibili.util.BiliTextLinkParser
 
 private val MentionPattern = Regex("""@([^ @:：\n]+)""")
+
+private data class CommentLinkRange(
+    val start: Int,
+    val end: Int,
+    val target: BiliLinkTarget,
+)
+
+private fun commentLinkRanges(text: String): List<CommentLinkRange> {
+    val segments = BiliTextLinkParser.parse(text)
+    val ranges = mutableListOf<CommentLinkRange>()
+    var cursor = 0
+    for (segment in segments) {
+        val start = cursor
+        cursor += segment.text.length
+        val target = segment.target ?: continue
+        ranges += CommentLinkRange(start = start, end = cursor, target = target)
+    }
+    return ranges
+}
 
 @Composable
 fun BiliCommentText(
@@ -31,12 +57,16 @@ fun BiliCommentText(
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     mentionColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+    linkColor: Color = BiliBlue,
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
+    onLinkClick: ((BiliLinkTarget) -> Unit)? = null,
 ) {
     val phrases = remember(emoticons) { emoticons.keys.sortedByDescending { it.length } }
     val hasMentions = remember(text) { MentionPattern.containsMatchIn(text) }
-    if (emoticons.isEmpty() && !hasMentions) {
+    val linkRanges = remember(text) { commentLinkRanges(text) }
+    val hasLinks = linkRanges.isNotEmpty()
+    if (emoticons.isEmpty() && !hasMentions && !hasLinks) {
         Text(
             text = text,
             style = style,
@@ -84,6 +114,39 @@ fun BiliCommentText(
                     append(mention.value)
                 }
                 index = mention.range.last + 1
+                continue
+            }
+            val linkRange = linkRanges.firstOrNull { it.start == index }
+            if (linkRange != null) {
+                val linkText = text.substring(linkRange.start, linkRange.end)
+                if (onLinkClick != null) {
+                    withLink(
+                        LinkAnnotation.Clickable(
+                            tag = "link-${linkRange.start}",
+                            styles = TextLinkStyles(
+                                style = SpanStyle(
+                                    color = linkColor,
+                                    textDecoration = TextDecoration.Underline,
+                                ),
+                            ),
+                            linkInteractionListener = {
+                                onLinkClick(linkRange.target)
+                            },
+                        ),
+                    ) {
+                        append(linkText)
+                    }
+                } else {
+                    withStyle(
+                        SpanStyle(
+                            color = linkColor,
+                            textDecoration = TextDecoration.Underline,
+                        ),
+                    ) {
+                        append(linkText)
+                    }
+                }
+                index = linkRange.end
                 continue
             }
             append(text[index])

@@ -78,8 +78,10 @@ import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.ui.components.ActionFrostedCard
 import com.example.bilibili.ui.components.ActionMenuReveal
 import com.example.bilibili.ui.components.ActionMenuRow
+import com.example.bilibili.ui.components.ActionMenuSurfaceColor
 import com.example.bilibili.ui.components.ActionMenuThreeRowHeight
 import com.example.bilibili.ui.components.ActionMenuTwoRowHeight
+import com.example.bilibili.ui.components.ImageActionMenuBlurRadius
 import com.example.bilibili.ui.components.rememberActionMenuWidth
 import com.example.bilibili.ui.components.calculateActionMenuOffsetFromPointPx
 import com.example.bilibili.ui.components.computeActionMenuOriginInMenu
@@ -693,6 +695,11 @@ private fun ZoomableFullscreenImage(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .background(Color.Black),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
                             .pointerInput(image.largeUrl, containerWidthPx, containerHeightPx, imageAspect, maxZoomScale) {
                                 awaitEachGesture {
                                     var velocityTracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
@@ -1132,6 +1139,8 @@ private fun BoxScope.FullscreenImageActionMenu(
         ActionFrostedCard(
             modifier = Modifier.fillMaxSize(),
             backdrop = backdrop,
+            effectBlurRadius = ImageActionMenuBlurRadius,
+            effectContainerColor = ActionMenuSurfaceColor,
         ) {
             ActionMenuRow(
                 label = "保存",

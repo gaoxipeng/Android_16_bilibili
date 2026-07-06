@@ -88,9 +88,26 @@ data class BiliVideoItem(
     val publishTimeSeconds: Long = 0L,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
+    val epid: Long = 0L,
+    val playbackReferer: String = "",
 ) {
     val isPortraitVideo: Boolean
         get() = videoWidth > 0 && videoHeight > 0 && videoHeight > videoWidth
+
+    fun isPgcPlayback(): Boolean = epid > 0L || bvid.startsWith("pgc")
+
+    fun pgcEpid(): Long = when {
+        epid > 0L -> epid
+        bvid.startsWith("pgc:") -> bvid.removePrefix("pgc:").substringBefore('-').toLongOrNull() ?: 0L
+        else -> 0L
+    }
+
+    fun playbackId(): String = when {
+        bvid.isNotBlank() -> bvid
+        epid > 0L -> "pgc:$epid"
+        aid > 0L -> "av:$aid"
+        else -> title
+    }
 }
 
 data class BiliLiveRoom(
@@ -101,6 +118,62 @@ data class BiliLiveRoom(
     val userFace: String,
     val online: Long,
     val areaName: String = "",
+)
+
+data class BiliLiveArea(
+    val id: Long,
+    val name: String,
+    val parentId: Long = 0L,
+)
+
+data class BiliLiveRoomPage(
+    val rooms: List<BiliLiveRoom>,
+    val page: Int,
+    val hasMore: Boolean,
+)
+
+data class BiliLiveQuality(
+    val qn: Int,
+    val label: String,
+)
+
+data class BiliLivePlayResult(
+    val roomId: Long,
+    val realRoomId: Long,
+    val anchorUid: Long,
+    val liveStatus: Int,
+    val streamUrl: String,
+    val currentQn: Int,
+    val qualities: List<BiliLiveQuality>,
+) {
+    val isLive: Boolean get() = liveStatus == 1
+}
+
+data class BiliLiveRoomDetail(
+    val roomId: Long,
+    val title: String,
+    val coverUrl: String,
+    val userName: String,
+    val userFace: String,
+    val anchorUid: Long,
+    val online: Long,
+    val areaName: String,
+    val parentAreaName: String,
+    val liveStatus: Int,
+    val description: String = "",
+) {
+    val isLive: Boolean get() = liveStatus == 1
+}
+
+data class BiliLiveDanmuHost(
+    val host: String,
+    val wssPort: Int,
+    val wsPort: Int,
+)
+
+data class BiliLiveDanmuInfo(
+    val token: String,
+    val hosts: List<BiliLiveDanmuHost>,
 )
 
 data class BiliUserProfile(
@@ -144,6 +217,7 @@ data class BiliVideoPage(
     val cid: Long,
     val title: String,
     val durationSeconds: Int = 0,
+    val epid: Long = 0L,
 )
 
 data class BiliUgcSeasonEpisode(
@@ -331,6 +405,7 @@ data class BiliCommentItem(
     val emoticons: Map<String, String> = emptyMap(),
     val pictures: List<BiliCommentPicture> = emptyList(),
     val replies: List<BiliCommentItem> = emptyList(),
+    val isPinned: Boolean = false,
 )
 
 data class BiliPlayInfo(
@@ -458,6 +533,134 @@ data class BiliSearchUserItem(
     val level: Int,
 )
 
+data class BiliSearchBangumi(
+    val seasonId: Long,
+    val mediaId: Long = 0L,
+    val title: String,
+    val subtitle: String = "",
+    val coverUrl: String,
+    val areas: String = "",
+    val styles: String = "",
+    val badge: String = "",
+    val categoryName: String = "",
+    val indexShow: String = "",
+    val webUrl: String = "",
+    val firstEpid: Long = 0L,
+) {
+    val metadataLine: String
+        get() {
+            val parts = listOf(styles, areas, indexShow).map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.isNotEmpty()) return parts.joinToString(" · ")
+            if (categoryName.isNotBlank()) return categoryName
+            return "影视"
+        }
+
+    val canPlayInApp: Boolean get() = firstEpid > 0L
+
+    fun withFirstEpid(epid: Long): BiliSearchBangumi =
+        if (epid <= 0L || firstEpid == epid) this else copy(firstEpid = epid)
+
+    fun toVideoItem(): BiliVideoItem {
+        val syntheticBvid = when {
+            firstEpid > 0L -> "pgc:$firstEpid"
+            seasonId > 0L -> "pgc-season:$seasonId"
+            else -> ""
+        }
+        return BiliVideoItem(
+            bvid = syntheticBvid,
+            aid = 0L,
+            title = title,
+            coverUrl = coverUrl,
+            authorName = metadataLine,
+            authorMid = 0L,
+            viewCount = 0L,
+            danmakuCount = 0L,
+            likeCount = 0L,
+            durationSeconds = 0,
+            description = subtitle,
+            epid = firstEpid,
+            playbackReferer = webUrl,
+        )
+    }
+
+    companion object {
+        fun categoryDisplayPriority(categoryName: String): Int = when (categoryName) {
+            "番剧" -> 0
+            "国创" -> 1
+            "纪录片" -> 2
+            "电影" -> 3
+            "电视剧" -> 4
+            "综艺" -> 5
+            "影视" -> 6
+            else -> 99
+        }
+
+        fun sortedForDisplay(items: List<BiliSearchBangumi>): List<BiliSearchBangumi> =
+            items.withIndex().sortedWith { left, right ->
+                val leftPriority = categoryDisplayPriority(left.value.categoryName)
+                val rightPriority = categoryDisplayPriority(right.value.categoryName)
+                if (leftPriority != rightPriority) {
+                    leftPriority.compareTo(rightPriority)
+                } else {
+                    left.index.compareTo(right.index)
+                }
+            }.map { it.value }
+
+        fun availableCategories(items: List<BiliSearchBangumi>): List<String> =
+            items.map { it.categoryName }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .sortedBy { categoryDisplayPriority(it) }
+    }
+}
+
+data class BiliPGCEpisodeContext(
+    val epid: Long,
+    val seasonId: Long,
+    val seasonTitle: String,
+    val episodeTitle: String,
+    val longTitle: String,
+    val aid: Long,
+    val bvid: String,
+    val cid: Long,
+    val coverUrl: String,
+    val durationSeconds: Int,
+    val evaluate: String = "",
+    val styles: String = "",
+    val areas: String = "",
+    val pages: List<BiliVideoPage> = emptyList(),
+) {
+    fun displayTitle(): String {
+        val season = seasonTitle.trim()
+        val episode = longTitle.ifBlank { episodeTitle }.trim()
+        return when {
+            season.isNotBlank() && episode.isNotBlank() && season != episode -> "$season · $episode"
+            season.isNotBlank() -> season
+            else -> episode
+        }
+    }
+
+    fun metadataLine(): String {
+        val parts = listOf(styles, areas).map { it.trim() }.filter { it.isNotEmpty() }
+        return parts.joinToString(" · ")
+    }
+}
+
+enum class BiliHistoryBusiness {
+    Archive,
+    Pgc,
+    Unknown,
+    ;
+
+    companion object {
+        fun from(raw: String): BiliHistoryBusiness = when (raw) {
+            "archive" -> Archive
+            "pgc" -> Pgc
+            else -> Unknown
+        }
+    }
+}
+
 data class BiliHistoryCursor(
     val max: Long,
     val viewAt: Long,
@@ -469,9 +672,11 @@ data class BiliHistoryCursor(
 
 data class BiliHistoryItem(
     val kid: String,
+    val business: BiliHistoryBusiness = BiliHistoryBusiness.Archive,
     val bvid: String,
     val aid: Long,
     val cid: Long,
+    val epid: Long = 0L,
     val page: Int = 0,
     val partTitle: String = "",
     val title: String,
@@ -479,24 +684,42 @@ data class BiliHistoryItem(
     val authorName: String,
     val authorMid: Long,
     val authorFace: String = "",
+    val badge: String = "",
+    val webUri: String = "",
     val viewAtSeconds: Long,
     val progressSeconds: Int,
     val durationSeconds: Int,
 ) {
-    fun toVideoItem(): BiliVideoItem = BiliVideoItem(
-        bvid = bvid,
-        aid = aid,
-        cid = cid,
-        title = title,
-        coverUrl = coverUrl,
-        authorName = authorName,
-        authorMid = authorMid,
-        authorFace = authorFace,
-        viewCount = 0L,
-        danmakuCount = 0L,
-        likeCount = 0L,
-        durationSeconds = durationSeconds,
-    )
+    fun displayAuthorName(): String =
+        authorName.ifBlank { badge }.ifBlank {
+            if (business == BiliHistoryBusiness.Pgc) "影视" else ""
+        }
+
+    fun toVideoItem(): BiliVideoItem {
+        val syntheticBvid = when {
+            bvid.isNotBlank() -> bvid
+            epid > 0L -> "pgc:$epid"
+            cid > 0L -> "pgc-cid:$cid"
+            aid > 0L -> "pgc-aid:$aid"
+            else -> ""
+        }
+        return BiliVideoItem(
+            bvid = syntheticBvid,
+            aid = aid,
+            cid = cid,
+            epid = epid,
+            title = title,
+            coverUrl = coverUrl,
+            authorName = displayAuthorName(),
+            authorMid = authorMid,
+            authorFace = authorFace,
+            viewCount = 0L,
+            danmakuCount = 0L,
+            likeCount = 0L,
+            durationSeconds = durationSeconds,
+            playbackReferer = webUri,
+        )
+    }
 }
 
 data class BiliHistoryPage(

@@ -52,6 +52,7 @@ import com.example.bilibili.data.BiliCommentSort
 import com.example.bilibili.data.BiliDynamicIpWebResolver
 import com.example.bilibili.data.BiliDynamicItem
 import com.example.bilibili.data.BiliUserProfile
+import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
@@ -77,6 +78,8 @@ import com.example.bilibili.ui.components.resolveShownCommentReplies
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.format.formatBiliPublishTime
 import com.example.bilibili.ui.theme.BiliPink
+import com.example.bilibili.util.BiliLinkTarget
+import com.example.bilibili.util.ExternalUrlOpener
 import com.example.bilibili.player.StatusBarIconsEffect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -99,6 +102,7 @@ fun DynamicDetailScreen(
     credential: BilibiliCredential?,
     onBack: () -> Unit,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
+    onOpenVideo: (BiliVideoItem, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -124,6 +128,42 @@ fun DynamicDetailScreen(
     val listState = rememberLazyListState()
     val commentsLoadMutex = remember(item.id) { Mutex() }
     var commentsNearEndLoaded by remember(item.id, commentSort) { mutableStateOf(false) }
+
+    val handleCommentLinkClick: (BiliLinkTarget) -> Unit = { target ->
+        when (target) {
+            is BiliLinkTarget.UserSpace -> {
+                onAuthorClick(
+                    BiliUserProfile(
+                        mid = target.mid,
+                        name = "",
+                        face = "",
+                        sign = "",
+                        level = 0,
+                    ),
+                )
+            }
+            is BiliLinkTarget.Video -> {
+                onOpenVideo(
+                    BiliVideoItem(
+                        bvid = target.bvid,
+                        aid = target.aid,
+                        title = "",
+                        coverUrl = "",
+                        authorName = detailItem.authorName,
+                        authorMid = detailItem.authorMid,
+                        viewCount = 0,
+                        danmakuCount = 0,
+                        likeCount = 0,
+                        durationSeconds = 0,
+                    ),
+                    target.partPage,
+                )
+            }
+            is BiliLinkTarget.External -> {
+                ExternalUrlOpener.open(context, target.url)
+            }
+        }
+    }
 
     suspend fun loadComments(reset: Boolean) {
         if (item.commentOid <= 0L || item.commentType <= 0) return
@@ -424,6 +464,7 @@ fun DynamicDetailScreen(
                                 comment = entry.comment,
                                 depth = 0,
                                 onAuthorClick = onAuthorClick,
+                                onLinkClick = handleCommentLinkClick,
                                 onCommentImageClick = { pictures, index, bounds ->
                                     commentImageViewer = DynamicCommentImageViewerRequest(
                                         images = pictures.map(BiliViewerImage::fromCommentPicture),
@@ -438,6 +479,7 @@ fun DynamicDetailScreen(
                                 comment = entry.reply,
                                 depth = 1,
                                 onAuthorClick = onAuthorClick,
+                                onLinkClick = handleCommentLinkClick,
                                 onCommentImageClick = { pictures, index, bounds ->
                                     commentImageViewer = DynamicCommentImageViewerRequest(
                                         images = pictures.map(BiliViewerImage::fromCommentPicture),

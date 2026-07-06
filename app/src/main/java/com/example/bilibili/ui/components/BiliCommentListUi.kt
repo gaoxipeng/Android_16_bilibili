@@ -28,6 +28,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -157,14 +159,90 @@ fun shouldShowCommentText(content: String, pictures: List<BiliCommentPicture>): 
 }
 
 @Composable
+fun BiliPinnedCommentBadge(modifier: Modifier = Modifier) {
+    Text(
+        text = "置顶",
+        modifier = modifier
+            .background(BiliPink, RoundedCornerShape(3.dp))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+        color = Color.White,
+        fontSize = 9.sp,
+        lineHeight = 10.sp,
+        fontWeight = FontWeight.Medium,
+    )
+}
+
+@Composable
+fun BiliUpAuthorBadge(modifier: Modifier = Modifier) {
+    Text(
+        text = "UP",
+        modifier = modifier
+            .background(BiliPink, RoundedCornerShape(3.dp))
+            .padding(horizontal = 3.dp, vertical = 1.dp),
+        color = Color.White,
+        fontSize = 8.sp,
+        lineHeight = 10.sp,
+        fontWeight = FontWeight.Bold,
+    )
+}
+
+@Composable
+fun CommentAuthorHeaderRow(
+    authorName: String,
+    level: Int,
+    isVideoAuthor: Boolean,
+    isPinned: Boolean,
+    onClick: () -> Unit,
+    canOpenProfile: Boolean,
+) {
+    Row(
+        modifier = Modifier.clickable(enabled = canOpenProfile, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = authorName,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = BiliCommentAuthorFontSize,
+            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false)),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (level > 0) {
+            BiliUserLevelIcon(
+                level = level,
+                modifier = Modifier.padding(horizontal = 2.dp),
+                width = 22.dp,
+                height = 14.dp,
+            )
+        }
+        if (isVideoAuthor || isPinned) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (isVideoAuthor) {
+                    BiliUpAuthorBadge()
+                }
+                if (isPinned) {
+                    BiliPinnedCommentBadge()
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun BiliCommentRow(
     comment: BiliCommentItem,
     depth: Int = 0,
+    videoAuthorMid: Long = 0L,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
     onCommentImageClick: (List<BiliCommentPicture>, Int, Rect) -> Unit = { _, _, _ -> },
+    onLinkClick: ((com.example.bilibili.util.BiliLinkTarget) -> Unit)? = null,
 ) {
     val rowStart = BiliCommentRowOuterStart + (depth * 24).dp
     val canOpenProfile = comment.authorMid > 0L
+    val isVideoAuthor = videoAuthorMid > 0L && comment.authorMid == videoAuthorMid
     val openProfile = {
         if (canOpenProfile) {
             onAuthorClick(
@@ -197,26 +275,20 @@ fun BiliCommentRow(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Row(
-                modifier = Modifier.clickable(enabled = canOpenProfile, onClick = openProfile),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = comment.authorName,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = BiliCommentAuthorFontSize,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (comment.level > 0) {
-                    BiliUserLevelIcon(level = comment.level)
-                }
-            }
+            CommentAuthorHeaderRow(
+                authorName = comment.authorName,
+                level = comment.level,
+                isVideoAuthor = isVideoAuthor,
+                isPinned = comment.isPinned,
+                onClick = openProfile,
+                canOpenProfile = canOpenProfile,
+            )
             if (shouldShowCommentText(comment.content, comment.pictures)) {
                 BiliCommentText(
                     text = comment.content,
                     emoticons = comment.emoticons,
                     style = MaterialTheme.typography.bodyMedium,
+                    onLinkClick = onLinkClick,
                 )
             }
             if (comment.pictures.isNotEmpty()) {

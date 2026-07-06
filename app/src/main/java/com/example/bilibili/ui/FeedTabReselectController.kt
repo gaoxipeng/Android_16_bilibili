@@ -43,7 +43,7 @@ internal class FeedTabReselectController {
         val FEED_RESELECT_TABS = setOf(
             MainTab.Home,
             MainTab.Following,
-            MainTab.Hot,
+            MainTab.Live,
             MainTab.History,
         )
     }

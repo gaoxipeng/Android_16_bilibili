@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.input.pointer.pointerInput
@@ -485,8 +486,8 @@ fun SurfaceLiquidMenuCard(
                     shape = { shape },
                     effects = {
                         vibrancy()
-                        blur(blurRadius.toPx())
                         lens(12f.dp.toPx(), 24f.dp.toPx())
+                        blur(blurRadius.toPx(), TileMode.Decal)
                     },
                     highlight = null,
                     shadow = null,

@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -127,6 +128,16 @@ class BilibiliApiClient {
         video: BiliVideoItem,
         credential: BilibiliCredential? = null,
     ): BiliVideoItem {
+        if (video.isPgcPlayback()) {
+            val epid = video.pgcEpid()
+            if (epid > 0L) {
+                val context = getPgcEpisodeContext(epid, credential)
+                if (context != null) {
+                    return mergePgcContextToVideo(context, video)
+                }
+            }
+            return video
+        }
         val detail = getVideoDetail(video.bvid, credential) ?: return video
         val targetCid = resolveTargetCid(video.cid, detail.pages)
             ?: detail.video.cid.takeIf { it > 0L }
@@ -167,6 +178,16 @@ class BilibiliApiClient {
         item: BiliHistoryItem,
         credential: BilibiliCredential? = null,
     ): BiliVideoItem {
+        if (item.business == BiliHistoryBusiness.Pgc) {
+            val epid = item.epid.takeIf { it > 0L } ?: 0L
+            if (epid > 0L) {
+                val context = getPgcEpisodeContext(epid, credential)
+                if (context != null) {
+                    return mergePgcContextToVideo(context, item.toVideoItem())
+                }
+            }
+            return item.toVideoItem()
+        }
         val detail = getVideoDetail(item.bvid, credential)
         val targetCid = resolveTargetCid(
             explicitCid = item.cid,
@@ -185,6 +206,195 @@ class BilibiliApiClient {
         }
         return resolveVideoForPlayback(base, credential)
     }
+
+    suspend fun getPgcEpisodeContext(
+        epid: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliPGCEpisodeContext? = withContext(Dispatchers.IO) {
+        if (epid <= 0L) return@withContext null
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.PGC_SEASON,
+                params = mapOf("ep_id" to epid.toString()),
+                credential = credential,
+                referer = "https://www.bilibili.com/bangumi/play/ep$epid",
+            ).let { BilibiliJsonParser.parsePgcEpisodeContext(it, epid) }
+        }.getOrNull()
+    }
+
+    suspend fun getPgcVideoDetail(
+        epid: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliVideoDetail? {
+        val context = getPgcEpisodeContext(epid, credential) ?: return null
+        val loaded = getVideoDetail(context.bvid, credential) ?: return null
+        val mergedVideo = mergePgcContextToVideo(
+            context,
+            loaded.video.copy(
+                epid = context.epid,
+                playbackReferer = "https://www.bilibili.com/bangumi/play/ep${context.epid}",
+            ),
+        )
+        return loaded.copy(
+            video = mergedVideo,
+            pages = context.pages.ifEmpty { loaded.pages },
+        )
+    }
+
+    suspend fun getPgcPlayUrl(
+        epid: Long,
+        cid: Long = 0L,
+        credential: BilibiliCredential? = null,
+        referer: String = BilibiliEndpoints.HOME,
+    ): BiliPlayStream? = withContext(Dispatchers.IO) {
+        if (epid <= 0L && cid <= 0L) return@withContext null
+        suspend fun request(fnval: String, useV2: Boolean): BiliPlayStream? = runCatching {
+            val params = mutableMapOf(
+                "qn" to "80",
+                "fnval" to fnval,
+                "fnver" to "0",
+                "fourk" to "1",
+                "drm_tech_type" to "2",
+                "from_client" to "BROWSER",
+            )
+            if (epid > 0L) params["ep_id"] = epid.toString()
+            if (cid > 0L) params["cid"] = cid.toString()
+            val url = if (useV2) BilibiliEndpoints.PGC_PLAYURL_V2 else BilibiliEndpoints.PGC_PLAYURL
+            getJson(url, params, credential, referer = referer)
+                .let(BilibiliJsonParser::parsePlayUrl)
+        }.getOrNull()
+
+        val stream = request(fnval = "4048", useV2 = true)
+            ?: request(fnval = "16", useV2 = false)
+            ?: request(fnval = "1", useV2 = false)
+        stream?.copy(cid = cid.takeIf { it > 0L } ?: stream.cid)
+    }
+
+    suspend fun pgcSeasonFirstEpid(
+        seasonId: Long,
+        credential: BilibiliCredential? = null,
+    ): Long = withContext(Dispatchers.IO) {
+        if (seasonId <= 0L) return@withContext 0L
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.PGC_SEASON,
+                params = mapOf("season_id" to seasonId.toString()),
+                credential = credential,
+                referer = "https://www.bilibili.com/bangumi/play/ss$seasonId",
+            ).let(BilibiliJsonParser::parsePgcSeasonFirstEpid)
+        }.getOrDefault(0L)
+    }
+
+    suspend fun enrichPinnedMediaItems(
+        items: List<BiliSearchBangumi>,
+        credential: BilibiliCredential? = null,
+    ): List<BiliSearchBangumi> {
+        if (items.isEmpty()) return items
+        val enriched = items.toMutableList()
+        items.withIndex()
+            .filter { (_, item) -> item.firstEpid <= 0L && item.seasonId > 0L }
+            .take(16)
+            .forEach { (index, item) ->
+                val epid = pgcSeasonFirstEpid(item.seasonId, credential)
+                if (epid > 0L) {
+                    enriched[index] = enriched[index].withFirstEpid(epid)
+                }
+            }
+        return enriched
+    }
+
+    suspend fun searchPgcMedia(
+        keyword: String,
+        searchType: String,
+        page: Int = 1,
+        credential: BilibiliCredential? = null,
+    ): BiliSearchResultPage<BiliSearchBangumi> = withContext(Dispatchers.IO) {
+        val refererPath = if (searchType == "media_ft") "movie" else "bangumi"
+        runCatching {
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.SEARCH_TYPE,
+                params = mapOf(
+                    "search_type" to searchType,
+                    "keyword" to keyword,
+                    "page" to page.coerceAtLeast(1).toString(),
+                ),
+                credential = credential,
+                referer = "https://search.bilibili.com/$refererPath?keyword=${encode(keyword)}",
+            ).let(BilibiliJsonParser::parseSearchBangumiPage)
+        }.getOrDefault(BiliSearchResultPage.empty())
+    }
+
+    suspend fun searchAllPgcMedia(
+        keyword: String,
+        credential: BilibiliCredential? = null,
+    ): List<BiliSearchBangumi> = withContext(Dispatchers.IO) {
+        runCatching {
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.SEARCH_ALL,
+                params = mapOf("keyword" to keyword),
+                credential = credential,
+                referer = "https://search.bilibili.com/all?keyword=${encode(keyword)}",
+            ).let(BilibiliJsonParser::parseSearchAllPgcMedia)
+        }.getOrDefault(emptyList())
+    }
+
+    private suspend fun fetchPgcSearchPage(
+        keyword: String,
+        searchType: String,
+        page: Int,
+        credential: BilibiliCredential?,
+    ): BiliSearchResultPage<BiliSearchBangumi> {
+        searchPgcMedia(keyword, searchType, page, credential).takeIf { it.items.isNotEmpty() }
+            ?.let { return it }
+        delay(250)
+        return searchPgcMedia(keyword, searchType, page, credential)
+    }
+
+    suspend fun searchPinnedMedia(
+        keyword: String,
+        page: Int = 1,
+        credential: BilibiliCredential? = null,
+    ): BiliSearchResultPage<BiliSearchBangumi> = withContext(Dispatchers.IO) {
+        val resolvedPage = page.coerceAtLeast(1)
+        val allResults = if (resolvedPage == 1) {
+            searchAllPgcMedia(keyword, credential)
+        } else {
+            emptyList()
+        }
+        val bangumiPage = fetchPgcSearchPage(keyword, "media_bangumi", resolvedPage, credential)
+        val ftPage = fetchPgcSearchPage(keyword, "media_ft", resolvedPage, credential)
+        val merged = mutableListOf<BiliSearchBangumi>()
+        val seen = mutableSetOf<Long>()
+        for (item in allResults + bangumiPage.items + ftPage.items) {
+            if (seen.add(item.seasonId)) {
+                merged += item
+            }
+        }
+        val sorted = BiliSearchBangumi.sortedForDisplay(merged)
+        val enriched = enrichPinnedMediaItems(sorted, credential)
+        BiliSearchResultPage(
+            items = enriched,
+            page = resolvedPage,
+            hasMore = bangumiPage.hasMore || ftPage.hasMore,
+        )
+    }
+
+    private fun mergePgcContextToVideo(
+        context: BiliPGCEpisodeContext,
+        base: BiliVideoItem,
+    ): BiliVideoItem = base.copy(
+        bvid = context.bvid,
+        aid = context.aid,
+        cid = context.cid,
+        epid = context.epid,
+        title = context.displayTitle().ifBlank { base.title },
+        coverUrl = context.coverUrl.ifBlank { base.coverUrl },
+        authorName = context.metadataLine().ifBlank { base.authorName },
+        durationSeconds = context.durationSeconds.takeIf { it > 0 } ?: base.durationSeconds,
+        playbackReferer = base.playbackReferer.ifBlank {
+            "https://www.bilibili.com/bangumi/play/ep${context.epid}"
+        },
+    )
 
     private fun resolveTargetCid(
         explicitCid: Long,
@@ -1240,22 +1450,192 @@ class BilibiliApiClient {
 
     suspend fun getLiveHotRank(): List<BiliLiveRoom> =
         withContext(Dispatchers.IO) {
-            getJson(BilibiliEndpoints.LIVE_HOT_RANK, emptyMap())
+            val rooms = getJson(BilibiliEndpoints.LIVE_HOT_RANK, emptyMap())
                 .let(BilibiliJsonParser::parseLiveHotRank)
+            enrichLiveRoomDetails(rooms)
+        }
+
+    private suspend fun enrichLiveRoomDetails(rooms: List<BiliLiveRoom>): List<BiliLiveRoom> {
+        if (rooms.isEmpty()) return rooms
+        return coroutineScope {
+            rooms.map { room ->
+                async {
+                    if (room.coverUrl.isNotBlank() && !room.coverUrl.contains("/bfs/face/")) {
+                        return@async room
+                    }
+                    runCatching {
+                        val json = getJson(
+                            url = BilibiliEndpoints.LIVE_ROOM_GET_INFO,
+                            params = mapOf("room_id" to room.roomId.toString()),
+                        )
+                        val (cover, online) = BilibiliJsonParser.parseLiveRoomInfoBrief(json)
+                        room.copy(
+                            coverUrl = cover.ifBlank { room.coverUrl },
+                            online = when {
+                                room.online > 0L -> room.online
+                                online > 0L -> online
+                                else -> room.online
+                            },
+                        )
+                    }.getOrDefault(room)
+                }
+            }.awaitAll()
+        }
+    }
+
+    suspend fun getLiveAreas(): List<BiliLiveArea> =
+        withContext(Dispatchers.IO) {
+            getJson(BilibiliEndpoints.LIVE_AREA_GET_LIST, emptyMap())
+                .let(BilibiliJsonParser::parseLiveAreas)
+        }
+
+    suspend fun getLiveRoomList(
+        parentAreaId: Long = 0L,
+        areaId: Long = 0L,
+        page: Int = 1,
+        sortType: String = "",
+        credential: BilibiliCredential? = null,
+    ): BiliLiveRoomPage =
+        withContext(Dispatchers.IO) {
+            val params = mutableMapOf(
+                "platform" to "web",
+                "parent_area_id" to parentAreaId.toString(),
+                "area_id" to areaId.toString(),
+                "page" to page.toString(),
+                "web_location" to "444.253",
+            )
+            if (sortType.isNotBlank()) {
+                params["sort_type"] = sortType
+            }
+            BiliLiveWebIdResolver.resolve(client, parentAreaId, areaId)?.let { webId ->
+                params["w_webid"] = webId
+            }
+            val referer =
+                "${BilibiliEndpoints.LIVE_AREA_TAGS}?areaId=$areaId&parentAreaId=$parentAreaId"
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.LIVE_ROOM_LIST,
+                params = params,
+                credential = credential,
+                referer = referer,
+            ).let(BilibiliJsonParser::parseLiveRoomPage)
+        }
+
+    suspend fun getLiveFollowingRooms(
+        credential: BilibiliCredential,
+        needRecommend: Boolean = true,
+    ): List<BiliLiveRoom> =
+        withContext(Dispatchers.IO) {
+            getJson(
+                url = BilibiliEndpoints.LIVE_FOLLOWING,
+                params = mapOf(
+                    "need_recommend" to if (needRecommend) "1" else "0",
+                    "filterRule" to "0",
+                ),
+                credential = credential,
+                referer = BilibiliEndpoints.HOME,
+            ).let(BilibiliJsonParser::parseLiveFollowing)
         }
 
     suspend fun getLiveAreaList(page: Int = 1): List<BiliLiveRoom> =
+        getLiveRoomList(page = page).rooms
+
+    suspend fun getLiveRoomDetail(
+        roomId: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliLiveRoomDetail? =
         withContext(Dispatchers.IO) {
-            getWbiJsonOnCurrentThread(
-                url = BilibiliEndpoints.LIVE_ROOM_LIST,
-                params = mapOf(
-                    "platform" to "web",
-                    "parent_area_id" to "0",
-                    "area_id" to "0",
-                    "page" to page.toString(),
-                ),
-            ).let(BilibiliJsonParser::parseLiveAreaList)
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.LIVE_ROOM_INFO_BY_ROOM,
+                    params = mapOf("room_id" to roomId.toString()),
+                    credential = credential,
+                    referer = liveRoomReferer(roomId),
+                ).let(BilibiliJsonParser::parseLiveRoomDetail)
+            }.getOrNull()
         }
+
+    suspend fun getLivePlayInfo(
+        roomId: Long,
+        qn: Int = 10_000,
+        credential: BilibiliCredential? = null,
+    ): BiliLivePlayResult? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = BilibiliEndpoints.LIVE_ROOM_PLAY_INFO_V2,
+                    params = mapOf(
+                        "room_id" to roomId.toString(),
+                        "platform" to "web",
+                        "ptype" to "16",
+                        "protocol" to "0,1",
+                        "format" to "0,1,2",
+                        "codec" to "0,1",
+                        "qn" to qn.toString(),
+                    ),
+                    credential = credential,
+                    referer = liveRoomReferer(roomId),
+                ).let { json -> BilibiliJsonParser.parseLivePlayInfo(json, preferredQn = qn) }
+            }.getOrNull()
+        }
+
+    suspend fun getLiveDanmuInfo(
+        realRoomId: Long,
+        credential: BilibiliCredential? = null,
+    ): BiliLiveDanmuInfo? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getWbiJsonOnCurrentThread(
+                    url = BilibiliEndpoints.LIVE_DANMU_INFO,
+                    params = mapOf(
+                        "id" to realRoomId.toString(),
+                        "type" to "0",
+                        "web_location" to "444.8",
+                    ),
+                    credential = credential,
+                    referer = liveRoomReferer(realRoomId),
+                ).let(BilibiliJsonParser::parseLiveDanmuInfo)
+            }.getOrNull()
+        }
+
+    suspend fun sendLiveDanmaku(
+        roomId: Long,
+        message: String,
+        credential: BilibiliCredential,
+    ): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                postForm(
+                    url = "https://api.live.bilibili.com/msg/send",
+                    form = mapOf(
+                        "roomid" to roomId.toString(),
+                        "msg" to message,
+                        "rnd" to System.currentTimeMillis().toString(),
+                        "csrf" to credential.biliJct,
+                        "csrf_token" to credential.biliJct,
+                    ),
+                    credential = credential,
+                    referer = liveRoomReferer(roomId),
+                )
+                true
+            }.getOrDefault(false)
+        }
+
+    suspend fun sendLiveHeartbeat(realRoomId: Long, displayRoomId: Long) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val hb = java.util.Base64.getEncoder()
+                    .encodeToString("60|$realRoomId|1|0".toByteArray())
+                getJson(
+                    url = BilibiliEndpoints.LIVE_HEARTBEAT_WEB,
+                    params = mapOf("pf" to "web", "hb" to hb),
+                    referer = liveRoomReferer(displayRoomId),
+                )
+            }
+        }
+    }
+
+    private fun liveRoomReferer(roomId: Long): String =
+        "${BilibiliEndpoints.LIVE_HOME}$roomId"
 
     private suspend fun getWbiJsonOnCurrentThread(
         url: String,

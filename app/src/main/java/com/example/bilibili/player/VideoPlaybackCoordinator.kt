@@ -120,6 +120,18 @@ class VideoPlaybackCoordinator(
     private val fullscreenPauseHandlers = mutableMapOf<String, () -> Unit>()
     private val peekPauseHandlers = mutableMapOf<String, () -> Unit>()
     private val handoffPrepareHandlers = mutableSetOf<(String) -> Unit>()
+    private val keepScreenOnOwners = mutableSetOf<String>()
+    var keepScreenOnRequested by mutableStateOf(false)
+        private set
+
+    fun setKeepScreenOn(playbackKey: String, enabled: Boolean) {
+        if (enabled) {
+            keepScreenOnOwners += playbackKey
+        } else {
+            keepScreenOnOwners -= playbackKey
+        }
+        keepScreenOnRequested = keepScreenOnOwners.isNotEmpty()
+    }
 
     fun registerHandoffPrepareHandler(handler: (String) -> Unit) {
         handoffPrepareHandlers += handler
@@ -203,6 +215,8 @@ class VideoPlaybackCoordinator(
 
     fun stopPlayback() {
         playbackStopping = true
+        keepScreenOnOwners.clear()
+        keepScreenOnRequested = false
         pauseAll()
         handoffKey?.let { key ->
             handoffPlayer?.let { player ->

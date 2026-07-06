@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -151,6 +152,8 @@ internal fun calculateFeedCardActionMenuOffsetPx(
 
 internal val ActionMenuCornerRadius = 22.dp
 internal val ActionMenuBlurRadius = 36.dp
+internal val ImageActionMenuBlurRadius = 16.dp
+internal val ActionMenuSurfaceColor = Color(0x8AF0F0F0)
 internal val ActionSheetBlurRadius = 80.dp
 internal val ActionMenuCardInset = 5.dp
 internal val ActionMenuItemGap = 3.dp

@@ -846,7 +846,7 @@ fun UserProfileScreen(
                                                 items(uiState.videos, key = { it.bvid }) { video ->
                                                     VideoFeedCard(
                                                         video = video,
-                                                        playStream = playUrls[video.bvid],
+                                                        playStream = playUrls[video.playbackId()],
                                                         coordinator = coordinator,
                                                         onClick = { onVideoClick(video) },
                                                         onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -898,7 +898,7 @@ fun UserProfileScreen(
                                                 items(uiState.videos, key = { it.bvid }) { video ->
                                                     VideoFeedCard(
                                                         video = video,
-                                                        playStream = playUrls[video.bvid],
+                                                        playStream = playUrls[video.playbackId()],
                                                         coordinator = coordinator,
                                                         onClick = { onVideoClick(video) },
                                                         onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -1826,7 +1826,11 @@ private fun ProfileAuthorNameRow(
                 overflow = TextOverflow.Ellipsis,
             )
             if (level > 0) {
-                BiliUserLevelIcon(level = level)
+                BiliUserLevelIcon(
+                    level = level,
+                    width = 30.dp,
+                    height = 19.dp,
+                )
             }
         }
         if (wallet != null) {

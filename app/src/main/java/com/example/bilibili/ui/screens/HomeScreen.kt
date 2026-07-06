@@ -20,8 +20,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -118,6 +120,10 @@ fun HomeScreen(
     pullRefreshState: PullToRefreshState = rememberPullToRefreshState(),
     showEmbeddedPullRefreshIndicator: Boolean = true,
     feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
+    listState: LazyListState = rememberLazyListState(),
+    staggeredGridState: LazyStaggeredGridState = rememberLazyStaggeredGridState(),
+    bindFeedTabReselect: Boolean = true,
+    enablePullToRefresh: Boolean = true,
 ) {
     if (!loggedIn) {
         Box(
@@ -138,13 +144,11 @@ fun HomeScreen(
     }
 
     val useSingleColumn = feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE
-    val listState = rememberLazyListState()
-    val staggeredGridState = rememberLazyStaggeredGridState()
     var showSearch by remember { mutableStateOf(true) }
     val feedTab = LocalFeedTabForReselect.current
     val feedTabReselectController = LocalFeedTabReselectController.current
 
-    if (feedTab != null && feedTabReselectController != null) {
+    if (bindFeedTabReselect && feedTab != null && feedTabReselectController != null) {
         if (useSingleColumn) {
             BindFeedTabReselectEffect(
                 tab = feedTab,
@@ -215,26 +219,76 @@ fun HomeScreen(
         )
     }
 
-    PullToRefreshBox(
-        isRefreshing = loading,
-        onRefresh = onPullRefresh,
-        state = pullRefreshState,
-        indicator = {
-            if (showEmbeddedPullRefreshIndicator) {
-                PullToRefreshDefaults.Indicator(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .zIndex(2f),
-                    isRefreshing = loading,
-                    state = pullRefreshState,
-                )
-            }
-        },
-        modifier = modifier.fillMaxSize(),
-    ) {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
+    val feedContent: @Composable () -> Unit = {
+        HomeFeedContent(
+            useSingleColumn = useSingleColumn,
+            listState = listState,
+            staggeredGridState = staggeredGridState,
+            contentPadding = contentPadding,
+            showSearchBar = showSearchBar,
+            videos = videos,
+            playUrls = playUrls,
+            loading = loading,
+            loadingMore = loadingMore,
+            error = error,
+            emptyHint = emptyHint,
+            onVideoClick = onVideoClick,
+            onEnsurePlayStream = onEnsurePlayStream,
+            onAuthorClick = onAuthorClick,
+            coordinator = coordinator,
+        )
+    }
+
+    if (enablePullToRefresh) {
+        PullToRefreshBox(
+            isRefreshing = loading,
+            onRefresh = onPullRefresh,
+            state = pullRefreshState,
+            indicator = {
+                if (showEmbeddedPullRefreshIndicator) {
+                    PullToRefreshDefaults.Indicator(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .zIndex(2f),
+                        isRefreshing = loading,
+                        state = pullRefreshState,
+                    )
+                }
+            },
+            modifier = modifier.fillMaxSize(),
+        ) {
+            feedContent()
+        }
+    } else {
+        Box(modifier = modifier.fillMaxSize()) {
+            feedContent()
+        }
+    }
+}
+
+@Composable
+private fun HomeFeedContent(
+    useSingleColumn: Boolean,
+    listState: LazyListState,
+    staggeredGridState: LazyStaggeredGridState,
+    contentPadding: PaddingValues,
+    showSearchBar: Boolean,
+    videos: List<BiliVideoItem>,
+    playUrls: Map<String, BiliPlayStream>,
+    loading: Boolean,
+    loadingMore: Boolean,
+    error: String?,
+    emptyHint: String?,
+    onVideoClick: (BiliVideoItem) -> Unit,
+    onEnsurePlayStream: (BiliVideoItem) -> Unit,
+    onAuthorClick: (Long) -> Unit,
+    coordinator: VideoPlaybackCoordinator,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier.fillMaxSize()) {
             val listContentHeight = maxHeight
-            val feedTopPadding = contentPadding.calculateTopPadding() + HomeSearchBarReservedHeight
+            val feedTopPadding = contentPadding.calculateTopPadding() +
+                if (showSearchBar) HomeSearchBarReservedHeight else 0.dp
             val feedBottomPadding = contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve
 
             if (useSingleColumn) {
@@ -283,7 +337,7 @@ fun HomeScreen(
                             items(videos, key = { it.bvid }) { video ->
                                 VideoFeedCard(
                                     video = video,
-                                    playStream = playUrls[video.bvid],
+                                    playStream = playUrls[video.playbackId()],
                                     coordinator = coordinator,
                                     onClick = { onVideoClick(video) },
                                     onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -354,7 +408,7 @@ fun HomeScreen(
                             items(videos, key = { it.bvid }) { video ->
                                 VideoFeedCard(
                                     video = video,
-                                    playStream = playUrls[video.bvid],
+                                    playStream = playUrls[video.playbackId()],
                                     coordinator = coordinator,
                                     onClick = { onVideoClick(video) },
                                     onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -379,7 +433,6 @@ fun HomeScreen(
                 }
             }
         }
-    }
 }
 
 @Composable

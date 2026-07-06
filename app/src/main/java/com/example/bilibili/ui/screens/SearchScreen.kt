@@ -1,6 +1,10 @@
 package com.example.bilibili.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -69,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bilibili.data.BiliHotSearchItem
 import com.example.bilibili.data.BiliPlayStream
+import com.example.bilibili.data.BiliSearchBangumi
 import com.example.bilibili.data.BiliSearchUserItem
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
@@ -77,12 +82,15 @@ import com.example.bilibili.data.SearchHistoryStore
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.ui.components.BiliUserLevelIcon
 import com.example.bilibili.ui.components.RemoteImage
+import com.example.bilibili.ui.components.SearchBangumiCard
 import com.example.bilibili.ui.components.SlidingTextTabs
 import com.example.bilibili.ui.components.VideoFeedCard
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.theme.BiliPink
 import com.kyant.backdrop.backdrops.layerBackdrop
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -140,6 +148,11 @@ fun SearchScreen(
     var userLoading by remember { mutableStateOf(false) }
     var videoLoadingMore by remember { mutableStateOf(false) }
     var userLoadingMore by remember { mutableStateOf(false) }
+    var pinnedMedia by remember { mutableStateOf<List<BiliSearchBangumi>>(emptyList()) }
+    var pinnedMediaPage by remember { mutableIntStateOf(1) }
+    var pinnedMediaHasMore by remember { mutableStateOf(false) }
+    var pinnedMediaLoading by remember { mutableStateOf(false) }
+    var pinnedMediaLoadingMore by remember { mutableStateOf(false) }
     var resultError by remember { mutableStateOf<String?>(null) }
     var searchGeneration by remember { mutableIntStateOf(0) }
     var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
@@ -160,10 +173,13 @@ fun SearchScreen(
         searchHistory = searchHistoryStore.touch(normalized)
         videos = emptyList()
         users = emptyList()
+        pinnedMedia = emptyList()
         videoPage = 1
         userPage = 1
+        pinnedMediaPage = 1
         videoHasMore = false
         userHasMore = false
+        pinnedMediaHasMore = false
         resultError = null
         searchGeneration++
         focusManager.clearFocus()
@@ -242,6 +258,57 @@ fun SearchScreen(
         }
     }
 
+    suspend fun loadPinnedMedia(reset: Boolean, generation: Int) {
+        val query = activeQuery ?: return
+        if (generation != searchGeneration) return
+        if (reset) {
+            pinnedMediaLoading = true
+            pinnedMediaPage = 1
+        } else {
+            if (pinnedMediaLoadingMore || !pinnedMediaHasMore) return
+            pinnedMediaLoadingMore = true
+        }
+        try {
+            val page = if (reset) 1 else pinnedMediaPage + 1
+            val result = api.searchPinnedMedia(query, page, credential)
+            if (generation != searchGeneration) return
+            if (reset) {
+                pinnedMedia = result.items.distinctBy { it.seasonId }
+                pinnedMediaPage = result.page
+            } else {
+                val seen = pinnedMedia.map { it.seasonId }.toMutableSet()
+                pinnedMedia = pinnedMedia + result.items.filter { seen.add(it.seasonId) }
+                pinnedMediaPage = result.page
+            }
+            pinnedMediaHasMore = result.hasMore
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            if (generation == searchGeneration && reset) {
+                pinnedMedia = emptyList()
+                pinnedMediaHasMore = false
+            }
+        } finally {
+            if (generation == searchGeneration) {
+                pinnedMediaLoading = false
+                pinnedMediaLoadingMore = false
+            }
+        }
+    }
+
+    fun openBangumi(bangumi: BiliSearchBangumi) {
+        if (bangumi.canPlayInApp) {
+            onVideoClick(bangumi.toVideoItem())
+            return
+        }
+        val webUrl = bangumi.webUrl.trim()
+        if (webUrl.isNotBlank()) {
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)))
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
         hotLoading = true
@@ -266,8 +333,23 @@ fun SearchScreen(
     LaunchedEffect(activeQuery, searchGeneration) {
         val generation = searchGeneration
         if (activeQuery == null) return@LaunchedEffect
-        loadVideos(reset = true, generation = generation)
-        loadUsers(reset = true, generation = generation)
+        coroutineScope {
+            launch { loadVideos(reset = true, generation = generation) }
+            launch { loadPinnedMedia(reset = true, generation = generation) }
+            launch { loadUsers(reset = true, generation = generation) }
+        }
+    }
+
+    LaunchedEffect(searchGeneration) {
+        videoListState.scrollToItem(0)
+        videoStaggeredGridState.scrollToItem(0)
+    }
+
+    LaunchedEffect(pinnedMedia, searchGeneration) {
+        if (pinnedMedia.isNotEmpty()) {
+            videoListState.animateScrollToItem(0)
+            videoStaggeredGridState.animateScrollToItem(0)
+        }
     }
 
     LaunchedEffect(videoListState, videoStaggeredGridState, useSingleColumnVideos, activeQuery, searchGeneration, videoHasMore) {
@@ -418,37 +500,77 @@ fun SearchScreen(
             ) { page ->
                 when (SearchContentTab.entries[page]) {
                     SearchContentTab.Videos -> {
+                        val isWaitingPinned = pinnedMediaLoading && pinnedMedia.isEmpty()
+                        val isInitialLoading = videos.isEmpty() &&
+                            pinnedMedia.isEmpty() &&
+                            (videoLoading || pinnedMediaLoading)
+                        val isSettlingPinned = isWaitingPinned && videos.isNotEmpty()
                         when {
-                            videoLoading && videos.isEmpty() -> {
+                            isInitialLoading || isSettlingPinned -> {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     CircularProgressIndicator()
                                 }
                             }
-                            videos.isEmpty() && !videoLoading -> {
+                            videos.isEmpty() && pinnedMedia.isEmpty() && !videoLoading && !pinnedMediaLoading -> {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     Text(
-                                        text = "没有找到相关视频",
+                                        text = "没有找到相关结果",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                             }
                             else -> {
+                                val horizontalPadding = if (useSingleColumnVideos) {
+                                    HomeFeedSingleColumnHorizontalPadding
+                                } else {
+                                    HomeFeedGridHorizontalPadding
+                                }
+                                val showPinnedSection = pinnedMedia.isNotEmpty()
                                 if (useSingleColumnVideos) {
                                     LazyColumn(
                                         state = videoListState,
                                         modifier = Modifier.fillMaxSize(),
                                         contentPadding = PaddingValues(
-                                            start = HomeFeedSingleColumnHorizontalPadding,
-                                            end = HomeFeedSingleColumnHorizontalPadding,
+                                            start = horizontalPadding,
+                                            end = horizontalPadding,
                                             top = 8.dp,
                                             bottom = 24.dp,
                                         ),
                                         verticalArrangement = Arrangement.spacedBy(HomeFeedSingleColumnSpacing),
                                     ) {
+                                        if (showPinnedSection) {
+                                            item(key = "pinned-media") {
+                                                SearchPinnedMediaSection(
+                                                    media = pinnedMedia,
+                                                    columnCount = 1,
+                                                    hasMore = pinnedMediaHasMore,
+                                                    loadingMore = pinnedMediaLoadingMore,
+                                                    onBangumiClick = ::openBangumi,
+                                                    onLoadMore = {
+                                                        scope.launch {
+                                                            loadPinnedMedia(
+                                                                reset = false,
+                                                                generation = searchGeneration,
+                                                            )
+                                                        }
+                                                    },
+                                                )
+                                            }
+                                        }
+                                        if (videos.isNotEmpty() && showPinnedSection) {
+                                            item(key = "video-results-header") {
+                                                Text(
+                                                    text = "相关视频",
+                                                    modifier = Modifier.padding(bottom = 4.dp),
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                )
+                                            }
+                                        }
                                         items(videos, key = { it.bvid }) { video ->
                                             VideoFeedCard(
                                                 video = video,
-                                                playStream = playUrls[video.bvid],
+                                                playStream = playUrls[video.playbackId()],
                                                 coordinator = coordinator,
                                                 onClick = { onVideoClick(video) },
                                                 onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -470,18 +592,53 @@ fun SearchScreen(
                                         state = videoStaggeredGridState,
                                         modifier = Modifier.fillMaxSize(),
                                         contentPadding = PaddingValues(
-                                            start = HomeFeedGridHorizontalPadding,
-                                            end = HomeFeedGridHorizontalPadding,
+                                            start = horizontalPadding,
+                                            end = horizontalPadding,
                                             top = 8.dp,
                                             bottom = 24.dp,
                                         ),
                                         horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
                                         verticalItemSpacing = HomeFeedGridSpacing,
                                     ) {
+                                        if (showPinnedSection) {
+                                            item(
+                                                key = "pinned-media",
+                                                span = StaggeredGridItemSpan.FullLine,
+                                            ) {
+                                                SearchPinnedMediaSection(
+                                                    media = pinnedMedia,
+                                                    columnCount = 2,
+                                                    hasMore = pinnedMediaHasMore,
+                                                    loadingMore = pinnedMediaLoadingMore,
+                                                    onBangumiClick = ::openBangumi,
+                                                    onLoadMore = {
+                                                        scope.launch {
+                                                            loadPinnedMedia(
+                                                                reset = false,
+                                                                generation = searchGeneration,
+                                                            )
+                                                        }
+                                                    },
+                                                )
+                                            }
+                                        }
+                                        if (videos.isNotEmpty() && showPinnedSection) {
+                                            item(
+                                                key = "video-results-header",
+                                                span = StaggeredGridItemSpan.FullLine,
+                                            ) {
+                                                Text(
+                                                    text = "相关视频",
+                                                    modifier = Modifier.padding(bottom = 4.dp),
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                )
+                                            }
+                                        }
                                         items(videos, key = { it.bvid }) { video ->
                                             VideoFeedCard(
                                                 video = video,
-                                                playStream = playUrls[video.bvid],
+                                                playStream = playUrls[video.playbackId()],
                                                 coordinator = coordinator,
                                                 onClick = { onVideoClick(video) },
                                                 onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -938,7 +1095,11 @@ private fun SearchUserRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (user.level > 0) {
-                    BiliUserLevelIcon(level = user.level)
+                    BiliUserLevelIcon(
+                        level = user.level,
+                        width = 24.dp,
+                        height = 15.dp,
+                    )
                 }
             }
             Text(
@@ -959,4 +1120,145 @@ private fun SearchUserRow(
             }
         }
     }
+}
+
+@Composable
+private fun SearchPinnedMediaSection(
+    media: List<BiliSearchBangumi>,
+    columnCount: Int,
+    hasMore: Boolean,
+    loadingMore: Boolean,
+    onBangumiClick: (BiliSearchBangumi) -> Unit,
+    onLoadMore: () -> Unit,
+) {
+    var isExpanded by remember(media) { mutableStateOf(false) }
+    var selectedCategory by remember(media) { mutableStateOf<String?>(null) }
+    val categories = remember(media) { BiliSearchBangumi.availableCategories(media) }
+    val filteredMedia = remember(media, selectedCategory) {
+        selectedCategory?.let { category ->
+            media.filter { it.categoryName == category }
+        } ?: media
+    }
+    val previewCount = columnCount.coerceAtLeast(1)
+    val visibleMedia = if (isExpanded) {
+        filteredMedia
+    } else {
+        filteredMedia.take(previewCount)
+    }
+    val canExpand = !isExpanded && (filteredMedia.size > previewCount || hasMore)
+    val canCollapse = isExpanded && (filteredMedia.size > previewCount || hasMore)
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "相关作品",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.weight(1f))
+            if (canExpand) {
+                TextButton(onClick = { isExpanded = true }) {
+                    Text("展开", color = BiliPink)
+                }
+            } else if (canCollapse) {
+                TextButton(onClick = { isExpanded = false }) {
+                    Text("收起", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        if (categories.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SearchPinnedCategoryChip(
+                    title = "全部",
+                    selected = selectedCategory == null,
+                    onClick = { selectedCategory = null },
+                )
+                categories.forEach { category ->
+                    SearchPinnedCategoryChip(
+                        title = category,
+                        selected = selectedCategory == category,
+                        onClick = { selectedCategory = category },
+                    )
+                }
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+        }
+
+        if (visibleMedia.isEmpty() && selectedCategory != null) {
+            Text(
+                text = "暂无${selectedCategory}相关结果",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 20.dp),
+            )
+        } else {
+            val rows = visibleMedia.chunked(columnCount.coerceAtLeast(1))
+            Column(verticalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing)) {
+                rows.forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(HomeFeedGridSpacing),
+                    ) {
+                        row.forEach { bangumi ->
+                            SearchBangumiCard(
+                                bangumi = bangumi,
+                                onClick = { onBangumiClick(bangumi) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        repeat(columnCount - row.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+            if (isExpanded && hasMore && selectedCategory == null) {
+                if (loadingMore) {
+                    SearchLoadingMoreIndicator()
+                } else {
+                    TextButton(
+                        onClick = onLoadMore,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("加载更多", color = BiliPink)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun SearchPinnedCategoryChip(
+    title: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(6.dp)
+    Text(
+        text = title,
+        modifier = Modifier
+            .clip(shape)
+            .background(
+                if (selected) BiliPink.copy(alpha = 0.12f) else Color(0x0D000000),
+                shape,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        color = if (selected) BiliPink else MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }

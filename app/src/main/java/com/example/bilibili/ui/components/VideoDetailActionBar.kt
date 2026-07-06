@@ -122,6 +122,7 @@ fun VideoDetailActionBar(
             label = formatBiliCount(likeCount),
             tint = if (liked) BiliBlue else BiliVideoActionInactive,
             enabled = enabled,
+            ringProgress = displayProgress,
             onHoldStart = { isLikeHolding = true },
             onHoldEnd = { shortTap ->
                 isLikeHolding = false
@@ -161,6 +162,7 @@ private fun VideoDetailLikeActionItem(
     label: String,
     tint: Color,
     enabled: Boolean,
+    ringProgress: Float = 0f,
     onHoldStart: () -> Unit,
     onHoldEnd: (shortTap: Boolean) -> Unit,
 ) {
@@ -221,6 +223,9 @@ private fun VideoDetailLikeActionItem(
                 ),
             contentAlignment = Alignment.Center,
         ) {
+            if (ringProgress > RingVisibleThreshold) {
+                TripleHoldProgressRing(progress = ringProgress)
+            }
             Icon(
                 painter = painterResource(R.drawable.ic_bili_like_filled),
                 contentDescription = null,

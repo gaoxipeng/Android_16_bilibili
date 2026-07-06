@@ -670,7 +670,7 @@ fun HistoryScreen(
                                     items(favoriteVideos, key = { it.bvid }) { video ->
                                         VideoFeedCard(
                                             video = video,
-                                            playStream = playUrls[video.bvid],
+                                            playStream = playUrls[video.playbackId()],
                                             coordinator = coordinator,
                                             onClick = { onVideoClick(video) },
                                             onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -708,7 +708,7 @@ fun HistoryScreen(
                                     items(favoriteVideos, key = { it.bvid }) { video ->
                                         VideoFeedCard(
                                             video = video,
-                                            playStream = playUrls[video.bvid],
+                                            playStream = playUrls[video.playbackId()],
                                             coordinator = coordinator,
                                             onClick = { onVideoClick(video) },
                                             onEnsurePlayStream = { onEnsurePlayStream(video) },
@@ -821,7 +821,8 @@ private fun HistoryItemRow(
                     fontWeight = FontWeight.Medium,
                     lineHeight = 18.sp,
                 )
-                if (item.authorName.isNotBlank() || item.authorFace.isNotBlank() || canOpenAuthor) {
+                val authorLabel = item.displayAuthorName()
+                if (authorLabel.isNotBlank() || item.authorFace.isNotBlank() || canOpenAuthor) {
                     Spacer(Modifier.height(6.dp))
                     Row(
                         modifier = Modifier
@@ -832,13 +833,15 @@ private fun HistoryItemRow(
                             ),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        VideoFeedAuthorAvatar(
-                            faceUrl = item.authorFace,
-                            authorName = item.authorName,
-                        )
-                        Spacer(Modifier.width(6.dp))
+                        if (item.authorFace.isNotBlank() || canOpenAuthor) {
+                            VideoFeedAuthorAvatar(
+                                faceUrl = item.authorFace,
+                                authorName = authorLabel,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
                         Text(
-                            text = item.authorName.ifBlank { "UP主" },
+                            text = authorLabel.ifBlank { "UP主" },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,

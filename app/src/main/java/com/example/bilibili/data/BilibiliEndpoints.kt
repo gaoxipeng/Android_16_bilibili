@@ -56,9 +56,28 @@ object BilibiliEndpoints {
     const val DANMAKU_XML = "https://comment.bilibili.com"
     const val LIVE_HOT_RANK = "https://api.live.bilibili.com/xlive/web-interface/v1/index/getHotRankList"
     const val LIVE_ROOM_LIST = "https://api.live.bilibili.com/xlive/web-interface/v1/second/getList"
+    const val LIVE_AREA_GET_LIST = "https://api.live.bilibili.com/room/v1/Area/getList"
+    const val LIVE_FOLLOWING = "https://api.live.bilibili.com/xlive/app-interface/v1/relation/liveAnchor"
+    const val LIVE_ROOM_GET_INFO = "https://api.live.bilibili.com/room/v1/Room/get_info"
+    const val LIVE_ROOM_PLAY_INFO_V2 =
+        "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo"
+    const val LIVE_ROOM_PLAY_INFO_V1 =
+        "https://api.live.bilibili.com/xlive/web-room/v1/index/getRoomPlayInfo"
+    const val LIVE_ROOM_INFO_BY_ROOM =
+        "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
+    const val LIVE_DANMU_INFO =
+        "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
+    const val LIVE_HEARTBEAT_WEB =
+        "https://live-trace.bilibili.com/xlive/rdata-interface/v1/heartbeat/webHeartBeat"
+    const val LIVE_HOME = "https://live.bilibili.com/"
+    const val LIVE_AREA_TAGS = "https://live.bilibili.com/p/eden/area-tags"
     const val SEARCH_TYPE = "https://api.bilibili.com/x/web-interface/wbi/search/type"
+    const val SEARCH_ALL = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2"
     const val SEARCH_HOTWORD = "https://s.search.bilibili.com/main/hotword"
     const val SEARCH_SUGGEST = "https://s.search.bilibili.com/main/suggest"
+    const val PGC_SEASON = "https://api.bilibili.com/pgc/view/web/season"
+    const val PGC_PLAYURL_V2 = "https://api.bilibili.com/pgc/player/web/v2/playurl"
+    const val PGC_PLAYURL = "https://api.bilibili.com/pgc/player/web/playurl"
 
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
