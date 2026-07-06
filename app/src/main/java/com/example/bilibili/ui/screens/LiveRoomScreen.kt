@@ -173,6 +173,7 @@ fun LiveRoomScreen(
     coordinator: VideoPlaybackCoordinator,
     onBack: () -> Unit,
     onOpenAnchorProfile: (mid: Long, name: String, face: String) -> Unit = { _, _, _ -> },
+    navOverlayOpen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -218,12 +219,27 @@ fun LiveRoomScreen(
         LiveDanmakuClient(api = api, roomId = room.roomId, credential = credential)
     }
 
-    BackHandler {
+    var pausedForNavOverlay by remember(room.roomId) { mutableStateOf(false) }
+
+    BackHandler(enabled = !navOverlayOpen) {
         when {
             showDanmakuSettings -> showDanmakuSettings = false
             isFullscreen -> isFullscreen = false
             liveInfoCleared -> liveInfoCleared = false
             else -> onBack()
+        }
+    }
+
+    LaunchedEffect(navOverlayOpen) {
+        if (navOverlayOpen) {
+            pausedForNavOverlay = true
+            exoPlayer.pause()
+            danmakuClient.disconnect()
+        } else if (pausedForNavOverlay) {
+            pausedForNavOverlay = false
+            val info = playInfo ?: return@LaunchedEffect
+            exoPlayer.play()
+            runCatching { danmakuClient.connect(info) }
         }
     }
 

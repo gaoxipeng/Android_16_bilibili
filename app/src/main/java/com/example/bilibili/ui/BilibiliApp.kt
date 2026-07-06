@@ -904,6 +904,7 @@ fun BilibiliApp() {
                         showEmbeddedPullRefreshIndicator = true,
                         onLiveRoomOpenChange = { liveRoomOpen = it },
                         onOpenAnchorProfile = { mid, name, face -> openUserProfile(mid, name, face) },
+                        navOverlayOpen = navOverlayOpen,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -1291,6 +1292,7 @@ private fun AppNavEntryContent(
             )
         }
         is AppNavEntry.UserProfile -> {
+            BackHandler(enabled = isActive, onBack = onPopNav)
             UserProfileScreen(
                 mid = entry.mid,
                 seedName = entry.name,
