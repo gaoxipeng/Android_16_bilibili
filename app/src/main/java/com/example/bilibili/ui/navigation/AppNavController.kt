@@ -89,6 +89,10 @@ fun List<AppNavEntry>.topVideoDetail(): AppNavEntry.VideoDetail? =
 fun List<AppNavEntry>.lastVideoDetail(): AppNavEntry.VideoDetail? =
     lastOrNull { it is AppNavEntry.VideoDetail } as? AppNavEntry.VideoDetail
 
-fun List<AppNavEntry>.findVideoDetail(playbackId: String): BiliVideoItem? =
+fun List<AppNavEntry>.findVideoDetail(playbackId: String): BiliVideoItem? {
     lastOrNull { it is AppNavEntry.VideoDetail && it.video.playbackId() == playbackId }
+        ?.let { return (it as AppNavEntry.VideoDetail).video }
+    val bvid = playbackId.substringBefore(":cid:")
+    return lastOrNull { it is AppNavEntry.VideoDetail && it.video.bvid == bvid }
         ?.let { (it as AppNavEntry.VideoDetail).video }
+}

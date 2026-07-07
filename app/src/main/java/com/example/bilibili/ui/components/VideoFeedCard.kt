@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.sp
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.player.InlineVideoCard
-import com.example.bilibili.player.LocalVideoPeekController
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.liquidglass.TintedLiquidCapsule
@@ -230,12 +229,8 @@ private fun VideoFeedGridCard(
     val shape = RoundedCornerShape(VideoFeedCardCorner)
     val cardBackdrop = rememberLayerBackdrop()
     val coverTint = rememberCoverAverageColor(video.coverUrl)
-    val playbackKey = videoPlaybackKey(video.bvid)
-    val videoPeekController = LocalVideoPeekController.current
-    val isVideoPeekActive = videoPeekController.activeRequest?.video?.bvid == video.bvid
-    val showCoverOverlay = !isVideoPeekActive &&
-        coordinator.fullscreenKey != playbackKey &&
-        coordinator.peekPlaybackKey != playbackKey
+    val playbackKey = videoPlaybackKey(video.playbackId())
+    val showCoverOverlay = coordinator.fullscreenKey != playbackKey
 
     ElevatedCard(
         modifier = modifier
@@ -367,13 +362,9 @@ private fun VideoFeedOverlayCard(
     val coverTint = rememberCoverAverageColor(video.coverUrl)
     val overlayTextColor = remember(coverTint) { coverTint.contrastingOverlayTextColor() }
     val overlaySubtextColor = overlayTextColor.copy(alpha = 0.88f)
-    val playbackKey = videoPlaybackKey(video.bvid)
-    val videoPeekController = LocalVideoPeekController.current
-    val isVideoPeekActive = videoPeekController.activeRequest?.video?.bvid == video.bvid
-    val showMetaOverlay = !isVideoPeekActive &&
-        coordinator.activeKey != playbackKey &&
-        coordinator.fullscreenKey != playbackKey &&
-        coordinator.peekPlaybackKey != playbackKey
+    val playbackKey = videoPlaybackKey(video.playbackId())
+    val showMetaOverlay = coordinator.activeKey != playbackKey &&
+        coordinator.fullscreenKey != playbackKey
 
     Box(
         modifier = modifier

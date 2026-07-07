@@ -78,6 +78,8 @@ object BilibiliJsonParser {
             ugcSeason = parseUgcSeason(data) ?: parseUgcSeasonFromSeasonId(data),
             pages = parsedPages,
             userRelation = parseVideoReqUser(data),
+            seasonId = data.optLong("season_id"),
+            isSeasonDisplay = data.optBoolean("is_season_display", false),
         )
     }
 
@@ -356,7 +358,7 @@ object BilibiliJsonParser {
         val cntInfo = item.optJSONObject("cnt_info") ?: JSONObject()
         return BiliVideoItem(
             bvid = bvid,
-            aid = item.optLong("id"),
+            aid = 0L,
             title = item.optString("title"),
             coverUrl = normalizeImageUrl(item.optString("cover")),
             authorName = upper.optString("name"),
@@ -796,9 +798,34 @@ object BilibiliJsonParser {
     }
 
     private fun JSONObject.pickStreamUrl(type: String): String? {
-        val stream = optJSONArray(type)?.optJSONObject(0) ?: return null
-        return stream.optJSONArray("backup_url")?.optString(0)?.takeIf { it.isNotBlank() }
-            ?: stream.optString("baseUrl").takeIf { it.isNotBlank() }
+        val array = optJSONArray(type) ?: return null
+        val candidates = buildList {
+            for (index in 0 until array.length()) {
+                val stream = array.optJSONObject(index) ?: continue
+                val codecs = stream.optString("codecs")
+                if (type == "video" && codecs.startsWith("mp4a", ignoreCase = true)) continue
+                add(stream)
+            }
+        }
+        val ordered = if (type == "video") {
+            candidates.sortedBy { stream ->
+                when {
+                    stream.optString("codecs").contains("avc1", ignoreCase = true) -> 0
+                    stream.optString("codecs").contains("avc", ignoreCase = true) -> 1
+                    stream.optString("codecs").contains("hev", ignoreCase = true) -> 2
+                    stream.optString("codecs").contains("av01", ignoreCase = true) -> 3
+                    else -> 4
+                }
+            }
+        } else {
+            candidates
+        }
+        for (stream in ordered) {
+            val url = stream.optJSONArray("backup_url")?.optString(0)?.takeIf { it.isNotBlank() }
+                ?: stream.optString("baseUrl").takeIf { it.isNotBlank() }
+            if (!url.isNullOrBlank()) return url
+        }
+        return null
     }
 
     fun parseMyInfo(json: JSONObject): BiliUserProfile? {
@@ -2500,7 +2527,18 @@ object BilibiliJsonParser {
         )
     }
 
-    private fun parsePgcEpidFromUri(uri: String): Long? {
+    fun parseWatchHistoryProgress(json: JSONObject, durationSeconds: Int = 0): Int? {
+        if (json.optInt("code", -1) != 0) return null
+        val data = json.optJSONObject("data") ?: return null
+        var progress = data.optLong("progress")
+        if (progress <= 0L) return null
+        if (durationSeconds > 0 && progress > durationSeconds * 2L) {
+            progress /= 1000L
+        }
+        return progress.toInt().coerceAtLeast(0)
+    }
+
+    fun parsePgcEpidFromUri(uri: String): Long? {
         if (uri.isBlank()) return null
         val marker = "ep"
         var start = uri.indexOf(marker)

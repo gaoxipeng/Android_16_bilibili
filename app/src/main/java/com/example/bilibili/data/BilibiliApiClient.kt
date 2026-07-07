@@ -179,14 +179,24 @@ class BilibiliApiClient {
         credential: BilibiliCredential? = null,
     ): BiliVideoItem {
         if (item.business == BiliHistoryBusiness.Pgc) {
-            val epid = item.epid.takeIf { it > 0L } ?: 0L
+            val epid = item.epid.takeIf { it > 0L }
+                ?: BilibiliJsonParser.parsePgcEpidFromUri(item.webUri)
+                ?: 0L
+            val base = item.toVideoItem().copy(
+                epid = epid,
+                bvid = when {
+                    item.bvid.isNotBlank() -> item.bvid
+                    epid > 0L -> "pgc:$epid"
+                    else -> ""
+                },
+            )
             if (epid > 0L) {
                 val context = getPgcEpisodeContext(epid, credential)
                 if (context != null) {
-                    return mergePgcContextToVideo(context, item.toVideoItem())
+                    return mergePgcContextToVideo(context, base)
                 }
             }
-            return item.toVideoItem()
+            return base
         }
         val detail = getVideoDetail(item.bvid, credential)
         val targetCid = resolveTargetCid(
@@ -415,11 +425,11 @@ class BilibiliApiClient {
         pages: List<BiliVideoPage>,
         partPage: Int = 0,
     ): Long? {
-        explicitCid.takeIf { it > 0L }?.let { return it }
         if (partPage > 0) {
             pages.find { it.page == partPage }?.cid?.takeIf { it > 0L }?.let { return it }
             pages.getOrNull(partPage - 1)?.cid?.takeIf { it > 0L }?.let { return it }
         }
+        explicitCid.takeIf { it > 0L }?.let { return it }
         return null
     }
 
@@ -461,14 +471,25 @@ class BilibiliApiClient {
         detail: BiliVideoDetail,
         credential: BilibiliCredential? = null,
     ): BiliVideoDetail {
-        val season = detail.ugcSeason ?: return detail
-        if (!season.needsHydration()) return detail
+        var season = detail.ugcSeason
+        if (season == null && detail.isSeasonDisplay && detail.seasonId > 0L) {
+            val mid = detail.video.authorMid
+            if (mid > 0L) {
+                season = getUgcSeasonArchives(
+                    mid = mid,
+                    seasonId = detail.seasonId,
+                    credential = credential,
+                )
+            }
+        }
+        if (season == null) return detail
+        if (!season.needsHydration()) return detail.copy(ugcSeason = season)
         val mid = season.mid.takeIf { it > 0L } ?: detail.video.authorMid
         val hydrated = getUgcSeasonArchives(
             mid = mid,
             seasonId = season.id,
             credential = credential,
-        ) ?: return detail
+        ) ?: return detail.copy(ugcSeason = season)
         val merged = BilibiliJsonParser.mergeUgcSeasonArchives(season, hydrated)
         return detail.copy(ugcSeason = merged)
     }
@@ -1027,6 +1048,8 @@ class BilibiliApiClient {
         bvid: String,
         cid: Long,
         credential: BilibiliCredential? = null,
+        aid: Long = 0L,
+        referer: String = "https://www.bilibili.com/video/$bvid",
     ): BiliPlayStream? = withContext(Dispatchers.IO) {
         runCatching {
             val params = mutableMapOf(
@@ -1038,9 +1061,19 @@ class BilibiliApiClient {
                 "fourk" to "1",
                 "otype" to "json",
                 "platform" to "pc",
+                "from_client" to "BROWSER",
+                "web_location" to "1315873",
             )
-            getWbiJsonOnCurrentThread(BilibiliEndpoints.VIDEO_PLAYURL, params, credential)
-                .let(BilibiliJsonParser::parsePlayUrl)
+            if (aid > 0L) {
+                params["avid"] = aid.toString()
+            }
+            getWbiJsonOnCurrentThread(
+                url = BilibiliEndpoints.VIDEO_PLAYURL,
+                params = params,
+                credential = credential,
+                referer = referer,
+            ).let(BilibiliJsonParser::parsePlayUrl)
+                ?.copy(aid = aid, cid = cid)
         }.getOrNull()
     }
 
@@ -1441,6 +1474,91 @@ class BilibiliApiClient {
                 referer = "https://www.bilibili.com/account/history",
             ).let(BilibiliJsonParser::parseWatchHistoryPage)
         }.getOrDefault(BiliHistoryPage(emptyList(), null))
+    }
+
+    suspend fun findRecentWatchHistoryForVideo(
+        video: BiliVideoItem,
+        credential: BilibiliCredential?,
+        maxPages: Int = 6,
+    ): BiliHistoryItem? = withContext(Dispatchers.IO) {
+        val cred = credential ?: return@withContext null
+        if (video.isPgcPlayback()) return@withContext null
+        val targetBvid = video.bvid.trim()
+        val targetAid = video.aid
+        if (targetBvid.isBlank() && targetAid <= 0L) return@withContext null
+
+        var cursorMax = 0L
+        var cursorViewAt = 0L
+        var cursorBusiness = ""
+        var pageSize = 20
+        repeat(maxPages.coerceAtLeast(1)) {
+            val page = getWatchHistory(
+                credential = cred,
+                max = cursorMax,
+                viewAt = cursorViewAt,
+                business = cursorBusiness,
+                pageSize = pageSize,
+            )
+            val match = page.items.firstOrNull { item ->
+                item.business == BiliHistoryBusiness.Archive && when {
+                    targetBvid.isNotBlank() -> item.bvid == targetBvid
+                    else -> targetAid > 0L && item.aid == targetAid
+                }
+            }
+            if (match != null) return@withContext match
+
+            val cursor = page.cursor
+            if (cursor == null || !cursor.hasMore) return@withContext null
+            cursorMax = cursor.max
+            cursorViewAt = cursor.viewAt
+            cursorBusiness = cursor.business
+            pageSize = cursor.ps.takeIf { it > 0 } ?: pageSize
+        }
+        null
+    }
+
+    suspend fun getVideoWatchProgress(
+        video: BiliVideoItem,
+        credential: BilibiliCredential?,
+    ): Int? = withContext(Dispatchers.IO) {
+        val cred = credential ?: return@withContext null
+        val (oid, type, referer) = when {
+            video.isPgcPlayback() -> {
+                val epid = video.pgcEpid()
+                if (epid <= 0L) return@withContext null
+                Triple(
+                    epid,
+                    4,
+                    "https://www.bilibili.com/bangumi/play/ep$epid",
+                )
+            }
+            else -> {
+                val cid = video.cid.takeIf { it > 0L } ?: return@withContext null
+                val bvid = video.bvid
+                Triple(
+                    cid,
+                    3,
+                    if (bvid.isNotBlank()) {
+                        "https://www.bilibili.com/video/$bvid"
+                    } else {
+                        BilibiliEndpoints.HOME
+                    },
+                )
+            }
+        }
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.HISTORY_RESOURCE,
+                params = mapOf(
+                    "oid" to oid.toString(),
+                    "type" to type.toString(),
+                ),
+                credential = cred,
+                referer = referer,
+            ).let { json ->
+                BilibiliJsonParser.parseWatchHistoryProgress(json, video.durationSeconds)
+            }
+        }.getOrNull()
     }
 
     suspend fun deleteWatchHistory(

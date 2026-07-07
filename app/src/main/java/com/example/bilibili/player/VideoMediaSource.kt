@@ -102,11 +102,41 @@ fun formatVideoTime(ms: Long): String {
 fun speedLabel(speed: Float): String =
     if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x"
 
+fun resolveVideoReferer(
+    playbackMetadata: VideoPlaybackMetadata?,
+    fallback: String = BilibiliEndpoints.HOME,
+): String {
+    val bvid = playbackMetadata?.bvid?.takeIf { it.isNotBlank() } ?: return fallback
+    if (bvid.startsWith("pgc", ignoreCase = true)) return fallback
+    return "https://www.bilibili.com/video/$bvid"
+}
+
+fun resolvePlaybackReferer(
+    playbackKey: String,
+    playbackMetadata: VideoPlaybackMetadata? = null,
+    fallback: String = BilibiliEndpoints.HOME,
+): String {
+    val playbackId = playbackKey.substringAfter(':', playbackKey)
+    if (playbackId.startsWith("pgc:")) {
+        val epid = playbackId.removePrefix("pgc:")
+        if (epid.isNotBlank()) {
+            return "https://www.bilibili.com/bangumi/play/ep$epid"
+        }
+    }
+    playbackMetadata?.bvid?.takeIf { it.isNotBlank() && !it.startsWith("pgc", ignoreCase = true) }
+        ?.let { return "https://www.bilibili.com/video/$it" }
+    if (playbackId.startsWith("BV")) {
+        return "https://www.bilibili.com/video/${playbackId.substringBefore(":cid:")}"
+    }
+    return fallback
+}
+
 fun createExoPlayer(
     context: Context,
     stream: BiliPlayStream,
     startPositionMs: Long = 0L,
     playbackMetadata: VideoPlaybackMetadata? = null,
+    referer: String = resolveVideoReferer(playbackMetadata),
     onReady: (ExoPlayer) -> Unit = {},
 ): ExoPlayer {
     val audioAttributes = AudioAttributes.Builder()
@@ -118,7 +148,7 @@ fun createExoPlayer(
         .build()
         .apply {
             volume = 1f
-            setMediaSource(buildVideoMediaSource(context, stream, playbackMetadata))
+            setMediaSource(buildVideoMediaSource(context, stream, playbackMetadata, referer = referer))
             playWhenReady = true
             prepare()
             if (startPositionMs > 0L) seekTo(startPositionMs)

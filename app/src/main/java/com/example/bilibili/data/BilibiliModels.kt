@@ -243,6 +243,8 @@ data class BiliVideoDetail(
     val ugcSeason: BiliUgcSeason? = null,
     val pages: List<BiliVideoPage> = emptyList(),
     val userRelation: BiliVideoRelation = BiliVideoRelation(),
+    val seasonId: Long = 0L,
+    val isSeasonDisplay: Boolean = false,
 )
 
 data class BiliVideoPage(
@@ -732,8 +734,6 @@ data class BiliHistoryItem(
         val syntheticBvid = when {
             bvid.isNotBlank() -> bvid
             epid > 0L -> "pgc:$epid"
-            cid > 0L -> "pgc-cid:$cid"
-            aid > 0L -> "pgc-aid:$aid"
             else -> ""
         }
         return BiliVideoItem(

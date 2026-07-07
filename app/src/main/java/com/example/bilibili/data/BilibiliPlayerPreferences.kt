@@ -52,6 +52,25 @@ class BilibiliPlayerPreferences(context: Context) {
         prefs.edit().putString(KEY_LIVE_QUALITY_ID, qualityId).apply()
     }
 
+    fun readPlaybackPositionMs(playbackId: String): Long {
+        if (playbackId.isBlank()) return 0L
+        return prefs.getLong(progressPrefsKey(playbackId), 0L).coerceAtLeast(0L)
+    }
+
+    fun writePlaybackPositionMs(playbackId: String, positionMs: Long) {
+        if (playbackId.isBlank()) return
+        val key = progressPrefsKey(playbackId)
+        prefs.edit().apply {
+            if (positionMs <= 0L) {
+                remove(key)
+            } else {
+                putLong(key, positionMs)
+            }
+        }.apply()
+    }
+
+    private fun progressPrefsKey(playbackId: String) = "$KEY_PLAYBACK_POSITION_PREFIX$playbackId"
+
     private companion object {
         private const val PREFS_NAME = "bilibili_player_prefs"
         private const val KEY_BACKGROUND_PLAYBACK = "background_playback_enabled"
@@ -62,5 +81,6 @@ class BilibiliPlayerPreferences(context: Context) {
         private const val KEY_DANMAKU_SPEED = "danmaku_speed"
         private const val KEY_LIVE_QUALITY_ID = "live_quality_id"
         private const val DEFAULT_LIVE_QUALITY_ID = "auto"
+        private const val KEY_PLAYBACK_POSITION_PREFIX = "playback_pos_"
     }
 }

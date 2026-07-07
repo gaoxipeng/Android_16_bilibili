@@ -217,9 +217,11 @@ fun HistoryScreen(
     api: BilibiliApiClient,
     credential: BilibiliCredential?,
     loggedIn: Boolean,
+    reloadNonce: Int = 0,
     onLoginClick: () -> Unit,
     onHistoryItemClick: (BiliHistoryItem) -> Unit,
     onVideoClick: (BiliVideoItem) -> Unit,
+    onFavoriteVideoClick: (BiliVideoItem) -> Unit = onVideoClick,
     playUrls: Map<String, BiliPlayStream>,
     coordinator: VideoPlaybackCoordinator,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
@@ -375,7 +377,12 @@ fun HistoryScreen(
         }
     }
 
-    LaunchedEffect(pagerState.currentPage, loggedIn, credential?.dedeUserId) {
+    LaunchedEffect(reloadNonce, loggedIn, credential?.dedeUserId) {
+        if (!loggedIn || credential == null || reloadNonce <= 0) return@LaunchedEffect
+        loadHistory(reset = true)
+    }
+
+    LaunchedEffect(pagerState.currentPage, loggedIn, credential?.dedeUserId, reloadNonce) {
         if (!loggedIn || credential == null) return@LaunchedEffect
         if (pagerState.currentPage == HistoryContentTab.Favorites.ordinal && !favoritesLoaded && !favoriteLoading) {
             loadFavorites(reset = true)
@@ -672,7 +679,7 @@ fun HistoryScreen(
                                             video = video,
                                             playStream = playUrls[video.playbackId()],
                                             coordinator = coordinator,
-                                            onClick = { onVideoClick(video) },
+                                            onClick = { onFavoriteVideoClick(video) },
                                             onEnsurePlayStream = { onEnsurePlayStream(video) },
                                             onAuthorClick = { mid -> onAuthorClick(mid, video.authorName, video.authorFace) },
                                             overlayMetaOnCover = true,
@@ -710,7 +717,7 @@ fun HistoryScreen(
                                             video = video,
                                             playStream = playUrls[video.playbackId()],
                                             coordinator = coordinator,
-                                            onClick = { onVideoClick(video) },
+                                            onClick = { onFavoriteVideoClick(video) },
                                             onEnsurePlayStream = { onEnsurePlayStream(video) },
                                             onAuthorClick = { mid -> onAuthorClick(mid, video.authorName, video.authorFace) },
                                             gridStyle = true,

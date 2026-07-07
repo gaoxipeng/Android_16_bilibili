@@ -6,6 +6,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.bilibili.data.BiliPlayStream
+import com.example.bilibili.data.BiliVideoItem
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 
@@ -16,30 +17,38 @@ private const val WatchHistoryReportIntervalTicks = 20
 internal fun WatchHistoryEffect(
     stream: BiliPlayStream,
     player: ExoPlayer,
+    video: BiliVideoItem? = null,
 ) {
     val credential = LocalBilibiliCredential.current
     val reporter = LocalWatchHistoryReporter.current
     val streamState = rememberUpdatedState(stream)
+    val videoState = rememberUpdatedState(video)
     val credentialState = rememberUpdatedState(credential)
     val reporterState = rememberUpdatedState(reporter)
 
-    LaunchedEffect(player, stream.aid, stream.cid) {
-        val currentStream = streamState.value
-        if (currentStream.aid <= 0L || currentStream.cid <= 0L) return@LaunchedEffect
-
+    LaunchedEffect(player, stream.aid, stream.cid, video?.aid, video?.cid, video?.bvid) {
         suspend fun reportNow() {
             val cred = credentialState.value ?: return
             val historyReporter = reporterState.value ?: return
             val latestStream = streamState.value
-            if (latestStream.aid <= 0L || latestStream.cid <= 0L) return
+            val latestVideo = videoState.value
+            val aid = latestStream.aid.takeIf { it > 0L } ?: latestVideo?.aid ?: 0L
+            val cid = latestStream.cid.takeIf { it > 0L } ?: latestVideo?.cid ?: 0L
+            if (aid <= 0L || cid <= 0L) return
             val progressSeconds = player.currentPosition.coerceAtLeast(0L) / 1000L
             historyReporter.reportIfNeeded(
-                aid = latestStream.aid,
-                cid = latestStream.cid,
+                aid = aid,
+                cid = cid,
                 progressSeconds = progressSeconds,
                 credential = cred,
             )
         }
+
+        val currentStream = streamState.value
+        val currentVideo = videoState.value
+        val aid = currentStream.aid.takeIf { it > 0L } ?: currentVideo?.aid ?: 0L
+        val cid = currentStream.cid.takeIf { it > 0L } ?: currentVideo?.cid ?: 0L
+        if (aid <= 0L || cid <= 0L) return@LaunchedEffect
 
         var ticksSinceReport = 0
         try {

@@ -392,6 +392,15 @@ fun SearchScreen(
             }
     }
 
+    LaunchedEffect(activeQuery, videos) {
+        if (activeQuery == null) return@LaunchedEffect
+        videos.take(12).forEach { video ->
+            if (playUrls[video.playbackId()] == null) {
+                onEnsurePlayStream(video)
+            }
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         Box(
             Modifier

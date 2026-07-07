@@ -39,6 +39,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -84,6 +85,8 @@ import com.example.bilibili.player.VideoPlaybackMetadata
 import com.example.bilibili.player.rememberVideoControlBackdrop
 import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.knownVideoAspectRatio
+import com.example.bilibili.player.resolveStoredProgressSeconds
+import com.example.bilibili.player.saveResolvedProgress
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.CommentAuthorHeaderRow
 import com.example.bilibili.ui.components.BiliCommentImageStrip
@@ -115,9 +118,10 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -251,17 +255,24 @@ fun VideoDetailScreen(
     myMid: Long?,
     onLoginRequired: () -> Unit,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
-    onSwitchVideoPart: (BiliVideoPage, BiliPlayStream) -> Unit = { _, _ -> },
+    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream) -> Unit = { _, _, _ -> },
+    onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit = { _, _ -> },
     onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit = { _, _ -> },
+    episodeSwitchScope: CoroutineScope? = null,
     onOpenUgcEpisode: (BiliVideoItem) -> Unit = {},
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
     playbackActive: Boolean = true,
+    initialProgressSeconds: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val switchScope = episodeSwitchScope ?: scope
     val seedPlaybackId = seedVideo.playbackId()
     val controlBackdrop = rememberVideoControlBackdrop()
+
+    var preservedUgcSeason by remember { mutableStateOf<BiliUgcSeason?>(null) }
+    var preservedPages by remember { mutableStateOf<List<BiliVideoPage>>(emptyList()) }
 
     var detail by remember(seedPlaybackId) { mutableStateOf<BiliVideoDetail?>(null) }
     var authorCard by remember(seedPlaybackId) { mutableStateOf(placeholderAuthorCard(seedVideo)) }
@@ -451,14 +462,20 @@ fun VideoDetailScreen(
         }
     }
 
-    suspend fun resolvePagePlayStream(cid: Long, pageEpid: Long = 0L): BiliPlayStream? {
+    suspend fun resolvePagePlayStream(
+        cid: Long,
+        pageEpid: Long = 0L,
+        bvid: String = detail?.video?.bvid?.takeIf { it.isNotBlank() } ?: seedVideo.bvid,
+    ): BiliPlayStream? {
         val epid = pageEpid.takeIf { it > 0L } ?: activeEpid
         val video = detail?.video ?: seedVideo
         val targetCid = cid.takeIf { it > 0L } ?: video.cid.takeIf { it > 0L } ?: 0L
         val referer = if (epid > 0L) {
             "https://www.bilibili.com/bangumi/play/ep$epid"
         } else {
-            video.playbackReferer.ifBlank { BilibiliEndpoints.HOME }
+            video.playbackReferer.ifBlank {
+                if (bvid.isNotBlank()) "https://www.bilibili.com/video/$bvid" else BilibiliEndpoints.HOME
+            }
         }
         if (seedVideo.isPgcPlayback() || epid > 0L) {
             if (epid > 0L) {
@@ -469,8 +486,14 @@ fun VideoDetailScreen(
                     )
                 }
             }
-            if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && targetCid > 0L) {
-                api.getPlayUrl(video.bvid, targetCid, credential)?.let { stream ->
+            if (bvid.isNotBlank() && !bvid.startsWith("pgc") && targetCid > 0L) {
+                api.getPlayUrl(
+                    bvid = bvid,
+                    cid = targetCid,
+                    credential = credential,
+                    aid = video.aid.takeIf { it > 0L } ?: 0L,
+                    referer = referer,
+                )?.let { stream ->
                     return stream.copy(
                         aid = video.aid.takeIf { it > 0L } ?: stream.aid,
                         cid = targetCid,
@@ -479,7 +502,17 @@ fun VideoDetailScreen(
             }
             return null
         }
-        return api.getPlayUrl(seedVideo.bvid, targetCid, credential)
+        if (bvid.isBlank() || targetCid <= 0L) return null
+        return api.getPlayUrl(
+            bvid = bvid,
+            cid = targetCid,
+            credential = credential,
+            aid = video.aid.takeIf { it > 0L } ?: 0L,
+            referer = referer,
+        )?.copy(
+            aid = video.aid.takeIf { it > 0L } ?: 0L,
+            cid = targetCid,
+        )
     }
 
     LaunchedEffect(seedPlaybackId, activeEpid, credential?.dedeUserId) {
@@ -678,6 +711,9 @@ fun VideoDetailScreen(
     }
 
     val currentDetail = detail
+    val effectiveUgcSeason = currentDetail?.ugcSeason?.takeIf { it.shouldDisplay }
+        ?: preservedUgcSeason?.takeIf { it.shouldDisplay }
+    val effectivePages = currentDetail?.pages?.takeIf { it.size > 1 } ?: preservedPages
     val currentVideo = currentDetail?.video ?: seedVideo
     val currentStream = overridePlayStream ?: playStream
     val currentCid = currentStream?.cid?.takeIf { it > 0L } ?: activePart?.cid ?: seedVideo.cid
@@ -696,14 +732,67 @@ fun VideoDetailScreen(
         }
     }
 
-    val displayTitle = activePart?.title?.takeIf { it.isNotBlank() } ?: currentVideo.title
+    LaunchedEffect(seedPlaybackId, initialProgressSeconds, credential?.dedeUserId) {
+        if (initialProgressSeconds > 0) {
+            val resolvedVideo = api.resolveVideoForPlayback(seedVideo, credential)
+            saveResolvedProgress(
+                coordinator = coordinator,
+                playbackId = resolvedVideo.playbackId(),
+                progressSeconds = initialProgressSeconds,
+            )
+            return@LaunchedEffect
+        }
+        val resolvedVideo = api.resolveVideoForPlayback(seedVideo, credential)
+        val serverProgress = api.getVideoWatchProgress(resolvedVideo, credential) ?: 0
+        val resolvedProgress = resolveStoredProgressSeconds(
+            coordinator = coordinator,
+            playbackId = resolvedVideo.playbackId(),
+            serverProgressSeconds = serverProgress,
+        )
+        saveResolvedProgress(
+            coordinator = coordinator,
+            playbackId = resolvedVideo.playbackId(),
+            progressSeconds = resolvedProgress,
+        )
+    }
+
+    val displayTitle = activePart?.title?.takeIf { it.isNotBlank() }
+        ?: effectivePages.find { it.cid == currentCid }?.title?.takeIf { it.isNotBlank() }
+        ?: currentVideo.title
     val displayDurationSeconds = activePart?.durationSeconds?.takeIf { it > 0 }
         ?: currentVideo.durationSeconds
 
+    val historyVideo = when {
+        activePart != null -> currentVideo.copy(
+            cid = currentCid,
+            aid = currentStream?.aid?.takeIf { it > 0L } ?: currentVideo.aid,
+            title = displayTitle,
+        )
+        seedVideo.cid > 0L && seedVideo.cid == currentCid -> seedVideo
+        currentStream != null -> currentVideo.copy(
+            cid = currentCid,
+            aid = currentStream.aid.takeIf { it > 0L } ?: currentVideo.aid,
+        )
+        else -> currentVideo
+    }
+
+    LaunchedEffect(currentDetail?.ugcSeason, currentDetail?.pages) {
+        currentDetail?.ugcSeason?.takeIf { it.shouldDisplay }?.let { preservedUgcSeason = it }
+        currentDetail?.pages?.takeIf { it.size > 1 }?.let { preservedPages = it }
+    }
+
     val playbackTargetCid = activePart?.cid?.takeIf { it > 0L }
+        ?: currentCid.takeIf { it > 0L }
         ?: seedVideo.cid.takeIf { it > 0L }
-    val streamMatchesTarget = playbackTargetCid == null ||
-        currentStream?.cid?.takeIf { it > 0L } == playbackTargetCid
+    val streamMatchesTarget = when {
+        overridePlayStream != null -> true
+        playbackTargetCid == null -> true
+        currentStream == null -> false
+        else -> {
+            val streamCid = currentStream.cid.takeIf { it > 0L }
+            streamCid == null || streamCid == playbackTargetCid
+        }
+    }
 
     val handleCommentLinkClick: (BiliLinkTarget) -> Unit = { target ->
         when (target) {
@@ -780,17 +869,32 @@ fun VideoDetailScreen(
         }
     }
 
-    LaunchedEffect(currentDetail?.pages, playStream?.cid, seedVideo.cid, overridePlayStream?.cid, activePart?.cid) {
-        val pages = currentDetail?.pages.orEmpty()
+    LaunchedEffect(
+        effectivePages,
+        playStream?.cid,
+        seedVideo.cid,
+        seedVideo.pgcEpid(),
+        overridePlayStream?.cid,
+        activePart?.cid,
+    ) {
+        val pages = effectivePages
         if (pages.isEmpty()) return@LaunchedEffect
 
-        val targetCid = activePart?.cid?.takeIf { it > 0L }
-            ?: overridePlayStream?.cid?.takeIf { it > 0L }
+        val playingCid = overridePlayStream?.cid?.takeIf { it > 0L }
             ?: playStream?.cid?.takeIf { it > 0L }
-            ?: seedVideo.cid.takeIf { it > 0L }
-            ?: return@LaunchedEffect
+            ?: activePart?.cid?.takeIf { it > 0L }
+        val seedEpid = seedVideo.pgcEpid().takeIf { it > 0L }
+        val seedCid = seedVideo.cid.takeIf { it > 0L }
+        val page = when {
+            playingCid != null -> pages.find { it.cid == playingCid }
+            seedEpid != null -> pages.find { it.epid == seedEpid }
+            seedCid != null -> pages.find { it.cid == seedCid }
+            else -> null
+        } ?: return@LaunchedEffect
 
-        val page = pages.find { it.cid == targetCid } ?: return@LaunchedEffect
+        if (page.epid > 0L && page.epid != activeEpid) {
+            activeEpid = page.epid
+        }
         if (activePart?.cid != page.cid) {
             activePart = page
         }
@@ -816,7 +920,7 @@ fun VideoDetailScreen(
         val samePart = page.cid == currentCid &&
             (page.epid <= 0L || page.epid == activeEpid)
         if (samePart) return
-        scope.launch {
+        switchScope.launch {
             runCatching {
                 coordinator.releaseHandoffPlayer()
                 if (page.epid > 0L && page.epid != activeEpid) {
@@ -835,25 +939,26 @@ fun VideoDetailScreen(
                     return@launch
                 }
                 val playbackVideo = detail?.video ?: seedVideo
-                val stream = resolvePagePlayStream(page.cid, page.epid)
+                val stream = resolvePagePlayStream(page.cid, page.epid, playbackVideo.bvid)
                     ?: error("无法获取播放地址")
                 val resolvedCid = page.cid.takeIf { it > 0L } ?: stream.cid
                 val resolvedStream = stream.copy(
                     aid = playbackVideo.aid.takeIf { it > 0L } ?: stream.aid,
                     cid = resolvedCid,
                 )
+                val targetVideo = playbackVideo.copy(
+                    cid = resolvedCid,
+                    epid = page.epid.takeIf { it > 0L } ?: playbackVideo.epid,
+                    title = page.title.takeIf { it.isNotBlank() } ?: playbackVideo.title,
+                    durationSeconds = page.durationSeconds.takeIf { it > 0 } ?: playbackVideo.durationSeconds,
+                )
                 coordinator.savePlaybackPosition(playbackKey, 0L)
                 activePart = page
                 overridePlayStream = resolvedStream
-                onSwitchVideoPart(page, resolvedStream)
-                onlineCount = api.getVideoOnlineCount(
-                    bvid = playbackVideo.bvid,
-                    aid = playbackVideo.aid,
-                    cid = resolvedCid,
-                    credential = credential,
-                )
-            }.onFailure {
-                Toast.makeText(context, it.message ?: "切换分P失败", Toast.LENGTH_SHORT).show()
+                onSwitchVideoPart(targetVideo, page, resolvedStream)
+            }.onFailure { error ->
+                if (error is CancellationException) return@onFailure
+                Toast.makeText(context, error.message ?: "切换分P失败", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -865,8 +970,12 @@ fun VideoDetailScreen(
                 switchToPart(page)
                 return
             }
+            effectivePages.find { it.cid == episode.cid }?.let { page ->
+                switchToPart(page)
+                return
+            }
         }
-        scope.launch {
+        switchScope.launch {
             runCatching {
                 val resolved = api.resolveVideoForPlayback(episode, credential)
                 val epid = resolved.pgcEpid()
@@ -886,18 +995,28 @@ fun VideoDetailScreen(
                 val targetCid = resolved.cid.takeIf { it > 0L }
                     ?: api.getVideoDetail(resolved.bvid, credential)?.pages?.firstOrNull()?.cid
                     ?: error("无法获取播放地址")
-                val stream = api.getPlayUrl(resolved.bvid, targetCid, credential)
-                    ?: error("无法获取播放地址")
-                val finalVideo = resolved.copy(cid = targetCid)
-                onReplaceVideo(
-                    finalVideo,
-                    stream.copy(
-                        aid = finalVideo.aid.takeIf { it > 0L } ?: stream.aid,
+                val stream = resolvePagePlayStream(targetCid, resolved.pgcEpid(), resolved.bvid)
+                    ?: api.getPlayUrl(
+                        bvid = resolved.bvid,
                         cid = targetCid,
-                    ),
+                        credential = credential,
+                        aid = resolved.aid,
+                        referer = "https://www.bilibili.com/video/${resolved.bvid}",
+                    )
+                    ?: error("无法获取播放地址")
+                val finalVideo = resolved.copy(
+                    cid = targetCid,
+                    title = episode.title.ifBlank { resolved.title },
+                    coverUrl = episode.coverUrl.ifBlank { resolved.coverUrl },
                 )
-            }.onFailure {
-                Toast.makeText(context, it.message ?: "切换视频失败", Toast.LENGTH_SHORT).show()
+                val resolvedStream = stream.copy(
+                    aid = finalVideo.aid.takeIf { it > 0L } ?: stream.aid,
+                    cid = targetCid,
+                )
+                onUpdateVideoSeed(finalVideo, resolvedStream)
+            }.onFailure { error ->
+                if (error is CancellationException) return@onFailure
+                Toast.makeText(context, error.message ?: "切换视频失败", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -949,6 +1068,8 @@ fun VideoDetailScreen(
                     currentVideo.videoWidth,
                     currentVideo.videoHeight,
                 ) ?: false,
+                video = currentVideo,
+                stream = currentStream,
             )
         } else if (configuration.orientation == Configuration.ORIENTATION_PORTRAIT &&
             isVideoFullscreen &&
@@ -1017,6 +1138,7 @@ fun VideoDetailScreen(
                         .background(Color.Black),
                 ) {
                     if (currentStream != null && streamMatchesTarget && !isVideoFullscreen) {
+                        key(playbackKey, currentStream.cid, currentStream.videoUrl) {
                         BilibiliVideoSurface(
                             playbackKey = playbackKey,
                             stream = currentStream,
@@ -1030,9 +1152,11 @@ fun VideoDetailScreen(
                                 coordinator.openFullscreen(
                                     playbackKey,
                                     portraitVideo = knownPortraitVideoHint(
-                                        currentVideo.videoWidth,
-                                        currentVideo.videoHeight,
+                                        historyVideo.videoWidth,
+                                        historyVideo.videoHeight,
                                     ),
+                                    video = historyVideo,
+                                    stream = currentStream,
                                 )
                             },
                             onCloseFullscreen = {
@@ -1060,8 +1184,10 @@ fun VideoDetailScreen(
                                 currentVideo.videoWidth,
                                 currentVideo.videoHeight,
                             ),
-                            playbackMetadata = VideoPlaybackMetadata.fromVideo(currentVideo),
+                            playbackMetadata = VideoPlaybackMetadata.fromVideo(historyVideo),
+                            historyVideo = historyVideo,
                         )
+                        }
                     } else if (currentStream != null && streamMatchesTarget) {
                         Box(Modifier.fillMaxSize())
                     } else {
@@ -1398,7 +1524,7 @@ fun VideoDetailScreen(
                                 },
                             )
                         }
-                        currentDetail?.ugcSeason?.takeIf { it.shouldDisplay }?.let { season ->
+                        effectiveUgcSeason?.let { season ->
                             item(key = "intro-ugc-season") {
                                 VideoDetailUgcSeasonSection(
                                     season = season,
@@ -1413,16 +1539,15 @@ fun VideoDetailScreen(
                                 )
                             }
                         }
-                        if (currentDetail?.ugcSeason?.shouldDisplay != true) {
-                            val pages = currentDetail?.pages.orEmpty()
-                            if (pages.size > 1) {
+                        if (effectiveUgcSeason == null) {
+                            if (effectivePages.size > 1) {
                                 item(key = "intro-multi-part") {
                                     VideoDetailMultiPartSection(
-                                        title = currentVideo.title,
-                                        partCount = pages.size,
+                                        title = displayTitle,
+                                        partCount = effectivePages.size,
                                         onClick = { anchorBounds ->
                                             collectionAnchor = anchorBounds
-                                            collectionSheetState = VideoCollectionSheetState.MultiPart(pages)
+                                            collectionSheetState = VideoCollectionSheetState.MultiPart(effectivePages)
                                             showCollectionSheet = true
                                         },
                                     )

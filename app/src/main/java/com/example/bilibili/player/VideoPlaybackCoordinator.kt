@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.bilibili.data.BiliDanmakuItem
+import com.example.bilibili.data.BiliPlayStream
+import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.DanmakuSettings
 import java.util.Collections
 import java.util.IdentityHashMap
@@ -15,14 +17,16 @@ class VideoPlaybackCoordinator(
     initialDanmakuSettings: DanmakuSettings = DanmakuSettings(),
     private val persistDanmakuVisible: ((Boolean) -> Unit)? = null,
     private val persistDanmakuSettings: ((DanmakuSettings) -> Unit)? = null,
+    private val readPersistedPosition: (String) -> Long = { 0L },
+    private val writePersistedPosition: (String, Long) -> Unit = { _, _ -> },
 ) {
     var activeKey by mutableStateOf<String?>(null)
     var fullscreenKey by mutableStateOf<String?>(null)
     var fullscreenPortraitVideo by mutableStateOf<Boolean?>(null)
     var fullscreenOrientationLocked by mutableStateOf(true)
         private set
-    var peekPlaybackKey by mutableStateOf<String?>(null)
-    var pendingPeekHandoffKey by mutableStateOf<String?>(null)
+    var fullscreenVideo by mutableStateOf<BiliVideoItem?>(null)
+    var fullscreenStream by mutableStateOf<BiliPlayStream?>(null)
     var pendingFullscreenHandoffKey by mutableStateOf<String?>(null)
     var pendingInlineHandoffKey by mutableStateOf<String?>(null)
     val positions = mutableStateMapOf<String, Long>()
@@ -118,7 +122,6 @@ class VideoPlaybackCoordinator(
         private set
     private val inlinePauseHandlers = mutableMapOf<String, () -> Unit>()
     private val fullscreenPauseHandlers = mutableMapOf<String, () -> Unit>()
-    private val peekPauseHandlers = mutableMapOf<String, () -> Unit>()
     private val handoffPrepareHandlers = mutableSetOf<(String) -> Unit>()
     private val keepScreenOnOwners = mutableSetOf<String>()
     var keepScreenOnRequested by mutableStateOf(false)
@@ -156,59 +159,38 @@ class VideoPlaybackCoordinator(
     }
 
     fun requestInlinePlayback(key: String) {
-        pausePeek()
         pauseInlineOnly(exceptKey = key)
         pauseFullscreenOnly()
         activeKey = key
         fullscreenKey = null
         fullscreenPortraitVideo = null
+        fullscreenVideo = null
+        fullscreenStream = null
         fullscreenOrientationLocked = true
     }
 
-    fun openFullscreen(key: String, portraitVideo: Boolean? = null) {
-        pausePeek()
+    fun openFullscreen(
+        key: String,
+        portraitVideo: Boolean? = null,
+        video: BiliVideoItem? = null,
+        stream: BiliPlayStream? = null,
+    ) {
         activeKey = key
         fullscreenKey = key
         fullscreenPortraitVideo = portraitVideo
+        fullscreenVideo = video
+        fullscreenStream = stream
         fullscreenOrientationLocked = true
         prepareFullscreenHandoff(key)
     }
 
-    fun beginPeekHandoff(key: String) {
-        pendingPeekHandoffKey = key
-    }
-
-    fun cancelPeekHandoff(key: String) {
-        if (pendingPeekHandoffKey == key) {
-            pendingPeekHandoffKey = null
-        }
-        if (handoffKey == key) {
-            releaseHandoffPlayer()
-        }
-    }
-
     fun hasHandoffPlayer(key: String): Boolean = handoffKey == key
-
-    fun claimPeekPlayback(key: String) {
-        pauseInlineOnly()
-        pauseFullscreenOnly()
-        activeKey = null
-        fullscreenKey = null
-        peekPlaybackKey = key
-    }
-
-    fun releasePeekPlayback(key: String) {
-        if (peekPlaybackKey == key) {
-            peekPlaybackKey = null
-        }
-    }
 
     fun pauseForOverlay() {
         pauseAll()
     }
 
     fun pauseAll() {
-        peekPauseHandlers.values.forEach { it() }
         inlinePauseHandlers.values.forEach { it() }
         fullscreenPauseHandlers.values.forEach { it() }
     }
@@ -226,9 +208,9 @@ class VideoPlaybackCoordinator(
         activeKey = null
         fullscreenKey = null
         fullscreenPortraitVideo = null
+        fullscreenVideo = null
+        fullscreenStream = null
         fullscreenOrientationLocked = true
-        peekPlaybackKey = null
-        pendingPeekHandoffKey = null
         VideoShotImageLoader.clearCaches()
         playbackStopping = false
     }
@@ -254,6 +236,8 @@ class VideoPlaybackCoordinator(
         }
         fullscreenKey = null
         fullscreenPortraitVideo = null
+        fullscreenVideo = null
+        fullscreenStream = null
         fullscreenOrientationLocked = true
     }
 
@@ -267,11 +251,21 @@ class VideoPlaybackCoordinator(
         fullscreenOrientationLocked = false
     }
 
-    fun getPlaybackPosition(playbackKey: String): Long =
-        positions[playbackPositionKey(playbackKey)] ?: 0L
+    fun getPlaybackPosition(playbackKey: String): Long {
+        val key = playbackPositionKey(playbackKey)
+        positions[key]?.let { return it }
+        val persisted = readPersistedPosition(key).coerceAtLeast(0L)
+        if (persisted > 0L) {
+            positions[key] = persisted
+        }
+        return persisted
+    }
 
     fun savePlaybackPosition(playbackKey: String, positionMs: Long) {
-        positions[playbackPositionKey(playbackKey)] = positionMs.coerceAtLeast(0L)
+        val key = playbackPositionKey(playbackKey)
+        val ms = positionMs.coerceAtLeast(0L)
+        positions[key] = ms
+        writePersistedPosition(key, ms)
     }
 
     fun registerInlinePauseHandler(playbackKey: String, handler: () -> Unit) {
@@ -288,21 +282,6 @@ class VideoPlaybackCoordinator(
 
     fun unregisterFullscreenPauseHandler(playbackKey: String) {
         fullscreenPauseHandlers.remove(playbackKey)
-    }
-
-    fun registerPeekPauseHandler(playbackKey: String, handler: () -> Unit) {
-        peekPauseHandlers[playbackKey] = handler
-    }
-
-    fun unregisterPeekPauseHandler(playbackKey: String) {
-        peekPauseHandlers.remove(playbackKey)
-    }
-
-    fun pausePeek(exceptKey: String? = null) {
-        peekPauseHandlers.forEach { (key, handler) ->
-            if (exceptKey != null && key == exceptKey) return@forEach
-            handler()
-        }
     }
 
     fun pauseInlineOnly(exceptKey: String? = null) {
@@ -351,9 +330,6 @@ class VideoPlaybackCoordinator(
     fun consumeHandoffPlayer(key: String): ExoPlayer? {
         if (handoffKey != key) return null
         handoffKey = null
-        if (pendingPeekHandoffKey == key) {
-            pendingPeekHandoffKey = null
-        }
         return handoffPlayer.also { handoffPlayer = null }
     }
 

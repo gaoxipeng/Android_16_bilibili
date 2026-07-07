@@ -73,6 +73,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import com.example.bilibili.R
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.BiliPlayStream
+import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BiliVideoShot
 import com.example.bilibili.ui.theme.BiliPink
 import com.kyant.backdrop.Backdrop
@@ -100,7 +101,6 @@ fun BilibiliVideoSurface(
     onFullscreen: () -> Unit,
     onCloseFullscreen: () -> Unit,
     modifier: Modifier = Modifier,
-    isPeekPlayback: Boolean = false,
     controlsEnabled: Boolean = true,
     initialControlsVisible: Boolean = true,
     showFullscreenButton: Boolean = true,
@@ -114,9 +114,9 @@ fun BilibiliVideoSurface(
     videoShot: BiliVideoShot? = null,
     scrubPreviewAspectRatio: Float? = null,
     playbackMetadata: VideoPlaybackMetadata? = null,
+    historyVideo: BiliVideoItem? = null,
 ) {
     val context = LocalContext.current
-    val videoPeekController = LocalVideoPeekController.current
     val layerBackdrop = backdrop as? LayerBackdrop ?: rememberLayerBackdrop()
     val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
     val initialHandoffPlayer = remember(playbackKey, streamToken) {
@@ -187,11 +187,10 @@ fun BilibiliVideoSurface(
         playerSizeKnown -> isPortraitPlayback
         else -> null
     }
-    val shotRefererUrl = playbackMetadata?.bvid?.takeIf { it.isNotBlank() }?.let { bvid ->
-        "https://www.bilibili.com/video/$bvid"
-    } ?: playbackKey.substringAfter(':', missingDelimiterValue = playbackKey).takeIf { it.isNotBlank() }?.let { bvid ->
-        "https://www.bilibili.com/video/$bvid"
-    } ?: com.example.bilibili.data.BilibiliEndpoints.HOME
+    val shotRefererUrl = resolvePlaybackReferer(
+        playbackKey = playbackKey,
+        playbackMetadata = playbackMetadata,
+    )
     val resolvedVideoShot = videoShot
         ?: stream.cid.takeIf { it > 0L }?.let { coordinator.cachedVideoShot(it) }
     val resolvedScrubPreviewAspectRatio =
@@ -213,9 +212,9 @@ fun BilibiliVideoSurface(
         portraitVideo = fullscreenPortraitOrientation,
     )
 
-    DisposableEffect(playbackKey, isFullscreen, isPeekPlayback) {
+    DisposableEffect(playbackKey, isFullscreen) {
         val handoffHandler: (String) -> Unit = handoffHandler@{ requestedKey ->
-            if (requestedKey != playbackKey || isPeekPlayback) return@handoffHandler
+            if (requestedKey != playbackKey) return@handoffHandler
             val currentPlayer = player ?: return@handoffHandler
             coordinator.stashPlayer(playbackKey, currentPlayer, keepPlaying = true)
             playerHandedOff = true
@@ -226,7 +225,7 @@ fun BilibiliVideoSurface(
         }
     }
 
-    LaunchedEffect(playbackKey, stream.cid, stream.videoUrl, stream.audioUrl, isPeekPlayback, playbackEnabled) {
+    LaunchedEffect(playbackKey, stream.cid, stream.videoUrl, stream.audioUrl, shotRefererUrl, playbackEnabled) {
         if (player != null && boundStreamToken == streamToken) return@LaunchedEffect
 
         val streamChanged = boundStreamToken != null && boundStreamToken != streamToken
@@ -280,7 +279,7 @@ fun BilibiliVideoSurface(
             return@LaunchedEffect
         }
 
-        val waitForHandoff = isPeekPlayback || isFullscreen || coordinator.hasHandoffPlayer(playbackKey)
+        val waitForHandoff = isFullscreen || coordinator.hasHandoffPlayer(playbackKey)
         if (waitForHandoff) {
         repeat(96) { attempt ->
             coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
@@ -299,6 +298,7 @@ fun BilibiliVideoSurface(
             stream = stream,
             startPositionMs = startPositionMs,
             playbackMetadata = playbackMetadata,
+            referer = shotRefererUrl,
         ) {
             isBuffering = false
         }.also {
@@ -359,7 +359,7 @@ fun BilibiliVideoSurface(
         return
     }
 
-    WatchHistoryEffect(stream = stream, player = activePlayer)
+    WatchHistoryEffect(stream = stream, player = activePlayer, video = historyVideo)
 
     VideoPlaybackKeepScreenOnEffect(
         playbackKey = playbackKey,
@@ -380,15 +380,12 @@ fun BilibiliVideoSurface(
         activePlayer,
         playbackKey,
         isFullscreen,
-        isPeekPlayback,
         coordinator.activeKey,
         coordinator.fullscreenKey,
-        coordinator.peekPlaybackKey,
         resolvedPlaybackMetadata,
     ) {
         val isPrimaryPlayback = when {
             isFullscreen -> coordinator.fullscreenKey == playbackKey
-            isPeekPlayback -> coordinator.peekPlaybackKey == playbackKey
             else -> coordinator.activeKey == playbackKey && coordinator.fullscreenKey == null
         }
         if (isPrimaryPlayback) {
@@ -396,13 +393,12 @@ fun BilibiliVideoSurface(
         }
         onDispose {
             if (coordinator.playbackStopping ||
-                coordinator.activeKey == null && !isFullscreen && !isPeekPlayback
+                coordinator.activeKey == null && !isFullscreen
             ) {
                 return@onDispose
             }
             val stillPrimary = when {
                 isFullscreen -> coordinator.fullscreenKey == playbackKey
-                isPeekPlayback -> coordinator.peekPlaybackKey == playbackKey
                 else -> coordinator.activeKey == playbackKey && coordinator.fullscreenKey == null
             }
             val keepSessionForHandoff = when {
@@ -416,7 +412,7 @@ fun BilibiliVideoSurface(
         }
     }
 
-    DisposableEffect(activePlayer, playbackKey, isFullscreen, isPeekPlayback) {
+    DisposableEffect(activePlayer, playbackKey, isFullscreen) {
         val streamTokenAtMount = boundStreamToken
         val pauseHandler = {
             coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
@@ -425,10 +421,10 @@ fun BilibiliVideoSurface(
             isPlaying = false
             playWhenReady = false
         }
-        when {
-            isPeekPlayback -> coordinator.registerPeekPauseHandler(playbackKey, pauseHandler)
-            isFullscreen -> coordinator.registerFullscreenPauseHandler(playbackKey, pauseHandler)
-            else -> coordinator.registerInlinePauseHandler(playbackKey, pauseHandler)
+        if (isFullscreen) {
+            coordinator.registerFullscreenPauseHandler(playbackKey, pauseHandler)
+        } else {
+            coordinator.registerInlinePauseHandler(playbackKey, pauseHandler)
         }
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -492,23 +488,14 @@ fun BilibiliVideoSurface(
         onDispose {
             coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
             activePlayer.removeListener(listener)
-            when {
-                isPeekPlayback -> {
-                    coordinator.unregisterPeekPauseHandler(playbackKey)
-                    if (videoPeekController.activeRequest == null) {
-                        coordinator.releasePeekPlayback(playbackKey)
-                    }
-                }
-                isFullscreen -> coordinator.unregisterFullscreenPauseHandler(playbackKey)
-                else -> coordinator.unregisterInlinePauseHandler(playbackKey)
+            if (isFullscreen) {
+                coordinator.unregisterFullscreenPauseHandler(playbackKey)
+            } else {
+                coordinator.unregisterInlinePauseHandler(playbackKey)
             }
             if (playerHandedOff) return@onDispose
             val stoppingPlayback = coordinator.playbackStopping ||
-                coordinator.activeKey == null && !isFullscreen && !isPeekPlayback
-            val handoffToPeekFullscreen = isPeekPlayback &&
-                !isFullscreen &&
-                videoPeekController.isFullscreenMode &&
-                videoPeekController.activeRequest != null
+                coordinator.activeKey == null && !isFullscreen
             val streamStillCurrent = streamTokenAtMount != null && streamTokenAtMount == boundStreamToken
             when {
                 stoppingPlayback -> {
@@ -517,7 +504,6 @@ fun BilibiliVideoSurface(
                     VideoPlaybackMediaBridge.detachAll()
                     coordinator.clearReleasedPlayers()
                 }
-                handoffToPeekFullscreen -> Unit
                 !streamStillCurrent -> {
                     coordinator.releaseHandoffPlayer()
                     coordinator.releasePlayerOnce(activePlayer)
@@ -531,12 +517,6 @@ fun BilibiliVideoSurface(
                 !isFullscreen && coordinator.activeKey == playbackKey -> {
                     coordinator.stashPlayer(playbackKey, activePlayer)
                 }
-                !isFullscreen && (
-                    coordinator.peekPlaybackKey == playbackKey ||
-                        coordinator.pendingPeekHandoffKey == playbackKey
-                    ) -> {
-                    coordinator.stashPlayer(playbackKey, activePlayer)
-                }
                 else -> {
                     VideoPlaybackMediaBridge.detach(playbackKey)
                     coordinator.releasePlayerOnce(activePlayer)
@@ -545,25 +525,13 @@ fun BilibiliVideoSurface(
         }
     }
 
-    LaunchedEffect(isFullscreen, isPeekPlayback, activePlayer) {
-        if (isFullscreen && !isPeekPlayback && videoPeekController.isFullscreenMode) {
-            activePlayer.setPlaybackSpeed(1f)
-            selectedSpeed = 1f
-            activePlayer.playWhenReady = true
-            if (activePlayer.playbackState == Player.STATE_IDLE) {
-                activePlayer.prepare()
-            }
-            activePlayer.play()
-        }
-    }
-
-    LaunchedEffect(activePlayer, playbackSpeedOverride, isPeekPlayback, isFullscreen) {
+    LaunchedEffect(activePlayer, playbackSpeedOverride, isFullscreen) {
         when {
             playbackSpeedOverride != null -> {
                 activePlayer.setPlaybackSpeed(playbackSpeedOverride)
                 selectedSpeed = playbackSpeedOverride
             }
-            isPeekPlayback || isFullscreen -> {
+            isFullscreen -> {
                 activePlayer.setPlaybackSpeed(1f)
                 selectedSpeed = 1f
             }
@@ -634,11 +602,6 @@ fun BilibiliVideoSurface(
                 activePlayer.seekTo(0)
             }
             when {
-                isPeekPlayback -> {
-                    if (coordinator.peekPlaybackKey != playbackKey) {
-                        coordinator.claimPeekPlayback(playbackKey)
-                    }
-                }
                 isFullscreen -> Unit
                 coordinator.activeKey != playbackKey -> coordinator.requestInlinePlayback(playbackKey)
             }
