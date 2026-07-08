@@ -37,19 +37,19 @@ fun BilibiliFollowButton(
     }
     val surfaceColor = when {
         transparent -> Color.Transparent
-        following -> Color(0xFFF0F0F0)
+        following -> MaterialTheme.colorScheme.surfaceContainer
         else -> BiliPink
     }
     val border = when {
         transparent && following -> BorderStroke(1.dp, Color.White.copy(alpha = 0.45f))
         transparent -> BorderStroke(1.dp, BiliPink)
-        following -> BorderStroke(1.dp, Color(0xFFD9D9D9))
+        following -> BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         else -> null
     }
     val contentColor = when {
         transparent && following -> Color.White.copy(alpha = 0.88f)
         transparent -> BiliPink
-        following -> Color(0xFF636363)
+        following -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> Color.White
     }
     Surface(

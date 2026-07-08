@@ -67,10 +67,6 @@ private val VideoFeedCoverOverlayTextStyle
         ),
     )
 private val VideoFeedCoverScrimHeightFraction = 0.45f
-private val VideoFeedMetaBackground = Color(0xFFFFFFFF)
-private val VideoFeedTitleColor = Color(0xFF1A1A1A)
-private val VideoFeedMetaDataColor = Color(0xFF999999)
-private val VideoFeedCardBorderColor = Color(0xFFE8E8E8)
 private val VideoFeedGridCardElevation = 0.dp
 private val VideoOverlayLiquidBlurRadius = 14.dp
 private val VideoOverlayAuthorColor = Color(0xFFFFA640)
@@ -231,14 +227,18 @@ private fun VideoFeedGridCard(
     val coverTint = rememberCoverAverageColor(video.coverUrl)
     val playbackKey = videoPlaybackKey(video.playbackId())
     val showCoverOverlay = coordinator.fullscreenKey != playbackKey
+    val cardBorderColor = MaterialTheme.colorScheme.outlineVariant
+    val metaBackground = MaterialTheme.colorScheme.surface
+    val titleColor = MaterialTheme.colorScheme.onSurface
+    val metaColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
-            .border(0.5.dp, VideoFeedCardBorderColor, shape),
+            .border(0.5.dp, cardBorderColor, shape),
         shape = shape,
         colors = CardDefaults.elevatedCardColors(
-            containerColor = VideoFeedMetaBackground,
+            containerColor = metaBackground,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = VideoFeedGridCardElevation),
         onClick = onClick,
@@ -291,13 +291,13 @@ private fun VideoFeedGridCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(VideoFeedMetaBackground)
+                    .background(metaBackground)
                     .padding(VideoFeedMetaPadding),
             ) {
                 Text(
                     text = video.title,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = VideoFeedTitleColor,
+                    color = titleColor,
                 )
                 if (showAuthorInfo) {
                     Row(
@@ -322,7 +322,7 @@ private fun VideoFeedGridCard(
                             text = video.authorName,
                             modifier = Modifier.weight(1f, fill = false),
                             style = MaterialTheme.typography.labelMedium,
-                            color = VideoFeedMetaDataColor,
+                            color = metaColor,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -333,7 +333,7 @@ private fun VideoFeedGridCard(
                             text = publishTime,
                             modifier = Modifier.padding(top = 4.dp),
                             style = MaterialTheme.typography.labelMedium,
-                            color = VideoFeedMetaDataColor,
+                            color = metaColor,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )

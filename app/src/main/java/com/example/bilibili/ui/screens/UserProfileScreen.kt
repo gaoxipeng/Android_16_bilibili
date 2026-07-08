@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,6 +80,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.example.bilibili.data.AppearanceMode
 import com.example.bilibili.data.BiliAuthorRelation
 import com.example.bilibili.data.BiliDynamicIpWebResolver
 import com.example.bilibili.data.BiliDynamicItem
@@ -96,6 +98,7 @@ import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.data.FeedLayoutStore
+import com.example.bilibili.data.StoredBilibiliAccount
 import com.example.bilibili.data.UserProfileSessionCache
 import com.example.bilibili.data.UserProfileSnapshotStore
 import com.example.bilibili.data.UserProfileUiState
@@ -167,9 +170,6 @@ private val ProfileHeaderCoverAspect = 2.55f
 private val ProfileHeaderCardCoverOverlap = 22.dp
 private val ProfileHeaderCardRadius = 16.dp
 private val ProfileHeaderCardBorderWidth = 0.5.dp
-private val ProfileHeaderCardBorderColor = Color(0xFFE8E8E8)
-private val DynamicFeedPageBackground = Color(0xFFF5F5F5)
-private val DynamicFeedCardBackground = Color.White
 private val DynamicFeedCardInset = 12.dp
 
 private val DynamicFeedMetaTextColor @Composable get() =
@@ -205,6 +205,13 @@ fun UserProfileScreen(
     onFeedColumnCountChange: (Int) -> Unit = {},
     backgroundPlaybackEnabled: Boolean = false,
     onBackgroundPlaybackChange: (Boolean) -> Unit = {},
+    appearanceMode: AppearanceMode = AppearanceMode.System,
+    onAppearanceModeChange: (AppearanceMode) -> Unit = {},
+    storedAccounts: List<StoredBilibiliAccount> = emptyList(),
+    activeAccountId: String? = null,
+    onSwitchAccount: (String) -> Unit = {},
+    onDeleteAccount: (String) -> Unit = {},
+    onAddAccount: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -574,7 +581,12 @@ fun UserProfileScreen(
     val profileListBottomPadding =
         contentPadding.calculateBottomPadding() + BottomBarFeedOverlapReserve
 
-    StatusBarIconsEffect(darkIcons = true)
+    val statusBarDarkIcons = when (appearanceMode) {
+        AppearanceMode.Light -> true
+        AppearanceMode.Dark -> false
+        AppearanceMode.System -> !isSystemInDarkTheme()
+    }
+    StatusBarIconsEffect(darkIcons = statusBarDarkIcons)
 
     if (showSettings) {
         SettingsScreen(
@@ -582,6 +594,13 @@ fun UserProfileScreen(
             onFeedColumnCountChange = onFeedColumnCountChange,
             backgroundPlaybackEnabled = backgroundPlaybackEnabled,
             onBackgroundPlaybackChange = onBackgroundPlaybackChange,
+            appearanceMode = appearanceMode,
+            onAppearanceModeChange = onAppearanceModeChange,
+            storedAccounts = storedAccounts,
+            activeAccountId = activeAccountId,
+            onSwitchAccount = onSwitchAccount,
+            onDeleteAccount = onDeleteAccount,
+            onAddAccount = onAddAccount,
             onBack = { showSettings = false },
             modifier = Modifier.fillMaxSize(),
         )
@@ -611,13 +630,13 @@ fun UserProfileScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(topInset)
-                                    .background(Color.White),
+                                    .background(MaterialTheme.colorScheme.surface),
                             )
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(compactBarContentHeight)
-                                    .background(Color.White)
+                                    .background(MaterialTheme.colorScheme.surface)
                                     .padding(
                                         start = ProfileCompactBarStartPadding,
                                         end = if (showFollowButton) 12.dp else if (enableSettings) 4.dp else 4.dp,
@@ -972,7 +991,7 @@ fun UserProfileScreen(
                                         state = dynamicsListState,
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .background(DynamicFeedPageBackground),
+                                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                                         contentPadding = PaddingValues(
                                             top = 8.dp,
                                             bottom = 24.dp + profileListBottomPadding,
@@ -1143,7 +1162,7 @@ private fun UserProfileHeader(
                         .zIndex(1f)
                         .border(
                             width = ProfileHeaderCardBorderWidth,
-                            color = ProfileHeaderCardBorderColor,
+                            color = MaterialTheme.colorScheme.outlineVariant,
                             shape = profileCardShape,
                         ),
                     shape = profileCardShape,
@@ -1467,7 +1486,7 @@ private fun DynamicFeedCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(DynamicFeedCardBackground)
+            .background(MaterialTheme.colorScheme.surface)
             .then(
                 if (openDetail) {
                     Modifier.clickable(
@@ -1535,7 +1554,7 @@ private fun DynamicOriginBlock(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(DynamicFeedPageBackground)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(10.dp),
     ) {
         if (origin.authorName.isNotBlank()) {

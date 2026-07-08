@@ -45,35 +45,52 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.example.bilibili.ui.theme.isAppLightTheme
 import com.example.bilibili.data.DanmakuSettings
 import com.example.bilibili.data.DanmakuSpeedLevel
 import com.example.bilibili.ui.components.ActionFrostedCard
-import com.example.bilibili.ui.components.ActionMenuSurfaceColor
+import com.example.bilibili.ui.components.actionMenuSurfaceColor
 import com.example.bilibili.ui.components.ImageActionMenuBlurRadius
 import com.kyant.backdrop.Backdrop
 import kotlin.math.roundToInt
 
 private val DanmakuSettingsPanelWidth = 300.dp
 private val DanmakuSettingsPanelCornerRadius = 22.dp
-private val DanmakuSettingsPanelPadding = 14.dp
-private val DanmakuSettingsRowSpacing = 14.dp
+private val DanmakuSettingsPanelPadding = 10.dp
+private val DanmakuSettingsRowSpacing = 6.dp
 private val DanmakuSettingsLabelWidth = 58.dp
-private val DanmakuSettingRowHeight = 38.dp
 
 private val DanmakuSliderThumbRadius = 6.dp
 private val DanmakuSliderThumbActiveRadius = 8.dp
 private val DanmakuSliderTrackHeight = 2.5.dp
-private val DanmakuSliderTrackAreaHeight = 28.dp
-private val DanmakuSliderTickGap = 4.dp
-private val DanmakuSliderTickAreaHeight = 6.dp
-private val DanmakuSliderBlockHeight =
+private val DanmakuSliderTrackAreaHeight = 24.dp
+private val DanmakuSliderTickGap = 1.dp
+private val DanmakuSliderTickAreaHeight = 5.dp
+private val DanmakuSteppedSliderBlockHeight =
     DanmakuSliderTrackAreaHeight + DanmakuSliderTickGap + DanmakuSliderTickAreaHeight
 
-private val DanmakuSliderTrackColor = Color(0x26000000)
 private val DanmakuSliderActiveColor = Color(0xFFFF6699)
-private val DanmakuSliderTickColor = Color(0x44000000)
 private val DanmakuSliderThumbColor = Color.White
-private val DanmakuSliderThumbBorderColor = Color(0x33000000)
+
+@Composable
+private fun danmakuSliderTrackColor(): Color =
+    if (isAppLightTheme()) Color(0x26000000) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+
+@Composable
+private fun danmakuSliderTickColor(): Color =
+    if (isAppLightTheme()) Color(0x44000000) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
+
+@Composable
+private fun danmakuSliderThumbBorderColor(): Color =
+    if (isAppLightTheme()) Color(0x33000000) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+
+@Composable
+private fun danmakuSettingValueColor(): Color =
+    if (isAppLightTheme()) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.82f)
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
 private data class SliderTrackMetrics(
     val startX: Float,
@@ -97,7 +114,7 @@ fun DanmakuSettingsOverlay(
     onDismiss: () -> Unit,
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
-    maxHeightFraction: Float = 0.72f,
+    maxHeightFraction: Float = 0.92f,
     contentVerticalPadding: Dp = DanmakuSettingsPanelPadding,
     rowSpacing: Dp = DanmakuSettingsRowSpacing,
 ) {
@@ -159,7 +176,7 @@ fun DanmakuSettingsOverlay(
                     .heightIn(max = maxHeight * maxHeightFraction),
                 backdrop = backdrop,
                 effectBlurRadius = ImageActionMenuBlurRadius,
-                effectContainerColor = ActionMenuSurfaceColor,
+                effectContainerColor = actionMenuSurfaceColor(),
             ) {
                 Column(
                     modifier = Modifier
@@ -236,37 +253,36 @@ private fun DanmakuSettingRow(
     slider: @Composable () -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(DanmakuSettingRowHeight),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Column(
             modifier = Modifier.width(DanmakuSettingsLabelWidth),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = Color(0xFF1C1C1E),
-                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 13.sp,
+                lineHeight = 16.sp,
                 maxLines = 1,
             )
             Text(
                 text = valueLabel,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF636366),
-                fontSize = 12.sp,
+                color = danmakuSettingValueColor(),
+                fontSize = 11.sp,
+                lineHeight = 13.sp,
                 maxLines = 1,
             )
         }
         Box(
             modifier = Modifier
-                .weight(1f)
-                .height(DanmakuSliderBlockHeight),
-            contentAlignment = Alignment.TopStart,
+                .weight(1f),
+            contentAlignment = Alignment.CenterStart,
         ) {
             slider()
         }
@@ -297,11 +313,12 @@ private fun DanmakuSteppedSlider(
         if (maxIndex == 0) 0f else index.toFloat() / maxIndex.toFloat()
 
     val displayFraction = dragFraction ?: fractionForIndex(clampedIndex)
+    val tickColor = danmakuSliderTickColor()
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(DanmakuSliderBlockHeight),
+            .height(DanmakuSteppedSliderBlockHeight),
     ) {
         DanmakuSliderTrack(
             thumbRadius = DanmakuSliderThumbRadius,
@@ -329,7 +346,7 @@ private fun DanmakuSteppedSlider(
                 repeat(stepCount) { index ->
                     val active = index == clampedIndex
                     drawCircle(
-                        color = if (active) DanmakuSliderActiveColor else DanmakuSliderTickColor,
+                        color = if (active) DanmakuSliderActiveColor else tickColor,
                         radius = if (active) tickRadiusPx + 0.5f else tickRadiusPx,
                         center = Offset(
                             x = metrics.xForFraction(fractionForIndex(index)),
@@ -383,7 +400,7 @@ private fun DanmakuContinuousSlider(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(DanmakuSliderBlockHeight),
+            .height(DanmakuSliderTrackAreaHeight),
     ) {
         DanmakuSliderTrack(
             thumbRadius = thumbRadius,
@@ -405,7 +422,6 @@ private fun DanmakuContinuousSlider(
                 dragFraction = null
             },
         )
-        Spacer(Modifier.height(DanmakuSliderTickGap + DanmakuSliderTickAreaHeight))
     }
 }
 
@@ -425,6 +441,8 @@ private fun DanmakuSliderTrack(
     val onGestureStartState by rememberUpdatedState(onGestureStart)
     val onPositionXState by rememberUpdatedState(onPositionX)
     val onGestureEndState by rememberUpdatedState(onGestureEnd)
+    val trackColor = danmakuSliderTrackColor()
+    val thumbBorderColor = danmakuSliderThumbBorderColor()
 
     Box(
         modifier = Modifier
@@ -442,11 +460,13 @@ private fun DanmakuSliderTrack(
                 metrics = metrics,
                 progressX = thumbX,
                 trackHeightPx = trackHeightPx,
+                trackColor = trackColor,
             )
             drawSliderThumb(
                 center = Offset(thumbX, metrics.centerY),
                 radius = thumbRadiusPx,
                 emphasized = thumbActive,
+                thumbBorderColor = thumbBorderColor,
             )
         }
         Box(
@@ -495,9 +515,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCompactTrack(
     metrics: SliderTrackMetrics,
     progressX: Float,
     trackHeightPx: Float,
+    trackColor: Color,
 ) {
     drawLine(
-        color = DanmakuSliderTrackColor,
+        color = trackColor,
         start = Offset(metrics.startX, metrics.centerY),
         end = Offset(metrics.endX, metrics.centerY),
         strokeWidth = trackHeightPx,
@@ -518,6 +539,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSliderThumb(
     center: Offset,
     radius: Float,
     emphasized: Boolean = false,
+    thumbBorderColor: Color,
 ) {
     if (emphasized) {
         drawCircle(
@@ -532,7 +554,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSliderThumb(
         center = center,
     )
     drawCircle(
-        color = DanmakuSliderThumbBorderColor,
+        color = thumbBorderColor,
         radius = radius,
         center = center,
         style = Stroke(width = 1f),

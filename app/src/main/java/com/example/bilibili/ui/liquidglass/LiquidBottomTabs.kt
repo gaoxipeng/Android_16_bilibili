@@ -5,7 +5,7 @@ import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.isSystemInDarkTheme
+import com.example.bilibili.ui.theme.isAppLightTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -72,7 +72,7 @@ fun LiquidBottomTabs(
     onTabLongPress: (index: Int) -> Unit = {},
     content: @Composable RowScope.() -> Unit
 ) {
-    val isLightTheme = !isSystemInDarkTheme()
+    val isLightTheme = isAppLightTheme()
     val accentColor = if (isLightTheme) TabAccentLight else TabAccentDark
     val surfaceColor = liquidSurfaceColor(isLightTheme)
 

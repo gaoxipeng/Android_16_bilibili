@@ -78,7 +78,7 @@ import com.example.bilibili.data.BiliViewerImage
 import com.example.bilibili.ui.components.ActionFrostedCard
 import com.example.bilibili.ui.components.ActionMenuReveal
 import com.example.bilibili.ui.components.ActionMenuRow
-import com.example.bilibili.ui.components.ActionMenuSurfaceColor
+import com.example.bilibili.ui.components.actionMenuSurfaceColor
 import com.example.bilibili.ui.components.ActionMenuThreeRowHeight
 import com.example.bilibili.ui.components.ActionMenuTwoRowHeight
 import com.example.bilibili.ui.components.ImageActionMenuBlurRadius
@@ -1140,7 +1140,7 @@ private fun BoxScope.FullscreenImageActionMenu(
             modifier = Modifier.fillMaxSize(),
             backdrop = backdrop,
             effectBlurRadius = ImageActionMenuBlurRadius,
-            effectContainerColor = ActionMenuSurfaceColor,
+            effectContainerColor = actionMenuSurfaceColor(),
         ) {
             ActionMenuRow(
                 label = "保存",

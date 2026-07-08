@@ -2,24 +2,39 @@ package com.example.bilibili.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -29,33 +44,55 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.bilibili.R
+import com.example.bilibili.data.AppearanceMode
 import com.example.bilibili.data.FeedLayoutStore
+import com.example.bilibili.data.StoredBilibiliAccount
+import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
+import com.example.bilibili.ui.theme.isAppLightTheme
+import kotlinx.coroutines.launch
 
-private const val AppVersionName = "1.0"
+private const val AppVersionName = "1.1"
 
 private val SettingsBottomBarInset = 96.dp
-private val SettingsPageBackground = Color.White
-private val SettingsCardBackground = Color(0xFFF5F5F5)
 private val SettingsAboutIconSize = 58.dp
 private val SettingsAboutIconCornerRadius = 13.dp
 private const val SettingsAboutIconCropScale = 1.14f
+
+private val SettingsPageBackgroundLight = Color(0xFFF6F6F7)
+private val SettingsBadgeBackgroundLight = Color(0xFFE6E6E6)
+
+@Composable
+private fun settingsPageBackground(): Color =
+    if (isAppLightTheme()) SettingsPageBackgroundLight else MaterialTheme.colorScheme.background
+
+@Composable
+private fun settingsCardBackground(): Color =
+    if (isAppLightTheme()) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceContainerLow
+
+@Composable
+private fun settingsBadgeBackground(): Color =
+    if (isAppLightTheme()) SettingsBadgeBackgroundLight else MaterialTheme.colorScheme.surfaceContainerHighest
 
 private data class HelpSection(
     val title: String,
@@ -99,7 +136,8 @@ private val appHelpSections = listOf(
         items = listOf(
             "点击视频卡片进入详情页播放；信息流内长按封面可进入小窗预览。",
             "详情页支持弹幕开关、倍速播放与全屏观看。",
-            "长按控制栏「弹」可打开弹幕设置，调节显示区域、不透明度、字号与速度。",
+            "长按控制栏「弹」可在播放器内打开弹幕设置，调节显示区域、不透明度、字号与速度。",
+            "弹幕偏好修改后全局生效，视频与直播共用同一套设置。",
             "从简介或评论区进入 UP 主主页时，当前视频会自动暂停；返回后恢复播放。",
         ),
     ),
@@ -118,8 +156,9 @@ private val appHelpSections = listOf(
         items = listOf(
             "「历史」页展示观看记录，按日期分组展示，支持删除单条或整组记录。",
             "「我的」页为个人主页，右上角齿轮进入设置。",
-            "设置中可切换信息流单列/双列布局；弹幕偏好修改后全局生效。",
-            "后台播放声音：关闭后，应用切到后台时会暂停视频。",
+            "设置中可切换深色模式（浅色 / 深色 / 跟随系统）、信息流单列/双列布局。",
+            "账号管理支持多账号：点击切换当前账号，左滑账号行可删除，「添加账号」通过网页登录保存新账号。",
+            "弹幕偏好修改后全局生效；关闭「后台播放声音」后，应用切到后台时会暂停视频。",
         ),
     ),
 )
@@ -130,10 +169,19 @@ fun SettingsScreen(
     onFeedColumnCountChange: (Int) -> Unit,
     backgroundPlaybackEnabled: Boolean = false,
     onBackgroundPlaybackChange: (Boolean) -> Unit = {},
+    appearanceMode: AppearanceMode = AppearanceMode.System,
+    onAppearanceModeChange: (AppearanceMode) -> Unit = {},
+    storedAccounts: List<StoredBilibiliAccount> = emptyList(),
+    activeAccountId: String? = null,
+    onSwitchAccount: (String) -> Unit = {},
+    onDeleteAccount: (String) -> Unit = {},
+    onAddAccount: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var feedLayoutExpanded by remember { mutableStateOf(false) }
+    var appearanceExpanded by remember { mutableStateOf(false) }
+    var accountExpanded by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
 
     BackHandler {
@@ -161,6 +209,25 @@ fun SettingsScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                item {
+                    SettingsAccountCard(
+                        expanded = accountExpanded,
+                        onExpandedChange = { accountExpanded = it },
+                        accounts = storedAccounts,
+                        activeAccountId = activeAccountId,
+                        onSwitchAccount = onSwitchAccount,
+                        onDeleteAccount = onDeleteAccount,
+                        onAddAccount = onAddAccount,
+                    )
+                }
+                item {
+                    SettingsAppearanceCard(
+                        expanded = appearanceExpanded,
+                        onExpandedChange = { appearanceExpanded = it },
+                        mode = appearanceMode,
+                        onModeChange = onAppearanceModeChange,
+                    )
+                }
                 item {
                     SettingsFeedLayoutCard(
                         expanded = feedLayoutExpanded,
@@ -195,7 +262,7 @@ private fun SettingsPageShell(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(SettingsPageBackground),
+            .background(settingsPageBackground()),
     ) {
         Row(
             modifier = Modifier
@@ -448,7 +515,7 @@ private fun SettingsFeedLayoutCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            color = settingsBadgeBackground(),
                             contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             shape = RoundedCornerShape(8.dp),
                         ) {
@@ -532,18 +599,19 @@ private fun FeedLayoutOption(
 @Composable
 private fun SettingsPlainCard(
     modifier: Modifier = Modifier,
-    backgroundColor: Color = SettingsCardBackground,
+    backgroundColor: Color? = null,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val shape = RoundedCornerShape(8.dp)
+    val resolvedBackground = backgroundColor ?: settingsCardBackground()
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         shape = shape,
-        color = backgroundColor,
+        color = resolvedBackground,
         shadowElevation = 0.dp,
         tonalElevation = 0.dp,
         content = content,
@@ -568,4 +636,325 @@ private fun SettingsExpandIndicator(
         modifier = modifier.graphicsLayer { rotationZ = rotation },
         tint = tint,
     )
+}
+
+@Composable
+private fun SettingsAppearanceCard(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    mode: AppearanceMode,
+    onModeChange: (AppearanceMode) -> Unit,
+) {
+    SettingsPlainCard {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onExpandedChange(!expanded) }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "深色模式",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Surface(
+                            color = settingsBadgeBackground(),
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                text = mode.label,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    Text(
+                        text = mode.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                SettingsExpandIndicator(expanded = expanded, rotateOnExpand = true)
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    AppearanceMode.entries.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onModeChange(option) }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            RadioButton(
+                                selected = mode == option,
+                                onClick = { onModeChange(option) },
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = option.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (mode == option) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                                Text(
+                                    text = option.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsAccountCard(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    accounts: List<StoredBilibiliAccount>,
+    activeAccountId: String?,
+    onSwitchAccount: (String) -> Unit,
+    onDeleteAccount: (String) -> Unit,
+    onAddAccount: () -> Unit,
+) {
+    val activeAccount = accounts.firstOrNull { it.uid == activeAccountId }
+    val subtitle = when {
+        activeAccount != null -> activeAccount.name.ifBlank { "B站用户" }
+        accounts.isNotEmpty() -> "已保存 ${accounts.size} 个账号，点击展开切换"
+        else -> "登录哔哩哔哩以查看关注、历史与个人主页"
+    }
+    val status = when {
+        accounts.isNotEmpty() -> "${accounts.size} 个账号"
+        else -> "未登录"
+    }
+
+    SettingsPlainCard {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onExpandedChange(!expanded) }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "账号管理",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Surface(
+                            color = settingsBadgeBackground(),
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                text = status,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                SettingsExpandIndicator(expanded = expanded, rotateOnExpand = true)
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (accounts.isEmpty()) {
+                        Text(
+                            text = "暂无已保存账号",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        )
+                    } else {
+                        accounts.forEach { account ->
+                            SettingsAccountRow(
+                                account = account,
+                                isActive = account.uid == activeAccountId,
+                                onSwitchAccount = onSwitchAccount,
+                                onDeleteAccount = onDeleteAccount,
+                            )
+                        }
+                    }
+                    TextButton(
+                        onClick = onAddAccount,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("添加账号")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private enum class SettingsAccountSwipeAnchor { Closed, Open }
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SettingsAccountRow(
+    account: StoredBilibiliAccount,
+    isActive: Boolean,
+    onSwitchAccount: (String) -> Unit,
+    onDeleteAccount: (String) -> Unit,
+) {
+    val density = LocalDensity.current
+    val deleteActionWidth = 72.dp
+    val deleteActionWidthPx = remember(density) { with(density) { deleteActionWidth.toPx() } }
+    val rowShape = RoundedCornerShape(8.dp)
+    val rowBackground = if (isActive) {
+        lerp(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.primaryContainer, 0.35f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val dragState = remember(account.uid, deleteActionWidthPx) {
+        AnchoredDraggableState(
+            initialValue = SettingsAccountSwipeAnchor.Closed,
+            anchors = DraggableAnchors {
+                SettingsAccountSwipeAnchor.Closed at 0f
+                SettingsAccountSwipeAnchor.Open at -deleteActionWidthPx
+            },
+        )
+    }
+    val flingBehavior = AnchoredDraggableDefaults.flingBehavior(
+        state = dragState,
+        positionalThreshold = { distance -> distance * 0.35f },
+        animationSpec = spring(
+            dampingRatio = 0.82f,
+            stiffness = Spring.StiffnessMedium,
+        ),
+    )
+    val scope = rememberCoroutineScope()
+    val swipeOffsetPx = dragState.requireOffset()
+    val isRevealed = dragState.currentValue == SettingsAccountSwipeAnchor.Open
+    val canSwitchAccount = !isActive && !isRevealed && swipeOffsetPx == 0f
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Max)
+            .clip(rowShape),
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .width(deleteActionWidth)
+                .fillMaxHeight()
+                .background(Color(0xFFE35D5B))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {
+                        onDeleteAccount(account.uid)
+                        scope.launch { dragState.animateTo(SettingsAccountSwipeAnchor.Closed) }
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "删除",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    translationX = swipeOffsetPx
+                    clip = true
+                    shape = rowShape
+                }
+                .anchoredDraggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    flingBehavior = flingBehavior,
+                )
+                .background(rowBackground, rowShape)
+                .clickable(
+                    enabled = canSwitchAccount,
+                    onClick = { onSwitchAccount(account.uid) },
+                )
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            RemoteImage(
+                url = account.face.orEmpty(),
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop,
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = account.name.ifBlank { "B站用户" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (isActive) {
+                    Text(
+                        text = "当前",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
 }

@@ -157,12 +157,13 @@ fun BilibiliVideoSurface(
     val danmakuVisible = coordinator.danmakuVisible
     val danmakuSettings = coordinator.danmakuSettings
 
-    LaunchedEffect(showDanmakuFeature, danmakuCid, loadDanmaku) {
-        if (!showDanmakuFeature || loadDanmaku == null) {
+    LaunchedEffect(danmakuEnabled, danmakuCid, loadDanmaku) {
+        val loader = loadDanmaku
+        if (!danmakuEnabled || danmakuCid <= 0L || loader == null) {
             danmakuItems = emptyList()
             return@LaunchedEffect
         }
-        danmakuItems = coordinator.cachedDanmaku(danmakuCid) { loadDanmaku(danmakuCid) }
+        danmakuItems = coordinator.cachedDanmaku(danmakuCid) { loader(danmakuCid) }
     }
 
     var player by remember(playbackKey, streamToken) { mutableStateOf<ExoPlayer?>(initialHandoffPlayer) }
@@ -923,7 +924,7 @@ private fun VideoControls(
                 text = formatVideoTime(positionMs),
                 modifier = Modifier.widthIn(min = 36.dp),
                 color = Color.White,
-                style = TextStyle(fontSize = 12.sp),
+                style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
             )
             IconButton(
@@ -978,7 +979,7 @@ private fun VideoControls(
             Text(
                 text = speedLabel(speed),
                 color = Color.White,
-                style = TextStyle(fontSize = 13.sp),
+                style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold),
                 modifier = Modifier.clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
@@ -989,7 +990,7 @@ private fun VideoControls(
                 text = formatVideoTime((durationMs - positionMs).coerceAtLeast(0L)),
                 modifier = Modifier.widthIn(min = 36.dp),
                 color = Color.White.copy(alpha = 0.82f),
-                style = TextStyle(fontSize = 12.sp),
+                style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
                 textAlign = TextAlign.End,
             )

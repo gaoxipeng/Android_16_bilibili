@@ -57,8 +57,8 @@ fun SearchBangumiCard(
     Column(
         modifier = modifier
             .clip(shape)
-            .background(Color.White)
-            .border(0.5.dp, Color(0xFFE8E8E8), shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, shape)
             .clickable(onClick = onClick),
     ) {
         Box(

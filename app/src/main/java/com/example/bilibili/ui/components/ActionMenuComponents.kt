@@ -43,6 +43,7 @@ import androidx.compose.ui.zIndex
 import com.example.bilibili.ui.liquidglass.LocalLiquidMenuBackdrop
 import com.example.bilibili.ui.liquidglass.SurfaceLiquidMenuCard
 import com.example.bilibili.ui.liquidglass.liquidMenuSurfaceColor
+import com.example.bilibili.ui.theme.isAppLightTheme
 import com.kyant.backdrop.Backdrop
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
@@ -61,7 +62,7 @@ internal fun ActionFrostedCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
-    val isLightTheme = !androidx.compose.foundation.isSystemInDarkTheme()
+    val isLightTheme = isAppLightTheme()
     val shape = RoundedCornerShape(ActionMenuCornerRadius)
     val borderColor = com.example.bilibili.ui.liquidglass.liquidMenuBorderColor(isLightTheme)
     val surfaceColor = effectContainerColor ?: liquidMenuSurfaceColor(isLightTheme)
@@ -136,10 +137,10 @@ internal fun ActionMenuRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = when {
-                !enabled -> Color(0x661C1C1E)
+                !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                 destructive -> Color.White
                 selected -> MaterialTheme.colorScheme.primary
-                else -> Color(0xFF1C1C1E)
+                else -> MaterialTheme.colorScheme.onSurface
             },
         )
     }

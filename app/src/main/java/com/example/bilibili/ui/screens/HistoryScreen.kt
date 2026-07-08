@@ -504,7 +504,7 @@ fun HistoryScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White)
+                    .background(MaterialTheme.colorScheme.surface)
                     .padding(top = listTopInset),
             ) {
                 HistoryContentTabBar(
@@ -573,7 +573,7 @@ fun HistoryScreen(
                                                     compactTop = entry == historyEntries.first(),
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .background(Color.White),
+                                                        .background(MaterialTheme.colorScheme.surface),
                                                 )
                                             }
                                         }

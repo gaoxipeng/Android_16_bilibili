@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import com.example.bilibili.ui.theme.isAppLightTheme
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,8 +84,8 @@ internal val HomeSearchBarHeight = 40.dp
 internal val HomeSearchBarTopGap = 8.dp
 internal val HomeSearchBarHorizontalInset = 12.dp
 internal val HomeSearchBarBorderWidth = 0.5.dp
-internal val HomeSearchBarBorderColor = Color(0x80999999)
-internal val HomeSearchBarBorderColorOnSurface = Color(0xFFBBBBBB)
+private val HomeSearchBarBorderColorLight = Color(0x80999999)
+private val HomeSearchBarBorderColorOnSurfaceLight = Color(0xFFBBBBBB)
 internal val HomeSearchBarReservedHeight =
     HomeSearchBarTopGap + HomeSearchBarHeight + HomeSearchBarBottomGap
 
@@ -92,6 +93,14 @@ internal val HomeFeedGridSpacing = 6.dp
 internal val HomeFeedGridHorizontalPadding = 10.dp
 internal val HomeFeedSingleColumnHorizontalPadding = 12.dp
 internal val HomeFeedSingleColumnSpacing = 12.dp
+
+@Composable
+internal fun homeSearchBarBorderColor(): Color =
+    if (isAppLightTheme()) HomeSearchBarBorderColorLight else MaterialTheme.colorScheme.outline
+
+@Composable
+internal fun homeSearchBarBorderColorOnSurface(): Color =
+    if (isAppLightTheme()) HomeSearchBarBorderColorOnSurfaceLight else MaterialTheme.colorScheme.outline
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -454,7 +463,7 @@ fun HomeSearchCapsule(
             pill = true,
             useMenuGlassStyle = true,
             borderWidth = HomeSearchBarBorderWidth,
-            borderColor = HomeSearchBarBorderColor,
+            borderColor = homeSearchBarBorderColor(),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(HomeSearchBarHeight)
@@ -502,7 +511,7 @@ fun SearchInputCapsule(
         pill = true,
         useMenuGlassStyle = true,
         borderWidth = HomeSearchBarBorderWidth,
-        borderColor = HomeSearchBarBorderColorOnSurface,
+        borderColor = homeSearchBarBorderColorOnSurface(),
         modifier = modifier
             .fillMaxWidth()
             .height(HomeSearchBarHeight),

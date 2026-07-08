@@ -8,7 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.isSystemInDarkTheme
+import com.example.bilibili.ui.theme.isAppLightTheme
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -75,12 +75,11 @@ private val CollectionPanelHeaderHeight = 38.dp
 private val CollectionPanelMaxListHeight = 320.dp
 private val CollectionPanelEpisodeRowHeight = 46.dp
 
-private fun collectionPanelSurfaceColor(isLightTheme: Boolean) =
-    if (isLightTheme) {
-        Color.White.copy(alpha = 0.94f)
-    } else {
-        Color(0xFF1C1C1E).copy(alpha = 0.88f)
-    }
+@Composable
+private fun collectionPanelSurfaceColor(isLightTheme: Boolean): Color {
+    val surface = MaterialTheme.colorScheme.surface
+    return if (isLightTheme) surface.copy(alpha = 0.94f) else surface.copy(alpha = 0.88f)
+}
 
 @Composable
 @OptIn(ExperimentalHazeMaterialsApi::class)
@@ -156,7 +155,7 @@ fun VideoDetailCollectionSheet(
         val panelOffsetY = targetY.coerceIn(marginPx, maxY).roundToInt()
         val panelOffsetX = marginPx.roundToInt()
         val panelWidth = with(density) { panelWidthPx.toDp() }
-        val isLightTheme = !isSystemInDarkTheme()
+        val isLightTheme = isAppLightTheme()
         val panelSurfaceColor = collectionPanelSurfaceColor(isLightTheme)
         val panelShape = RoundedCornerShape(CollectionPanelCornerRadius)
         val panelBorderColor = liquidMenuBorderColor(isLightTheme)

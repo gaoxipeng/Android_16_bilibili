@@ -4,6 +4,7 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +31,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.example.bilibili.data.AppearanceMode
+import com.example.bilibili.data.AppearanceSettingsStore
 import com.example.bilibili.data.BiliHistoryItem
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BilibiliCredential
@@ -100,6 +103,7 @@ import com.example.bilibili.ui.navigation.AppNavEntry
 import com.example.bilibili.ui.navigation.findVideoDetail
 import com.example.bilibili.ui.navigation.stableKey
 import com.example.bilibili.ui.navigation.lastVideoDetail
+import com.example.bilibili.ui.theme.BilibiliTheme
 import com.example.bilibili.util.BiliArticleUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -136,6 +140,8 @@ fun BilibiliApp() {
     val scope = rememberCoroutineScope()
     val api = remember { BilibiliApiClient() }
     val accountStore = remember { BilibiliAccountStore(context) }
+    val appearanceSettingsStore = remember { AppearanceSettingsStore(context) }
+    var appearanceMode by remember { mutableStateOf(appearanceSettingsStore.readAppearanceMode()) }
     val homeFeedStore = remember { BilibiliHomeFeedStore(context) }
     val cachedHomeFeed = remember { homeFeedStore.read() }
     val playerPreferences = remember { BilibiliPlayerPreferences(context) }
@@ -188,6 +194,15 @@ fun BilibiliApp() {
 
     val playUrls = remember { mutableStateMapOf<String, BiliPlayStream>() }
     var activeAccount by remember { mutableStateOf(accountStore.getActiveAccount()) }
+    var storedAccounts by remember { mutableStateOf(accountStore.readAccounts()) }
+    var activeAccountId by remember { mutableStateOf(accountStore.readActiveAccountId()) }
+
+    fun reloadStoredAccounts() {
+        storedAccounts = accountStore.readAccounts()
+        activeAccountId = accountStore.readActiveAccountId()
+        activeAccount = accountStore.getActiveAccount()
+    }
+
     DisposableEffect(accountStore, scope) {
         api.onAccessKeyUpdated = { updated ->
             val account = accountStore.getActiveAccount()
@@ -195,7 +210,7 @@ fun BilibiliApp() {
                 scope.launch {
                     val next = account.copy(credential = updated)
                     accountStore.upsertAccount(next)
-                    activeAccount = next
+                    reloadStoredAccounts()
                 }
             }
         }
@@ -760,7 +775,7 @@ fun BilibiliApp() {
             )
             accountStore.upsertAccount(account)
             accountStore.setActiveAccountId(account.uid)
-            activeAccount = account
+            reloadStoredAccounts()
             api.invalidateWbiCache()
             if (hadNoActiveAccount) {
                 selectedTab = MainTab.Home
@@ -771,6 +786,66 @@ fun BilibiliApp() {
         }
     }
 
+    fun switchStoredAccount(uid: String) {
+        if (uid == activeAccountId) return
+        scope.launch {
+            val account = storedAccounts.firstOrNull { it.uid == uid } ?: return@launch
+            runCatching {
+                webSession.activateAccount(account)
+                accountStore.setActiveAccountId(uid)
+                reloadStoredAccounts()
+                api.invalidateWbiCache()
+            }.onSuccess {
+                refreshHome()
+                refreshFollow()
+                Toast.makeText(context, "已切换账号", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                Toast.makeText(
+                    context,
+                    error.message ?: "切换账号失败",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    fun deleteStoredAccount(uid: String) {
+        scope.launch {
+            val deletingActive = activeAccountId == uid
+            accountStore.removeAccount(uid)
+            reloadStoredAccounts()
+            if (!deletingActive) return@launch
+            val nextAccount = accountStore.getActiveAccount()
+            if (nextAccount != null) {
+                runCatching {
+                    webSession.activateAccount(nextAccount)
+                    api.invalidateWbiCache()
+                    refreshHome()
+                    refreshFollow()
+                }.onFailure { error ->
+                    Toast.makeText(
+                        context,
+                        error.message ?: "切换到下一个账号失败",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            } else {
+                webSession.clearAllCookies()
+                activeAccount = null
+                homeVideos = emptyList()
+                followVideos = emptyList()
+                hotVideos = emptyList()
+            }
+        }
+    }
+
+    fun prepareAddAccount() {
+        scope.launch {
+            webSession.prepareAddAccount()
+            showLoginSheet = true
+        }
+    }
+
     LaunchedEffect(activeAccount?.uid) {
         val account = activeAccount ?: return@LaunchedEffect
         if (account.credential.accessKey.isNotBlank()) return@LaunchedEffect
@@ -778,7 +853,7 @@ fun BilibiliApp() {
         if (updatedCredential.accessKey.isBlank()) return@LaunchedEffect
         val updatedAccount = account.copy(credential = updatedCredential)
         accountStore.upsertAccount(updatedAccount)
-        activeAccount = updatedAccount
+        reloadStoredAccounts()
     }
 
     LaunchedEffect(Unit) {
@@ -920,6 +995,14 @@ fun BilibiliApp() {
         }
     }
 
+    val systemInDarkTheme = isSystemInDarkTheme()
+    val darkTheme = when (appearanceMode) {
+        AppearanceMode.Light -> false
+        AppearanceMode.Dark -> true
+        AppearanceMode.System -> systemInDarkTheme
+    }
+
+    BilibiliTheme(darkTheme = darkTheme) {
     CompositionLocalProvider(
         LocalLiquidMenuBackdrop provides bottomBarBackdrop,
         LocalBilibiliCredential provides activeAccount?.credential,
@@ -1090,6 +1173,16 @@ fun BilibiliApp() {
                             backgroundPlaybackEnabled = enabled
                             playerPreferences.writeBackgroundPlaybackEnabled(enabled)
                         },
+                        appearanceMode = appearanceMode,
+                        onAppearanceModeChange = { mode ->
+                            appearanceMode = mode
+                            appearanceSettingsStore.writeAppearanceMode(mode)
+                        },
+                        storedAccounts = storedAccounts,
+                        activeAccountId = activeAccountId,
+                        onSwitchAccount = ::switchStoredAccount,
+                        onDeleteAccount = ::deleteStoredAccount,
+                        onAddAccount = ::prepareAddAccount,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -1268,6 +1361,7 @@ fun BilibiliApp() {
             persistLogin()
         },
     )
+    }
     }
 }
 

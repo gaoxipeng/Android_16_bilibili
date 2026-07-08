@@ -5,7 +5,7 @@ import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.updateTransition
-import androidx.compose.foundation.isSystemInDarkTheme
+import com.example.bilibili.ui.theme.isAppLightTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -56,9 +57,13 @@ internal fun BilibiliLiquidBottomBar(
     onCollapsedTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val isLightTheme = !isSystemInDarkTheme()
+    val isLightTheme = isAppLightTheme()
     val accentColor = if (isLightTheme) TabAccentLight else TabAccentDark
-    val unselectedColor = if (isLightTheme) Color(0xFF1F1F1F) else Color.White.copy(0.72f)
+    val unselectedColor = if (isLightTheme) {
+        Color(0xFF1F1F1F)
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+    }
     val collapsedSize = 64.dp
     val barHeight = 64.dp
     val animationOverflow = 12.dp

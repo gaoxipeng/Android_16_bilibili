@@ -223,7 +223,7 @@ fun FollowingScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White)
+                        .background(MaterialTheme.colorScheme.surface)
                     .padding(top = listTopInset),
             ) {
                 FollowingContentTabBar(

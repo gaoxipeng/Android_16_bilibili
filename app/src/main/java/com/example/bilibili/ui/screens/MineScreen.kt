@@ -19,6 +19,8 @@ import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.FeedLayoutStore
+import com.example.bilibili.data.StoredBilibiliAccount
+import com.example.bilibili.data.AppearanceMode
 import com.example.bilibili.data.UserRelationTab
 import com.example.bilibili.player.VideoPlaybackCoordinator
 
@@ -42,6 +44,13 @@ fun MineScreen(
     onFeedColumnCountChange: (Int) -> Unit = {},
     backgroundPlaybackEnabled: Boolean = false,
     onBackgroundPlaybackChange: (Boolean) -> Unit = {},
+    appearanceMode: AppearanceMode = AppearanceMode.System,
+    onAppearanceModeChange: (AppearanceMode) -> Unit = {},
+    storedAccounts: List<StoredBilibiliAccount> = emptyList(),
+    activeAccountId: String? = null,
+    onSwitchAccount: (String) -> Unit = {},
+    onDeleteAccount: (String) -> Unit = {},
+    onAddAccount: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (!loggedIn) {
@@ -84,6 +93,13 @@ fun MineScreen(
         onFeedColumnCountChange = onFeedColumnCountChange,
         backgroundPlaybackEnabled = backgroundPlaybackEnabled,
         onBackgroundPlaybackChange = onBackgroundPlaybackChange,
+        appearanceMode = appearanceMode,
+        onAppearanceModeChange = onAppearanceModeChange,
+        storedAccounts = storedAccounts,
+        activeAccountId = activeAccountId,
+        onSwitchAccount = onSwitchAccount,
+        onDeleteAccount = onDeleteAccount,
+        onAddAccount = onAddAccount,
         modifier = modifier,
     )
 }

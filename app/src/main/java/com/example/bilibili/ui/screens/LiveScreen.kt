@@ -331,7 +331,7 @@ fun LiveScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.White)
+                        .background(MaterialTheme.colorScheme.surface)
                         .padding(top = listTopInset),
                 ) {
                     LiveContentTabBar(
@@ -472,7 +472,7 @@ private fun LiveAreaTextRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White),
+            .background(MaterialTheme.colorScheme.surface),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -482,7 +482,11 @@ private fun LiveAreaTextRow(
                 text = area.name,
                 fontSize = 14.sp,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) Color.Black else Color(0xFFBBBBBB),
+                color = if (selected) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
                 modifier = Modifier.clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -549,13 +553,17 @@ private fun LiveRoomCard(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(VideoFeedCardCorner)
+    val cardBorderColor = MaterialTheme.colorScheme.outlineVariant
+    val metaBackground = MaterialTheme.colorScheme.surface
+    val titleColor = MaterialTheme.colorScheme.onSurface
+    val metaColor = MaterialTheme.colorScheme.onSurfaceVariant
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, LiveFeedCardBorderColor, shape),
+            .border(0.5.dp, cardBorderColor, shape),
         shape = shape,
         colors = CardDefaults.elevatedCardColors(
-            containerColor = LiveFeedMetaBackground,
+            containerColor = metaBackground,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp),
         onClick = onClick,
@@ -594,7 +602,7 @@ private fun LiveRoomCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(LiveFeedMetaBackground)
+                    .background(metaBackground)
                     .padding(LiveFeedMetaPadding),
             ) {
                 Text(
@@ -602,7 +610,7 @@ private fun LiveRoomCard(
                     maxLines = LiveFeedTitleMaxLines,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = LiveFeedTitleColor,
+                    color = titleColor,
                 )
                 Row(
                     modifier = Modifier
@@ -618,7 +626,7 @@ private fun LiveRoomCard(
                     Text(
                         text = room.userName,
                         style = MaterialTheme.typography.labelMedium,
-                        color = LiveFeedMetaDataColor,
+                        color = metaColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
@@ -631,10 +639,6 @@ private fun LiveRoomCard(
 
 private const val LiveFeedCoverAspectRatio = 16f / 9f
 private const val LiveFeedTitleMaxLines = 2
-private val LiveFeedCardBorderColor = Color(0xFFE8E8E8)
-private val LiveFeedMetaBackground = Color(0xFFFFFFFF)
-private val LiveFeedTitleColor = Color(0xFF1A1A1A)
-private val LiveFeedMetaDataColor = Color(0xFF999999)
 private val LiveFeedMetaPadding = 8.dp
 private val LiveFeedCoverOverlayPadding = 6.dp
 private val LiveFeedCoverScrimHeightFraction = 0.45f

@@ -5,7 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.isSystemInDarkTheme
+import com.example.bilibili.ui.theme.isAppLightTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -235,14 +235,23 @@ fun LiquidButton(
     }
 }
 
-fun liquidSurfaceColor(isLightTheme: Boolean): Color =
-    if (isLightTheme) Color.White.copy(0.48f) else Color.White.copy(0.22f)
+@Composable
+fun liquidSurfaceColor(isLightTheme: Boolean): Color {
+    val surface = MaterialTheme.colorScheme.surface
+    return if (isLightTheme) surface.copy(0.48f) else surface.copy(0.22f)
+}
 
-fun liquidMenuSurfaceColor(isLightTheme: Boolean): Color =
-    if (isLightTheme) Color.White.copy(0.82f) else Color.White.copy(0.38f)
+@Composable
+fun liquidMenuSurfaceColor(isLightTheme: Boolean): Color {
+    val surface = MaterialTheme.colorScheme.surface
+    return if (isLightTheme) surface.copy(0.82f) else surface.copy(0.38f)
+}
 
-fun liquidSheetSurfaceColor(isLightTheme: Boolean): Color =
-    if (isLightTheme) Color.White.copy(0.92f) else Color.White.copy(0.48f)
+@Composable
+fun liquidSheetSurfaceColor(isLightTheme: Boolean): Color {
+    val surface = MaterialTheme.colorScheme.surface
+    return if (isLightTheme) surface.copy(0.92f) else surface.copy(0.48f)
+}
 
 @Composable
 fun SurfaceLiquidCapsule(
@@ -257,7 +266,7 @@ fun SurfaceLiquidCapsule(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
-    val isLightTheme = !isSystemInDarkTheme()
+    val isLightTheme = isAppLightTheme()
     val surfaceColor = liquidMenuSurfaceColor(isLightTheme)
     val menuBorderColor = liquidMenuBorderColor(isLightTheme)
     val shape = if (pill) RoundedCornerShape(percent = 50) else RoundedCornerShape(cornerRadius)
@@ -328,11 +337,11 @@ fun SurfaceLiquidTextButton(
     style: TextStyle? = null,
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
-    val isLightTheme = !isSystemInDarkTheme()
+    val isLightTheme = isAppLightTheme()
     val resolvedTextColor = when {
         textColor.isSpecified -> textColor
         isLightTheme -> Color(0xFF1F1F1F)
-        else -> Color.White
+        else -> MaterialTheme.colorScheme.onSurface
     }
     val textStyle = style ?: MaterialTheme.typography.labelMedium
 
@@ -473,7 +482,7 @@ fun SurfaceLiquidMenuCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
-    val isLightTheme = !isSystemInDarkTheme()
+    val isLightTheme = isAppLightTheme()
     val shape = RoundedCornerShape(cornerRadius)
     val resolvedSurfaceColor = surfaceColor ?: when {
         useMenuGlassStyle -> liquidMenuSurfaceColor(isLightTheme)
@@ -534,7 +543,7 @@ fun SurfaceLiquidIconButton(
         modifier = modifier,
         onDoubleClick = onDoubleClick,
         isInteractive = isInteractive,
-        surfaceColor = liquidSurfaceColor(!isSystemInDarkTheme()),
+        surfaceColor = liquidSurfaceColor(isAppLightTheme()),
         content = content,
     )
 }

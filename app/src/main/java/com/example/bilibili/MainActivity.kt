@@ -9,7 +9,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.example.bilibili.ui.BilibiliApp
-import com.example.bilibili.ui.theme.BilibiliTheme
 
 class MainActivity : ComponentActivity() {
     private val requestNotificationPermission = registerForActivityResult(
@@ -25,9 +24,7 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         setContent {
-            BilibiliTheme {
-                BilibiliApp()
-            }
+            BilibiliApp()
         }
     }
 }

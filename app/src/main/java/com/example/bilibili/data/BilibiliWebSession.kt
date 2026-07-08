@@ -8,8 +8,10 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import kotlin.coroutines.resume
 
 class BilibiliWebSession(context: Context) {
     val webView: WebView = WebView(context)
@@ -56,6 +58,53 @@ class BilibiliWebSession(context: Context) {
             buvid3 = map["buvid3"].orEmpty(),
             buvid4 = map["buvid4"].orEmpty(),
         )
+    }
+
+    fun applyCredential(credential: BilibiliCredential) {
+        val cookieManager = CookieManager.getInstance()
+        val domains = listOf(
+            "https://www.bilibili.com",
+            "https://bilibili.com",
+            "https://t.bilibili.com",
+            "https://m.bilibili.com",
+            "https://api.bilibili.com",
+            "https://passport.bilibili.com",
+        )
+        val cookiePairs = credential.toCookieHeader().split("; ")
+        for (domain in domains) {
+            for (pair in cookiePairs) {
+                cookieManager.setCookie(domain, pair)
+            }
+        }
+        cookieManager.flush()
+    }
+
+    suspend fun clearAllCookies() {
+        suspendCancellableCoroutine { continuation ->
+            CookieManager.getInstance().removeAllCookies { success ->
+                CookieManager.getInstance().flush()
+                continuation.resume(success)
+            }
+        }
+    }
+
+    suspend fun prepareAddAccount() {
+        withContext(Dispatchers.Main) {
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+        }
+        clearAllCookies()
+    }
+
+    suspend fun activateAccount(account: StoredBilibiliAccount) {
+        withContext(Dispatchers.Main) {
+            webView.stopLoading()
+        }
+        clearAllCookies()
+        applyCredential(account.credential)
+        withContext(Dispatchers.Main) {
+            webView.loadUrl(BilibiliEndpoints.HOME)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")

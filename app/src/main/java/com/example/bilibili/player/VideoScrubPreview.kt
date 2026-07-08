@@ -98,7 +98,7 @@ fun VideoScrubPreviewOverlay(
                 text = "${formatVideoTime(positionMs)} / ${formatVideoTime(durationMs.coerceAtLeast(0L))}",
                 color = Color.White,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .padding(top = 6.dp)
                     .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(999.dp))

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -20,6 +21,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.example.bilibili.ui.theme.isAppLightTheme
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -153,7 +155,16 @@ internal fun calculateFeedCardActionMenuOffsetPx(
 internal val ActionMenuCornerRadius = 22.dp
 internal val ActionMenuBlurRadius = 36.dp
 internal val ImageActionMenuBlurRadius = 16.dp
-internal val ActionMenuSurfaceColor = Color(0x8AF0F0F0)
+
+@Composable
+internal fun actionMenuSurfaceColor(): Color {
+    return if (isAppLightTheme()) {
+        Color(0x8AF0F0F0)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.54f)
+    }
+}
+
 internal val ActionSheetBlurRadius = 80.dp
 internal val ActionMenuCardInset = 5.dp
 internal val ActionMenuItemGap = 3.dp

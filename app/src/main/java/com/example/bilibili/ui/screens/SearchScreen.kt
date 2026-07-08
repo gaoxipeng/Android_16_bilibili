@@ -103,7 +103,6 @@ private enum class SearchContentTab(val label: String) {
     Users("UP主"),
 }
 
-private val SearchHistoryChipBackground = Color(0xFFF7F7F7)
 private val SearchHistoryChipRadius = 8.dp
 private val SearchHistoryChipMaxWidth = 168.dp
 private val SearchHistoryTitleToChipsGap = 2.dp
@@ -981,7 +980,7 @@ private fun SearchHistoryChip(
         modifier = Modifier
             .widthIn(max = SearchHistoryChipMaxWidth)
             .clip(chipShape)
-            .background(SearchHistoryChipBackground)
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -1009,7 +1008,7 @@ private fun SearchHistoryChip(
                     .padding(top = 4.dp, end = 4.dp)
                     .size(16.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF999999))
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -1019,7 +1018,7 @@ private fun SearchHistoryChip(
             ) {
                 Text(
                     text = "×",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.surface,
                     fontSize = 12.sp,
                     lineHeight = 12.sp,
                     textAlign = TextAlign.Center,
@@ -1261,7 +1260,7 @@ private fun SearchPinnedCategoryChip(
         modifier = Modifier
             .clip(shape)
             .background(
-                if (selected) BiliPink.copy(alpha = 0.12f) else Color(0x0D000000),
+                if (selected) BiliPink.copy(alpha = 0.12f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
                 shape,
             )
             .clickable(onClick = onClick)
