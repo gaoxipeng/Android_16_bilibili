@@ -224,8 +224,8 @@ fun LiveRoomScreen(
     BackHandler(enabled = !navOverlayOpen) {
         when {
             showDanmakuSettings -> showDanmakuSettings = false
-            isFullscreen -> isFullscreen = false
             liveInfoCleared -> liveInfoCleared = false
+            isFullscreen -> isFullscreen = false
             else -> onBack()
         }
     }
@@ -378,7 +378,7 @@ fun LiveRoomScreen(
 
     val isLayoutKnown = isPortraitStream != null || playInfo != null
     val isPortraitLive = !isFullscreen && isPortraitStream == true
-    val supportsClearScreen = !isFullscreen && isLayoutKnown
+    val supportsClearScreen = isLayoutKnown && (!isFullscreen || isPortraitStream == false)
     val showLiveInfoUi = supportsClearScreen && !liveInfoCleared
     val showLiveDanmakuOverlay = danmakuEnabled && !liveInfoCleared
     val showLivePlayerControls = livePlayerOverlayVisible && !liveInfoCleared
@@ -518,7 +518,15 @@ fun LiveRoomScreen(
                 modifier = Modifier.fillMaxSize(),
             )
         } else if (isFullscreen) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .liveClearScreenSwipeGesture(
+                        cleared = liveInfoCleared,
+                        enabled = supportsClearScreen,
+                        onClearedChange = { liveInfoCleared = it },
+                    ),
+            ) {
                 LiveRoomPlayerBlock(
                     modifier = Modifier.fillMaxSize(),
                     backdrop = livePlayerBackdrop,
@@ -527,7 +535,7 @@ fun LiveRoomScreen(
                     playInfo = playInfo,
                     exoPlayer = exoPlayer,
                     danmakuItems = liveDanmakuItems,
-                    danmakuEnabled = danmakuEnabled,
+                    danmakuEnabled = showLiveDanmakuOverlay,
                     danmakuSettings = danmakuSettings,
                     videoResizeMode = videoResizeMode,
                     showDanmakuSettings = showDanmakuSettings,
@@ -541,41 +549,48 @@ fun LiveRoomScreen(
                         onLivePlayerControlInteraction()
                         reloadToken++
                     },
-                    overlayControlsVisible = livePlayerOverlayVisible,
+                    overlayControlsVisible = showLivePlayerControls,
                     onPlayerOverlayTap = onLivePlayerOverlayTap,
                     onControlInteraction = onLivePlayerControlInteraction,
                     onDanmakuSettingsChange = coordinator::updateDanmakuSettings,
                     onDismissDanmakuSettings = { showDanmakuSettings = false },
+                    clearScreenCleared = liveInfoCleared,
+                    onClearScreenChange = onClearScreenChange,
                 )
                 if (credential != null) {
-                    BoxWithConstraints(
+                    AnimatedVisibility(
+                        visible = showLiveInfoUi,
+                        enter = fadeIn(tween(200)),
+                        exit = fadeOut(tween(180)),
                         modifier = Modifier
                             .fillMaxSize()
                             .zIndex(4f),
                     ) {
-                        val chatListMaxHeight = maxHeight * 0.45f
-                        Column(Modifier.fillMaxSize()) {
-                            Spacer(
-                                Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
-                                    .pointerInput(Unit) {
-                                        detectTapGestures(onTap = { onLivePlayerOverlayTap() })
-                                    },
-                            )
-                            LiveRoomChatBottomBar(
-                                recentChatItems = recentChatItems,
-                                danmakuInput = danmakuInput,
-                                onDanmakuInputChange = { danmakuInput = it },
-                                onSendDanmaku = ::sendDanmaku,
-                                maxListHeight = chatListMaxHeight,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                            val chatListMaxHeight = maxHeight * 0.45f
+                            Column(Modifier.fillMaxSize()) {
+                                Spacer(
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures(onTap = { onLivePlayerOverlayTap() })
+                                        },
+                                )
+                                LiveRoomChatBottomBar(
+                                    recentChatItems = recentChatItems,
+                                    danmakuInput = danmakuInput,
+                                    onDanmakuInputChange = { danmakuInput = it },
+                                    onSendDanmaku = ::sendDanmaku,
+                                    maxListHeight = chatListMaxHeight,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
                 AnimatedVisibility(
-                    visible = livePlayerOverlayVisible && !showDanmakuSettings,
+                    visible = showLivePlayerControls && !showDanmakuSettings,
                     enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { -it },
                     exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
                     modifier = Modifier
