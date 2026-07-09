@@ -84,6 +84,9 @@ private enum class LiveContentTab(val label: String) {
 
 private val LiveAllArea = BiliLiveArea(id = 0L, name = "全部")
 
+private fun List<BiliLiveRoom>.distinctByRoomId(): List<BiliLiveRoom> =
+    distinctBy { it.roomId }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveScreen(
@@ -168,9 +171,9 @@ fun LiveScreen(
                 ).also { recommendPage = page }
             }
             recommendRooms = if (reset) {
-                result.rooms
+                result.rooms.distinctByRoomId()
             } else {
-                (recommendRooms + result.rooms).distinctBy { it.roomId }
+                (recommendRooms + result.rooms).distinctByRoomId()
             }
             recommendHasMore = result.hasMore && result.rooms.isNotEmpty()
         } catch (e: CancellationException) {
@@ -193,7 +196,7 @@ fun LiveScreen(
             followingError = null
         }
         try {
-            followingRooms = api.getLiveFollowingRooms(cred)
+            followingRooms = api.getLiveFollowingRooms(cred).distinctByRoomId()
             followingLoaded = true
         } catch (e: CancellationException) {
             throw e

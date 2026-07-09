@@ -248,12 +248,6 @@ fun liquidMenuSurfaceColor(isLightTheme: Boolean): Color {
 }
 
 @Composable
-fun liquidSheetSurfaceColor(isLightTheme: Boolean): Color {
-    val surface = MaterialTheme.colorScheme.surface
-    return if (isLightTheme) surface.copy(0.92f) else surface.copy(0.48f)
-}
-
-@Composable
 fun SurfaceLiquidCapsule(
     modifier: Modifier = Modifier,
     backdrop: Backdrop? = null,
@@ -322,150 +316,6 @@ fun SurfaceLiquidCapsule(
                 )
                 .then(borderModifier),
             content = content,
-        )
-    }
-}
-
-@Composable
-fun SurfaceLiquidTextButton(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    backdrop: Backdrop? = null,
-    textColor: Color = Color.Unspecified,
-    style: TextStyle? = null,
-) {
-    val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
-    val isLightTheme = isAppLightTheme()
-    val resolvedTextColor = when {
-        textColor.isSpecified -> textColor
-        isLightTheme -> Color(0xFF1F1F1F)
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-    val textStyle = style ?: MaterialTheme.typography.labelMedium
-
-    if (resolvedBackdrop != null) {
-        LiquidButton(
-            onClick = onClick,
-            backdrop = resolvedBackdrop,
-            modifier = modifier,
-            isInteractive = enabled,
-            surfaceColor = liquidSurfaceColor(isLightTheme),
-        ) {
-            Text(
-                text = text,
-                color = resolvedTextColor,
-                style = textStyle,
-                textAlign = TextAlign.Center,
-            )
-        }
-    } else {
-        SurfaceLiquidCapsule(
-            modifier = modifier.clickable(enabled = enabled, onClick = onClick),
-            pill = true,
-        ) {
-            Text(
-                text = text,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 12.dp),
-                color = resolvedTextColor,
-                style = textStyle,
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
-}
-
-@Composable
-fun TransparentLiquidCapsule(
-    modifier: Modifier = Modifier,
-    backdrop: Backdrop,
-    pill: Boolean = false,
-    cornerRadius: Dp = 22.dp,
-    blurRadius: Dp = 2.dp,
-    enableEdgeHighlight: Boolean = true,
-    useMenuGlassStyle: Boolean = false,
-    surfaceColor: Color = Color.Unspecified,
-    borderWidth: Dp = 0.dp,
-    borderColor: Color = Color.Unspecified,
-    content: @Composable BoxScope.() -> Unit,
-) {
-    val shape = if (pill) RoundedCornerShape(percent = 50) else RoundedCornerShape(cornerRadius)
-    val borderModifier =
-        if (borderWidth > 0.dp && borderColor.isSpecified) {
-            Modifier.border(borderWidth, borderColor, shape)
-        } else {
-            Modifier
-        }
-    Box(modifier.then(borderModifier)) {
-        Box(
-            Modifier
-                .matchParentSize()
-                .graphicsLayer { clip = false }
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { shape },
-                    effects = {
-                        if (useMenuGlassStyle) {
-                            liquidMenuGlassEffects()
-                        } else {
-                            vibrancy()
-                            blur(blurRadius.toPx())
-                            lens(12f.dp.toPx(), 24f.dp.toPx())
-                        }
-                    },
-                    highlight = if (enableEdgeHighlight) {
-                        { Highlight.Default }
-                    } else {
-                        null
-                    },
-                    shadow = null,
-                    onDrawSurface = {
-                        if (surfaceColor.isSpecified) {
-                            drawRect(surfaceColor)
-                        }
-                    },
-                ),
-            content = content,
-        )
-    }
-}
-
-@Composable
-fun TransparentLiquidTextButton(
-    text: String,
-    onClick: () -> Unit,
-    backdrop: Backdrop,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    textColor: Color = Color.White,
-    style: TextStyle? = null,
-    blurRadius: Dp = 2.dp,
-    enableEdgeHighlight: Boolean = true,
-    useMenuGlassStyle: Boolean = false,
-    surfaceColor: Color = Color.Unspecified,
-    borderWidth: Dp = 0.dp,
-    borderColor: Color = Color.Unspecified,
-) {
-    LiquidButton(
-        onClick = onClick,
-        backdrop = backdrop,
-        modifier = modifier,
-        isInteractive = enabled,
-        blurRadius = blurRadius,
-        enableEdgeHighlight = enableEdgeHighlight,
-        useMenuGlassStyle = useMenuGlassStyle,
-        surfaceColor = surfaceColor,
-        borderWidth = borderWidth,
-        borderColor = borderColor,
-    ) {
-        Text(
-            text = text,
-            color = textColor,
-            style = style ?: MaterialTheme.typography.labelMedium,
-            textAlign = TextAlign.Center,
         )
     }
 }
@@ -544,25 +394,6 @@ fun SurfaceLiquidIconButton(
         onDoubleClick = onDoubleClick,
         isInteractive = isInteractive,
         surfaceColor = liquidSurfaceColor(isAppLightTheme()),
-        content = content,
-    )
-}
-
-@Composable
-fun TransparentLiquidIconButton(
-    onClick: () -> Unit,
-    backdrop: Backdrop,
-    modifier: Modifier = Modifier,
-    onDoubleClick: (() -> Unit)? = null,
-    isInteractive: Boolean = true,
-    content: @Composable RowScope.() -> Unit,
-) {
-    LiquidButton(
-        onClick = onClick,
-        backdrop = backdrop,
-        modifier = modifier,
-        onDoubleClick = onDoubleClick,
-        isInteractive = isInteractive,
         content = content,
     )
 }

@@ -10,7 +10,6 @@ val BiliVideoActionInactive = Color(0xFF999999)
 val TabAccentLight = BiliPink
 val TabAccentDark = BiliPinkDark
 
-val TabMutedLight = Color(0xFF8E8E93)
 val TabMutedDark = Color(0xFF98989D)
 
 val AppBackgroundLight = Color.White

@@ -83,9 +83,6 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
     }
 }
 
-fun List<AppNavEntry>.topVideoDetail(): AppNavEntry.VideoDetail? =
-    lastOrNull() as? AppNavEntry.VideoDetail
-
 fun List<AppNavEntry>.lastVideoDetail(): AppNavEntry.VideoDetail? =
     lastOrNull { it is AppNavEntry.VideoDetail } as? AppNavEntry.VideoDetail
 

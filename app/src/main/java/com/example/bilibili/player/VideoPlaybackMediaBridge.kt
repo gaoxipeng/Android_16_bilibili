@@ -36,8 +36,8 @@ object VideoPlaybackMediaBridge {
         val context = appContext ?: return
         if (sessionPlayer === player && session != null) {
             sessionPlaybackKey = playbackKey
-            VideoPlaybackMediaService.attachCurrentSession(session)
             ensureServiceStarted(context)
+            VideoPlaybackMediaService.attachCurrentSession(session)
             return
         }
         releaseSessionLocked()
@@ -55,8 +55,8 @@ object VideoPlaybackMediaBridge {
         session = MediaSession.Builder(context, player)
             .setSessionActivity(pendingIntent)
             .build()
-        VideoPlaybackMediaService.attachCurrentSession(session)
         ensureServiceStarted(context)
+        VideoPlaybackMediaService.attachCurrentSession(session)
     }
 
     @Synchronized

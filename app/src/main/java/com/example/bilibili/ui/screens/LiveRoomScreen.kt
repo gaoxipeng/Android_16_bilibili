@@ -65,12 +65,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -126,18 +128,27 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 private val LiveRoomHeaderHeight = 56.dp
 private const val LIVE_ONLINE_REFRESH_INTERVAL_MS = 5_000L
 private const val LIVE_PLAYER_CONTROLS_HIDE_DELAY_MS = 2_000L
 private const val LIVE_CLEAR_SCREEN_SWIPE_THRESHOLD_PX = 72f
+private const val LIVE_DANMAKU_BUFFER_MAX = 400
+private const val LIVE_DANMAKU_BUFFER_TRIM_THRESHOLD = 500
+private const val LIVE_DANMAKU_STICK_TO_BOTTOM_THRESHOLD = 2
 private val LIVE_PLAYBACK_QN_FALLBACKS = intArrayOf(10_000, 400, 250, 150, 80, 64, 32, 16)
 
 private data class LiveRoomHeaderFollowState(
     val relation: BiliAuthorRelation,
     val loading: Boolean,
     val onClick: () -> Unit,
+)
+
+private data class LiveRoomChatEntry(
+    val listKey: Long,
+    val item: BiliDanmakuItem,
 )
 
 private fun BiliDanmakuItem.withLiveEmoticonFallback(
@@ -188,7 +199,8 @@ fun LiveRoomScreen(
     val danmakuEnabled = coordinator.danmakuVisible
     val danmakuSettings = coordinator.danmakuSettings
     var danmakuInput by remember(room.roomId) { mutableStateOf("") }
-    val danmakuItems = remember(room.roomId) { mutableStateListOf<BiliDanmakuItem>() }
+    val danmakuEntries = remember(room.roomId) { mutableStateListOf<LiveRoomChatEntry>() }
+    var nextDanmakuListKey by remember(room.roomId) { mutableLongStateOf(0L) }
     var reloadToken by remember(room.roomId) { mutableIntStateOf(0) }
     var isPortraitStream by remember(room.roomId) { mutableStateOf<Boolean?>(room.isPortrait) }
     var isFullscreen by remember(room.roomId) { mutableStateOf(false) }
@@ -201,14 +213,19 @@ fun LiveRoomScreen(
     var liveEmoticons by remember(room.roomId) {
         mutableStateOf<Map<String, BiliDanmakuEmoticon>>(emptyMap())
     }
-    val liveDanmakuItems = remember(danmakuItems.size, liveEmoticons) {
-        danmakuItems.map { item -> item.withLiveEmoticonFallback(liveEmoticons) }
+    val liveDanmakuItems = remember(danmakuEntries.size, liveEmoticons) {
+        danmakuEntries.map { entry ->
+            entry.item.withLiveEmoticonFallback(liveEmoticons)
+        }
     }
-    val recentChatItems = liveDanmakuItems
-        .asReversed()
-        .filter { it.content.isNotBlank() }
-        .take(80)
-        .reversed()
+    val recentChatEntries = remember(danmakuEntries.size, liveEmoticons) {
+        danmakuEntries
+            .filter { it.item.content.isNotBlank() }
+            .takeLast(LIVE_DANMAKU_BUFFER_MAX)
+            .map { entry ->
+                entry.copy(item = entry.item.withLiveEmoticonFallback(liveEmoticons))
+            }
+    }
 
     val exoPlayer = remember(room.roomId) {
         ExoPlayer.Builder(context).build().apply {
@@ -327,10 +344,11 @@ fun LiveRoomScreen(
 
     LaunchedEffect(room.roomId) {
         danmakuClient.danmaku.collectLatest { item ->
-            danmakuItems += item
-            if (danmakuItems.size > 500) {
-                repeat(danmakuItems.size - 400) {
-                    if (danmakuItems.isNotEmpty()) danmakuItems.removeAt(0)
+            nextDanmakuListKey++
+            danmakuEntries.add(LiveRoomChatEntry(nextDanmakuListKey, item))
+            if (danmakuEntries.size > LIVE_DANMAKU_BUFFER_TRIM_THRESHOLD) {
+                repeat(danmakuEntries.size - LIVE_DANMAKU_BUFFER_MAX) {
+                    if (danmakuEntries.isNotEmpty()) danmakuEntries.removeAt(0)
                 }
             }
         }
@@ -578,7 +596,7 @@ fun LiveRoomScreen(
                                         },
                                 )
                                 LiveRoomChatBottomBar(
-                                    recentChatItems = recentChatItems,
+                                    recentChatEntries = recentChatEntries,
                                     danmakuInput = danmakuInput,
                                     onDanmakuInputChange = { danmakuInput = it },
                                     onSendDanmaku = ::sendDanmaku,
@@ -698,7 +716,7 @@ fun LiveRoomScreen(
                                     },
                             )
                             LiveRoomChatBottomBar(
-                                recentChatItems = recentChatItems,
+                                recentChatEntries = recentChatEntries,
                                 danmakuInput = danmakuInput,
                                 onDanmakuInputChange = { danmakuInput = it },
                                 onSendDanmaku = ::sendDanmaku,
@@ -781,7 +799,7 @@ fun LiveRoomScreen(
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                         ) {
                             LiveRecentDanmakuList(
-                                recentChatItems = recentChatItems,
+                                recentChatEntries = recentChatEntries,
                                 modifier = Modifier
                                     .weight(1f, fill = true)
                                     .fillMaxWidth()
@@ -1502,16 +1520,33 @@ private fun LiveDanmakuInputBar(
 
 @Composable
 private fun LiveRecentDanmakuList(
-    recentChatItems: List<BiliDanmakuItem>,
+    recentChatEntries: List<LiveRoomChatEntry>,
     modifier: Modifier = Modifier,
     itemSpacing: Dp = 5.dp,
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(recentChatItems.size) {
-        if (recentChatItems.isNotEmpty()) {
-            listState.animateScrollToItem(recentChatItems.lastIndex)
-        }
+    var stickToBottom by remember { mutableStateOf(true) }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { inProgress ->
+                if (inProgress) return@collect
+                val layoutInfo = listState.layoutInfo
+                if (layoutInfo.totalItemsCount == 0) {
+                    stickToBottom = true
+                    return@collect
+                }
+                val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                stickToBottom = lastVisible >= layoutInfo.totalItemsCount - LIVE_DANMAKU_STICK_TO_BOTTOM_THRESHOLD
+            }
     }
+
+    LaunchedEffect(recentChatEntries.lastOrNull()?.listKey) {
+        if (recentChatEntries.isEmpty() || !stickToBottom) return@LaunchedEffect
+        listState.scrollToItem(recentChatEntries.lastIndex)
+    }
+
     LazyColumn(
         state = listState,
         modifier = modifier,
@@ -1519,10 +1554,10 @@ private fun LiveRecentDanmakuList(
         contentPadding = PaddingValues(top = 2.dp),
     ) {
         items(
-            items = recentChatItems,
-            key = { item -> item.id },
-        ) { item ->
-            LiveRecentDanmakuLine(item = item)
+            items = recentChatEntries,
+            key = { entry -> entry.listKey },
+        ) { entry ->
+            LiveRecentDanmakuLine(item = entry.item)
         }
     }
 }
@@ -1575,26 +1610,6 @@ private fun LiveRecentDanmakuLine(
 }
 
 @Composable
-private fun LiveRecentDanmakuPanel(
-    recentChatItems: List<BiliDanmakuItem>,
-    modifier: Modifier = Modifier,
-) {
-    if (recentChatItems.isEmpty()) return
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .widthIn(max = 520.dp)
-            .background(Color.Black.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        recentChatItems.takeLast(4).forEach { item ->
-            LiveRecentDanmakuLine(item = item)
-        }
-    }
-}
-
-@Composable
 private fun LiveRoomFullscreenTopBar(
     title: String,
     onClose: () -> Unit,
@@ -1639,7 +1654,7 @@ private fun LiveRoomFullscreenTopBar(
 
 @Composable
 private fun LiveRoomChatBottomBar(
-    recentChatItems: List<BiliDanmakuItem>,
+    recentChatEntries: List<LiveRoomChatEntry>,
     danmakuInput: String,
     onDanmakuInputChange: (String) -> Unit,
     onSendDanmaku: (String) -> Unit,
@@ -1662,7 +1677,7 @@ private fun LiveRoomChatBottomBar(
         verticalArrangement = Arrangement.Bottom,
     ) {
         LiveRecentDanmakuList(
-            recentChatItems = recentChatItems,
+            recentChatEntries = recentChatEntries,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = maxListHeight)
@@ -1673,56 +1688,6 @@ private fun LiveRoomChatBottomBar(
             onDanmakuInputChange = onDanmakuInputChange,
             onSendDanmaku = onSendDanmaku,
         )
-    }
-}
-
-@Composable
-private fun LiveRoomInfoPanel(
-    detail: BiliLiveRoomDetail?,
-    recentChatItems: List<BiliDanmakuItem>,
-    danmakuInput: String,
-    onDanmakuInputChange: (String) -> Unit,
-    credential: BilibiliCredential?,
-    onSendDanmaku: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .background(Color(0xFF111111))
-            .navigationBarsPadding()
-            .imePadding()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        detail?.description?.takeIf { it.isNotBlank() }?.let { description ->
-            Text(
-                text = description,
-                color = Color.White.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(Modifier.height(12.dp))
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        if (credential != null) {
-            LiveRecentDanmakuPanel(
-                recentChatItems = recentChatItems,
-                modifier = Modifier.padding(bottom = LiveDanmakuListInputGap),
-            )
-            LiveDanmakuInputBar(
-                danmakuInput = danmakuInput,
-                onDanmakuInputChange = onDanmakuInputChange,
-                onSendDanmaku = onSendDanmaku,
-            )
-        } else {
-            Text(
-                text = "登录后可发送弹幕",
-                color = Color.White.copy(alpha = 0.45f),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-            )
-        }
     }
 }
 

@@ -311,26 +311,6 @@ fun BiliCommentRow(
         }
     }
 }
-
-@Composable
-fun BiliCommentLoadMoreRow(
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "加载更多评论",
-            fontSize = BiliCommentAuthorFontSize,
-            color = BiliPink,
-            modifier = Modifier.clickable(onClick = onClick),
-        )
-    }
-}
-
 @Composable
 fun BiliCommentReplyFooterRow(
     remainingCount: Long,
