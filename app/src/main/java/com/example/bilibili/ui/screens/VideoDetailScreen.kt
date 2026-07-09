@@ -81,7 +81,9 @@ import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.player.BilibiliVideoSurface
 import com.example.bilibili.player.LightContentStatusBarEffect
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.player.VideoPlaybackMediaBridge
 import com.example.bilibili.player.VideoPlaybackMetadata
+import com.example.bilibili.player.resolveMediaEpisodeControls
 import com.example.bilibili.player.rememberVideoControlBackdrop
 import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.knownVideoAspectRatio
@@ -1075,6 +1077,40 @@ fun VideoDetailScreen(
                 if (error is CancellationException) return@onFailure
                 Toast.makeText(context, error.message ?: "切换视频失败", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    LaunchedEffect(
+        playbackKey,
+        effectivePages,
+        effectiveUgcSeason,
+        currentCid,
+        currentVideo.bvid,
+        activePart?.cid,
+        activePart?.page,
+    ) {
+        val controls = resolveMediaEpisodeControls(
+            pages = effectivePages,
+            ugcSeason = effectiveUgcSeason,
+            currentCid = currentCid,
+            currentBvid = currentVideo.bvid,
+            activePartPage = activePart?.page,
+            onSwitchPart = ::switchToPart,
+            onSwitchEpisode = { episode ->
+                switchToUgcEpisode(
+                    episode.toVideoItem(
+                        authorName = currentVideo.authorName,
+                        authorMid = currentVideo.authorMid,
+                    ),
+                )
+            },
+        )
+        VideoPlaybackMediaBridge.updateEpisodeControls(controls, playbackKey)
+    }
+
+    DisposableEffect(playbackKey) {
+        onDispose {
+            VideoPlaybackMediaBridge.clearEpisodeControls(playbackKey)
         }
     }
 

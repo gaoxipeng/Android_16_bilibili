@@ -2,4 +2,6 @@
     <string name="app_name">哔哩哔哩</string>
     <string name="media_playback_channel_name">视频播放</string>
     <string name="media_playback_notification_text">正在播放</string>
+    <string name="media_previous_episode">上一集</string>
+    <string name="media_next_episode">下一集</string>
 </resources>

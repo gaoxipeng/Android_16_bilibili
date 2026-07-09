@@ -21,7 +21,20 @@ object VideoPlaybackMediaBridge {
     private var sessionPlayer: ExoPlayer? = null
 
     @Volatile
+    private var navigationPlayer: EpisodeNavigationPlayer? = null
+
+    @Volatile
     private var sessionPlaybackKey: String? = null
+
+    @Volatile
+    private var episodeControls: MediaEpisodeControls = MediaEpisodeControls.EMPTY
+
+    private val mediaSessionCallback by lazy {
+        VideoPlaybackMediaSessionCallback(
+            context = appContext ?: throw IllegalStateException("VideoPlaybackMediaBridge not initialized"),
+            controlsProvider = { episodeControls },
+        )
+    }
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -43,6 +56,7 @@ object VideoPlaybackMediaBridge {
         releaseSessionLocked()
         sessionPlaybackKey = playbackKey
         sessionPlayer = player
+        episodeControls = MediaEpisodeControls.EMPTY
         val pendingIntent = PendingIntent.getActivity(
             context,
             playbackKey.hashCode(),
@@ -52,11 +66,42 @@ object VideoPlaybackMediaBridge {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        session = MediaSession.Builder(context, player)
+        val wrappedPlayer = EpisodeNavigationPlayer(player).also { navigationPlayer = it }
+        session = MediaSession.Builder(context, wrappedPlayer)
             .setSessionActivity(pendingIntent)
+            .setCallback(mediaSessionCallback)
+            .setCustomLayout(
+                VideoPlaybackMediaSessionCallback.buildEpisodeControlButtons(context, episodeControls),
+            )
             .build()
         ensureServiceStarted(context)
         VideoPlaybackMediaService.attachCurrentSession(session)
+    }
+
+    @Synchronized
+    fun updateEpisodeControls(controls: MediaEpisodeControls, playbackKey: String) {
+        if (sessionPlaybackKey != playbackKey) return
+        episodeControls = controls
+        navigationPlayer?.updateControls(controls)
+        val context = appContext ?: return
+        val currentSession = session ?: return
+        currentSession.setCustomLayout(
+            VideoPlaybackMediaSessionCallback.buildEpisodeControlButtons(context, controls),
+        )
+        val playerCommands = VideoPlaybackMediaSessionCallback.buildAvailablePlayerCommands(controls)
+        currentSession.connectedControllers.forEach { controller ->
+            currentSession.setAvailableCommands(
+                controller,
+                MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS,
+                playerCommands,
+            )
+        }
+    }
+
+    @Synchronized
+    fun clearEpisodeControls(playbackKey: String) {
+        if (sessionPlaybackKey != playbackKey) return
+        updateEpisodeControls(MediaEpisodeControls.EMPTY, playbackKey)
     }
 
     @Synchronized
@@ -84,7 +129,9 @@ object VideoPlaybackMediaBridge {
         }
         session = null
         sessionPlayer = null
+        navigationPlayer = null
         sessionPlaybackKey = null
+        episodeControls = MediaEpisodeControls.EMPTY
     }
 
     private fun ensureServiceStarted(context: Context) {
