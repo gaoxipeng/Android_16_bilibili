@@ -358,7 +358,11 @@ private fun CollectionSheetPanelContent(
                     index = page.page.takeIf { it > 0 } ?: (index + 1),
                     title = page.title.ifBlank { "P${index + 1}" },
                     durationSeconds = page.durationSeconds,
-                    selected = page.cid == currentCid,
+                    selected = partMatchesCurrent(
+                        page = page,
+                        currentBvid = currentBvid,
+                        currentCid = currentCid,
+                    ),
                     onClick = {
                         onDismiss()
                         onPartClick(page)
@@ -440,9 +444,23 @@ private fun episodeMatchesCurrent(
     currentBvid: String,
     currentCid: Long,
 ): Boolean {
-    if (episodeCid > 0L && currentCid > 0L) return episodeCid == currentCid
-    if (currentBvid.isNotBlank() && episodeBvid == currentBvid) return true
-    return false
+    if (episodeCid > 0L && currentCid > 0L) {
+        return episodeCid == currentCid &&
+            (episodeBvid.isBlank() || currentBvid.isBlank() || episodeBvid == currentBvid)
+    }
+    return currentBvid.isNotBlank() && episodeBvid == currentBvid
+}
+
+private fun partMatchesCurrent(
+    page: BiliVideoPage,
+    currentBvid: String,
+    currentCid: Long,
+): Boolean {
+    if (page.cid > 0L && currentCid > 0L) {
+        return page.cid == currentCid &&
+            (page.bvid.isBlank() || currentBvid.isBlank() || page.bvid == currentBvid)
+    }
+    return page.bvid.isNotBlank() && page.bvid == currentBvid
 }
 
 private fun computeUgcSeasonEpisodeListIndex(

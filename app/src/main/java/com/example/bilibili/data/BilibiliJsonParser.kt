@@ -40,9 +40,11 @@ object BilibiliJsonParser {
         val owner = data.optJSONObject("owner") ?: JSONObject()
         val stat = data.optJSONObject("stat") ?: JSONObject()
         val pages = data.optJSONArray("pages")
-        val parsedPages = parseVideoPages(pages)
+        val parsedPages = parseVideoPages(pages, data.optString("bvid"))
+            .ifEmpty { parseUgcSeasonPages(data.optJSONObject("ugc_season")) }
         val cid = parsedPages.firstOrNull()?.cid
             ?: pages?.optJSONObject(0)?.optLong("cid")
+            ?: data.optLong("cid")
             ?: 0L
         val dimension = data.optJSONObject("dimension")
         val redirectUrl = data.optString("redirect_url")
@@ -83,7 +85,7 @@ object BilibiliJsonParser {
         )
     }
 
-    private fun parseVideoPages(pages: org.json.JSONArray?): List<BiliVideoPage> {
+    private fun parseVideoPages(pages: org.json.JSONArray?, parentBvid: String = ""): List<BiliVideoPage> {
         if (pages == null || pages.length() <= 1) return emptyList()
         return buildList {
             for (index in 0 until pages.length()) {
@@ -100,9 +102,47 @@ object BilibiliJsonParser {
                             .takeIf { it > 0L }
                             ?: pageObj.optLong("id").takeIf { it > 0L }
                             ?: 0L,
+                        bvid = parentBvid,
                     ),
                 )
             }
+        }
+    }
+
+    private fun parseUgcSeasonPages(season: JSONObject?): List<BiliVideoPage> {
+        if (season == null) return emptyList()
+        val sections = season.optJSONArray("sections") ?: return emptyList()
+        val episodes = buildList {
+            for (sectionIndex in 0 until sections.length()) {
+                val section = sections.optJSONObject(sectionIndex) ?: continue
+                val sectionEpisodes = section.optJSONArray("episodes") ?: continue
+                for (episodeIndex in 0 until sectionEpisodes.length()) {
+                    sectionEpisodes.optJSONObject(episodeIndex)?.let(::add)
+                }
+            }
+        }
+        if (episodes.size <= 1) return emptyList()
+        return episodes.mapIndexedNotNull { index, episode ->
+            val bvid = episode.optString("bvid")
+            val pageInfo = episode.optJSONObject("page")
+            val arc = episode.optJSONObject("arc")
+            val cid = episode.optLong("cid").takeIf { it > 0L }
+                ?: pageInfo?.optLong("cid")?.takeIf { it > 0L }
+                ?: 0L
+            if (bvid.isBlank() || cid <= 0L) return@mapIndexedNotNull null
+            val title = episode.optString("title")
+                .ifBlank { pageInfo?.optString("part").orEmpty() }
+                .ifBlank { arc?.optString("title").orEmpty() }
+            val durationSeconds = pageInfo?.optLong("duration")?.toInt()?.takeIf { it > 0 }
+                ?: arc?.optLong("duration")?.toInt()
+                ?: 0
+            BiliVideoPage(
+                page = index + 1,
+                cid = cid,
+                title = title,
+                durationSeconds = durationSeconds,
+                bvid = bvid,
+            )
         }
     }
 
@@ -111,14 +151,15 @@ object BilibiliJsonParser {
         val seasonId = data.optLong("season_id")
         if (seasonId <= 0L) return null
         val ugcSeason = data.optJSONObject("ugc_season")
-        val title = ugcSeason?.optString("title").orEmpty().trim()
-        if (title.isBlank()) return null
         val apiEpCount = ugcSeason?.optInt("ep_count") ?: 0
         if (apiEpCount <= 1) return null
+        val title = ugcSeason?.optString("title").orEmpty().trim().ifBlank { "合集" }
         return BiliUgcSeason(
             id = seasonId,
             title = title,
-            mid = ugcSeason?.optLong("mid") ?: data.optJSONObject("owner")?.optLong("mid") ?: 0L,
+            mid = ugcSeason?.optLong("mid")?.takeIf { it > 0L }
+                ?: data.optJSONObject("owner")?.optLong("mid")
+                ?: 0L,
             coverUrl = normalizeImageUrl(ugcSeason?.optString("cover").orEmpty()),
             sections = emptyList(),
             apiEpCount = apiEpCount,
@@ -127,10 +168,10 @@ object BilibiliJsonParser {
 
     private fun parseUgcSeason(data: JSONObject): BiliUgcSeason? {
         val season = data.optJSONObject("ugc_season") ?: return null
-        val id = season.optLong("id")
-        val title = season.optString("title").trim()
+        val id = season.optLong("id").takeIf { it > 0L } ?: data.optLong("season_id")
+        val title = season.optString("title").trim().ifBlank { "合集" }
         val apiEpCount = season.optInt("ep_count")
-        if (id <= 0L || title.isBlank()) return null
+        if (id <= 0L) return null
         val sectionsArray = season.optJSONArray("sections")
         val sections = if (sectionsArray != null) {
             buildList {
@@ -158,7 +199,9 @@ object BilibiliJsonParser {
         return BiliUgcSeason(
             id = id,
             title = title,
-            mid = season.optLong("mid"),
+            mid = season.optLong("mid").takeIf { it > 0L }
+                ?: data.optJSONObject("owner")?.optLong("mid")
+                ?: 0L,
             coverUrl = normalizeImageUrl(season.optString("cover")),
             sections = sections,
             apiEpCount = apiEpCount,
@@ -222,11 +265,21 @@ object BilibiliJsonParser {
                 }
             }
         return base.withHydratedEpisodes(mergedEpisodes).copy(
-            title = base.title.ifBlank { page.title },
+            title = mergeUgcSeasonTitle(base.title, page.title),
             mid = base.mid.takeIf { it > 0L } ?: page.mid,
             coverUrl = base.coverUrl.ifBlank { page.coverUrl },
             apiEpCount = maxOf(base.apiEpCount, page.apiEpCount, mergedEpisodes.size),
         )
+    }
+
+    private fun mergeUgcSeasonTitle(baseTitle: String, hydratedTitle: String): String {
+        val base = baseTitle.trim()
+        val hydrated = hydratedTitle.trim()
+        return when {
+            hydrated.isBlank() -> base
+            base.isBlank() || base == "合集" -> hydrated
+            else -> base
+        }
     }
 
     private fun parseUgcSeasonEpisodes(array: org.json.JSONArray?): List<BiliUgcSeasonEpisode> {
@@ -2449,12 +2502,15 @@ object BilibiliJsonParser {
             ?: history?.optLong("ep_id")?.takeIf { it > 0L }
             ?: item.optLong("epid").takeIf { it > 0L }
             ?: item.optLong("ep_id").takeIf { it > 0L }
+        val historyOid = history?.optLong("oid")?.takeIf { it > 0L } ?: 0L
         val epid = fieldEpid
+            ?: historyOid.takeIf { business == BiliHistoryBusiness.Pgc && it > 0L }
             ?: kidValue.takeIf { business == BiliHistoryBusiness.Pgc && it > 0L }
             ?: parsePgcEpidFromUri(webUri)
             ?: 0L
         val historyCid = history?.optLong("cid") ?: 0L
         val aid = item.optLong("aid").takeIf { it > 0L }
+            ?: historyOid.takeIf { business != BiliHistoryBusiness.Pgc && it > 0L }
             ?: history?.optLong("oid")?.takeIf { it > 0L }
             ?: 0L
         val cid: Long = item.optLong("cid").takeIf { it > 0L } ?: historyCid
@@ -2540,6 +2596,9 @@ object BilibiliJsonParser {
 
     fun parsePgcEpidFromUri(uri: String): Long? {
         if (uri.isBlank()) return null
+        Regex("""ep_id=(\d+)""").find(uri)?.groupValues?.getOrNull(1)?.toLongOrNull()?.takeIf { it > 0L }?.let {
+            return it
+        }
         val marker = "ep"
         var start = uri.indexOf(marker)
         while (start >= 0) {
@@ -2552,6 +2611,17 @@ object BilibiliJsonParser {
                 return uri.substring(digitStart, digitEnd).toLongOrNull()?.takeIf { it > 0L }
             }
             start = uri.indexOf(marker, startIndex = start + marker.length)
+        }
+        return null
+    }
+
+    fun parsePgcSeasonIdFromUri(uri: String): Long? {
+        if (uri.isBlank()) return null
+        Regex("""/ss(\d+)""").find(uri)?.groupValues?.getOrNull(1)?.toLongOrNull()?.takeIf { it > 0L }?.let {
+            return it
+        }
+        Regex("""season_id=(\d+)""").find(uri)?.groupValues?.getOrNull(1)?.toLongOrNull()?.takeIf { it > 0L }?.let {
+            return it
         }
         return null
     }
@@ -2862,9 +2932,8 @@ object BilibiliJsonParser {
             ?: json.optJSONObject("data")?.optJSONObject("result")
             ?: json.optJSONObject("data")
             ?: return 0L
-        val episodes = result.optJSONArray("episodes") ?: return 0L
-        for (index in 0 until episodes.length()) {
-            val episode = episodes.optJSONObject(index) ?: continue
+        val episodes = collectPgcEpisodes(result)
+        for (episode in episodes) {
             val epid = episode.optLong("ep_id")
                 .takeIf { it > 0L }
                 ?: episode.optLong("id").takeIf { it > 0L }
@@ -2875,26 +2944,42 @@ object BilibiliJsonParser {
         return 0L
     }
 
+    private fun collectPgcEpisodes(result: JSONObject): List<JSONObject> {
+        val direct = result.optJSONArray("episodes")
+        if (direct != null && direct.length() > 0) {
+            return buildList(direct.length()) {
+                for (index in 0 until direct.length()) {
+                    direct.optJSONObject(index)?.let(::add)
+                }
+            }
+        }
+        val sections = result.optJSONArray("sections") ?: return emptyList()
+        return buildList {
+            for (sectionIndex in 0 until sections.length()) {
+                val section = sections.optJSONObject(sectionIndex) ?: continue
+                val sectionEpisodes = section.optJSONArray("episodes") ?: continue
+                for (episodeIndex in 0 until sectionEpisodes.length()) {
+                    sectionEpisodes.optJSONObject(episodeIndex)?.let(::add)
+                }
+            }
+        }
+    }
+
     fun parsePgcEpisodeContext(json: JSONObject, epid: Long): BiliPGCEpisodeContext? {
         if (epid <= 0L) return null
         val result = json.optJSONObject("result")
             ?: json.optJSONObject("data")?.optJSONObject("result")
             ?: json.optJSONObject("data")
             ?: return null
-        val episodes = result.optJSONArray("episodes") ?: return null
-        var episode: JSONObject? = null
-        for (index in 0 until episodes.length()) {
-            val candidate = episodes.optJSONObject(index) ?: continue
+        val episodes = collectPgcEpisodes(result)
+        if (episodes.isEmpty()) return null
+        val resolvedEpisode = episodes.firstOrNull { candidate ->
             val candidateEpid = candidate.optLong("id")
                 .takeIf { it > 0L }
                 ?: candidate.optLong("ep_id").takeIf { it > 0L }
                 ?: 0L
-            if (candidateEpid == epid) {
-                episode = candidate
-                break
-            }
-        }
-        val resolvedEpisode = episode ?: return null
+            candidateEpid == epid
+        } ?: return null
         val seasonId = result.optLong("season_id")
         val seasonTitle = result.optString("title").ifBlank { result.optString("season_title") }
         val episodeTitle = resolvedEpisode.optString("title")
@@ -2923,30 +3008,25 @@ object BilibiliJsonParser {
             }.joinToString(" / ")
         }.orEmpty().ifBlank { result.optString("areas") }
 
-        val pages = buildList(episodes.length()) {
-            for (index in 0 until episodes.length()) {
-                val pageEpisode = episodes.optJSONObject(index) ?: continue
-                val pageEpid = pageEpisode.optLong("id")
-                    .takeIf { it > 0L }
-                    ?: pageEpisode.optLong("ep_id").takeIf { it > 0L }
-                    ?: 0L
-                val pageCid = pageEpisode.optLong("cid")
-                if (pageEpid <= 0L || pageCid <= 0L) continue
-                val pageLongTitle = pageEpisode.optString("long_title")
-                val pageShortTitle = pageEpisode.optString("title")
-                val title = pageLongTitle.ifBlank { pageShortTitle }.ifBlank { "第${index + 1}话" }
-                val durationMs = pageEpisode.optLong("duration")
-                val durationSeconds = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
-                add(
-                    BiliVideoPage(
-                        page = index + 1,
-                        cid = pageCid,
-                        title = title,
-                        durationSeconds = durationSeconds,
-                        epid = pageEpid,
-                    ),
-                )
-            }
+        val pages = episodes.mapIndexedNotNull { index, pageEpisode ->
+            val pageEpid = pageEpisode.optLong("id")
+                .takeIf { it > 0L }
+                ?: pageEpisode.optLong("ep_id").takeIf { it > 0L }
+                ?: 0L
+            val pageCid = pageEpisode.optLong("cid")
+            if (pageEpid <= 0L || pageCid <= 0L) return@mapIndexedNotNull null
+            val pageLongTitle = pageEpisode.optString("long_title")
+            val pageShortTitle = pageEpisode.optString("title")
+            val title = pageLongTitle.ifBlank { pageShortTitle }.ifBlank { "第${index + 1}话" }
+            val durationMs = pageEpisode.optLong("duration")
+            val durationSeconds = if (durationMs > 0L) (durationMs / 1000L).toInt() else 0
+            BiliVideoPage(
+                page = index + 1,
+                cid = pageCid,
+                title = title,
+                durationSeconds = durationSeconds,
+                epid = pageEpid,
+            )
         }
 
         val durationMs = resolvedEpisode.optLong("duration")

@@ -130,7 +130,7 @@ import kotlinx.coroutines.launch
 
 private val LiveRoomHeaderHeight = 56.dp
 private const val LIVE_ONLINE_REFRESH_INTERVAL_MS = 5_000L
-private const val LIVE_PLAYER_CONTROLS_HIDE_DELAY_MS = 5_000L
+private const val LIVE_PLAYER_CONTROLS_HIDE_DELAY_MS = 2_000L
 private const val LIVE_CLEAR_SCREEN_SWIPE_THRESHOLD_PX = 72f
 private val LIVE_PLAYBACK_QN_FALLBACKS = intArrayOf(10_000, 400, 250, 150, 80, 64, 32, 16)
 

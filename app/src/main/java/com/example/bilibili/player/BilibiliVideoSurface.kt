@@ -588,7 +588,7 @@ fun BilibiliVideoSurface(
             controlsVisible = true
             return@LaunchedEffect
         }
-        delay(5_000)
+        delay(2_000)
         controlsVisible = false
     }
 

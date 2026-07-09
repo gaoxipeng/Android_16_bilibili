@@ -149,8 +149,10 @@ class BilibiliApiClient {
             cid = targetCid,
             aid = video.aid.takeIf { it > 0L } ?: detail.video.aid,
         )
-        if (detail.pages.any { it.cid == targetCid }) return resolvedVideo
-        if (detail.video.cid == targetCid) return resolvedVideo
+        if (detail.pages.any { pageMatchesVideo(it, targetCid, video.bvid) }) return resolvedVideo
+        if (detail.video.cid == targetCid && (video.bvid.isBlank() || video.bvid == detail.video.bvid)) {
+            return resolvedVideo
+        }
 
         val season = hydrateVideoUgcSeason(detail, credential).ugcSeason ?: return resolvedVideo
         val episode = season.sections.asSequence()
@@ -174,21 +176,39 @@ class BilibiliApiClient {
         )
     }
 
+    suspend fun resolveHistoryEpid(
+        item: BiliHistoryItem,
+        credential: BilibiliCredential? = null,
+    ): Long {
+        if (item.epid > 0L) return item.epid
+        BilibiliJsonParser.parsePgcEpidFromUri(item.webUri)?.let { return it }
+        item.toVideoItem().pgcEpid().takeIf { it > 0L }?.let { return it }
+        if (item.business == BiliHistoryBusiness.Pgc) {
+            BilibiliJsonParser.parsePgcSeasonIdFromUri(item.webUri)?.let { seasonId ->
+                pgcSeasonFirstEpid(seasonId, credential).takeIf { it > 0L }?.let { return it }
+            }
+        }
+        return 0L
+    }
+
     suspend fun resolveHistoryVideo(
         item: BiliHistoryItem,
         credential: BilibiliCredential? = null,
     ): BiliVideoItem {
-        if (item.business == BiliHistoryBusiness.Pgc) {
-            val epid = item.epid.takeIf { it > 0L }
-                ?: BilibiliJsonParser.parsePgcEpidFromUri(item.webUri)
-                ?: 0L
+        val resolvedEpid = resolveHistoryEpid(item, credential)
+        val isPgc = item.business == BiliHistoryBusiness.Pgc ||
+            item.toVideoItem().isPgcPlayback() ||
+            resolvedEpid > 0L
+        if (isPgc) {
+            val epid = resolvedEpid
             val base = item.toVideoItem().copy(
                 epid = epid,
                 bvid = when {
                     item.bvid.isNotBlank() -> item.bvid
                     epid > 0L -> "pgc:$epid"
-                    else -> ""
+                    else -> item.toVideoItem().bvid
                 },
+                playbackReferer = item.webUri.ifBlank { item.toVideoItem().playbackReferer },
             )
             if (epid > 0L) {
                 val context = getPgcEpisodeContext(epid, credential)
@@ -199,6 +219,25 @@ class BilibiliApiClient {
             return base
         }
         val detail = getVideoDetail(item.bvid, credential)
+        val redirectEpid = detail?.video?.pgcEpid()?.takeIf { it > 0L } ?: 0L
+        if (redirectEpid > 0L) {
+            val targetCid = resolveTargetCid(
+                explicitCid = item.cid,
+                pages = detail?.pages.orEmpty(),
+                partPage = item.page,
+            ) ?: detail?.video?.cid?.takeIf { it > 0L }
+            val base = item.toVideoItem().copy(
+                epid = redirectEpid,
+                cid = targetCid ?: item.cid,
+                aid = item.aid.takeIf { it > 0L } ?: detail?.video?.aid ?: 0L,
+                playbackReferer = item.webUri.ifBlank {
+                    detail?.video?.playbackReferer.orEmpty()
+                },
+            )
+            getPgcEpisodeContext(redirectEpid, credential)?.let { context ->
+                return mergePgcContextToVideo(context, base)
+            }
+        }
         val targetCid = resolveTargetCid(
             explicitCid = item.cid,
             pages = detail?.pages.orEmpty(),
@@ -248,6 +287,9 @@ class BilibiliApiClient {
         return loaded.copy(
             video = mergedVideo,
             pages = context.pages.ifEmpty { loaded.pages },
+            ugcSeason = null,
+            seasonId = 0L,
+            isSeasonDisplay = false,
         )
     }
 
@@ -433,6 +475,12 @@ class BilibiliApiClient {
         return null
     }
 
+    private fun pageMatchesVideo(page: BiliVideoPage, cid: Long, bvid: String): Boolean {
+        if (page.cid != cid) return false
+        if (page.bvid.isBlank() || bvid.isBlank()) return true
+        return page.bvid == bvid
+    }
+
     suspend fun getUgcSeasonArchives(
         mid: Long,
         seasonId: Long,
@@ -471,20 +519,19 @@ class BilibiliApiClient {
         detail: BiliVideoDetail,
         credential: BilibiliCredential? = null,
     ): BiliVideoDetail {
+        val authorMid = detail.video.authorMid
         var season = detail.ugcSeason
-        if (season == null && detail.isSeasonDisplay && detail.seasonId > 0L) {
-            val mid = detail.video.authorMid
-            if (mid > 0L) {
-                season = getUgcSeasonArchives(
-                    mid = mid,
-                    seasonId = detail.seasonId,
-                    credential = credential,
-                )
-            }
+        if (season == null && detail.isSeasonDisplay && detail.seasonId > 0L && authorMid > 0L) {
+            season = getUgcSeasonArchives(
+                mid = authorMid,
+                seasonId = detail.seasonId,
+                credential = credential,
+            )
         }
         if (season == null) return detail
         if (!season.needsHydration()) return detail.copy(ugcSeason = season)
-        val mid = season.mid.takeIf { it > 0L } ?: detail.video.authorMid
+        val mid = season.mid.takeIf { it > 0L } ?: authorMid
+        if (mid <= 0L) return detail.copy(ugcSeason = season)
         val hydrated = getUgcSeasonArchives(
             mid = mid,
             seasonId = season.id,

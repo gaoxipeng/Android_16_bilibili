@@ -271,8 +271,8 @@ fun VideoDetailScreen(
     val seedPlaybackId = seedVideo.playbackId()
     val controlBackdrop = rememberVideoControlBackdrop()
 
-    var preservedUgcSeason by remember { mutableStateOf<BiliUgcSeason?>(null) }
-    var preservedPages by remember { mutableStateOf<List<BiliVideoPage>>(emptyList()) }
+    var preservedUgcSeason by remember(seedPlaybackId) { mutableStateOf<BiliUgcSeason?>(null) }
+    var preservedPages by remember(seedPlaybackId) { mutableStateOf<List<BiliVideoPage>>(emptyList()) }
 
     var detail by remember(seedPlaybackId) { mutableStateOf<BiliVideoDetail?>(null) }
     var authorCard by remember(seedPlaybackId) { mutableStateOf(placeholderAuthorCard(seedVideo)) }
@@ -757,7 +757,10 @@ fun VideoDetailScreen(
     }
 
     val displayTitle = activePart?.title?.takeIf { it.isNotBlank() }
-        ?: effectivePages.find { it.cid == currentCid }?.title?.takeIf { it.isNotBlank() }
+        ?: effectivePages.find {
+            it.cid == currentCid &&
+                (it.bvid.isBlank() || it.bvid == currentVideo.bvid)
+        }?.title?.takeIf { it.isNotBlank() }
         ?: currentVideo.title
     val displayDurationSeconds = activePart?.durationSeconds?.takeIf { it > 0 }
         ?: currentVideo.durationSeconds
@@ -873,22 +876,31 @@ fun VideoDetailScreen(
         effectivePages,
         playStream?.cid,
         seedVideo.cid,
+        seedVideo.bvid,
         seedVideo.pgcEpid(),
         overridePlayStream?.cid,
         activePart?.cid,
+        currentVideo.bvid,
     ) {
         val pages = effectivePages
         if (pages.isEmpty()) return@LaunchedEffect
 
+        val activeBvid = currentVideo.bvid
         val playingCid = overridePlayStream?.cid?.takeIf { it > 0L }
             ?: playStream?.cid?.takeIf { it > 0L }
             ?: activePart?.cid?.takeIf { it > 0L }
         val seedEpid = seedVideo.pgcEpid().takeIf { it > 0L }
         val seedCid = seedVideo.cid.takeIf { it > 0L }
+        fun pageMatches(page: BiliVideoPage): Boolean {
+            if (page.bvid.isNotBlank() && activeBvid.isNotBlank() && page.bvid != activeBvid) {
+                return false
+            }
+            return true
+        }
         val page = when {
-            playingCid != null -> pages.find { it.cid == playingCid }
-            seedEpid != null -> pages.find { it.epid == seedEpid }
-            seedCid != null -> pages.find { it.cid == seedCid }
+            playingCid != null -> pages.find { it.cid == playingCid && pageMatches(it) }
+            seedEpid != null -> pages.find { it.epid == seedEpid && pageMatches(it) }
+            seedCid != null -> pages.find { it.cid == seedCid && pageMatches(it) }
             else -> null
         } ?: return@LaunchedEffect
 
@@ -917,7 +929,20 @@ fun VideoDetailScreen(
     }
 
     fun switchToPart(page: BiliVideoPage) {
+        if (page.bvid.isNotBlank() && page.bvid != currentVideo.bvid) {
+            showCollectionSheet = false
+            onOpenUgcEpisode(
+                currentVideo.copy(
+                    bvid = page.bvid,
+                    cid = page.cid,
+                    title = page.title.ifBlank { currentVideo.title },
+                    durationSeconds = page.durationSeconds.takeIf { it > 0 } ?: currentVideo.durationSeconds,
+                ),
+            )
+            return
+        }
         val samePart = page.cid == currentCid &&
+            (page.bvid.isBlank() || page.bvid == currentVideo.bvid) &&
             (page.epid <= 0L || page.epid == activeEpid)
         if (samePart) return
         switchScope.launch {
@@ -939,7 +964,8 @@ fun VideoDetailScreen(
                     return@launch
                 }
                 val playbackVideo = detail?.video ?: seedVideo
-                val stream = resolvePagePlayStream(page.cid, page.epid, playbackVideo.bvid)
+                val streamBvid = page.bvid.takeIf { it.isNotBlank() } ?: playbackVideo.bvid
+                val stream = resolvePagePlayStream(page.cid, page.epid, streamBvid)
                     ?: error("无法获取播放地址")
                 val resolvedCid = page.cid.takeIf { it > 0L } ?: stream.cid
                 val resolvedStream = stream.copy(
@@ -964,20 +990,35 @@ fun VideoDetailScreen(
     }
 
     fun switchToUgcEpisode(episode: BiliVideoItem) {
-        if (episode.bvid.isNotBlank() && episode.bvid == currentVideo.bvid) {
-            if (episode.cid <= 0L || episode.cid == currentCid) return
-            currentDetail?.pages?.find { it.cid == episode.cid }?.let { page ->
+        val mergedEpisode = episode.copy(
+            authorName = episode.authorName.ifBlank { currentVideo.authorName },
+            authorMid = episode.authorMid.takeIf { it > 0L } ?: currentVideo.authorMid,
+        )
+        if (mergedEpisode.bvid.isNotBlank() && mergedEpisode.bvid != currentVideo.bvid) {
+            showCollectionSheet = false
+            onOpenUgcEpisode(mergedEpisode)
+            return
+        }
+        if (mergedEpisode.bvid.isNotBlank() && mergedEpisode.bvid == currentVideo.bvid) {
+            if (mergedEpisode.cid <= 0L || mergedEpisode.cid == currentCid) return
+            currentDetail?.pages?.find {
+                it.cid == mergedEpisode.cid &&
+                    (it.bvid.isBlank() || it.bvid == mergedEpisode.bvid)
+            }?.let { page ->
                 switchToPart(page)
                 return
             }
-            effectivePages.find { it.cid == episode.cid }?.let { page ->
+            effectivePages.find {
+                it.cid == mergedEpisode.cid &&
+                    (it.bvid.isBlank() || it.bvid == mergedEpisode.bvid)
+            }?.let { page ->
                 switchToPart(page)
                 return
             }
         }
         switchScope.launch {
             runCatching {
-                val resolved = api.resolveVideoForPlayback(episode, credential)
+                val resolved = api.resolveVideoForPlayback(mergedEpisode, credential)
                 val epid = resolved.pgcEpid()
                 if (resolved.isPgcPlayback() && epid > 0L) {
                     val page = currentDetail?.pages?.find {
@@ -1006,9 +1047,14 @@ fun VideoDetailScreen(
                     ?: error("无法获取播放地址")
                 val finalVideo = resolved.copy(
                     cid = targetCid,
-                    title = episode.title.ifBlank { resolved.title },
-                    coverUrl = episode.coverUrl.ifBlank { resolved.coverUrl },
+                    title = mergedEpisode.title.ifBlank { resolved.title },
+                    coverUrl = mergedEpisode.coverUrl.ifBlank { resolved.coverUrl },
                 )
+                if (finalVideo.bvid.isNotBlank() && finalVideo.bvid != currentVideo.bvid) {
+                    showCollectionSheet = false
+                    onOpenUgcEpisode(finalVideo)
+                    return@launch
+                }
                 val resolvedStream = stream.copy(
                     aid = finalVideo.aid.takeIf { it > 0L } ?: stream.aid,
                     cid = targetCid,

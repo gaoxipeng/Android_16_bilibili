@@ -253,6 +253,7 @@ data class BiliVideoPage(
     val title: String,
     val durationSeconds: Int = 0,
     val epid: Long = 0L,
+    val bvid: String = "",
 )
 
 data class BiliUgcSeasonEpisode(
