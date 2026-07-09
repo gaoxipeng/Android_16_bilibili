@@ -785,11 +785,12 @@ fun VideoDetailScreen(
     }
 
     val playbackTargetCid = activePart?.cid?.takeIf { it > 0L }
-        ?: currentCid.takeIf { it > 0L }
+        ?: playStream?.cid?.takeIf { it > 0L }
         ?: seedVideo.cid.takeIf { it > 0L }
+        ?: currentCid.takeIf { it > 0L }
     val streamMatchesTarget = when {
         overridePlayStream != null -> true
-        playbackTargetCid == null -> true
+        playbackTargetCid == null -> currentStream != null
         currentStream == null -> false
         else -> {
             val streamCid = currentStream.cid.takeIf { it > 0L }
@@ -851,18 +852,23 @@ fun VideoDetailScreen(
         seedVideo.cid,
         playStream?.cid,
         overridePlayStream?.cid,
+        effectivePages,
         currentDetail?.video?.cid,
         credential?.dedeUserId,
     ) {
         if (overridePlayStream?.cid?.takeIf { it > 0L } != null) return@LaunchedEffect
-        if (playStream?.cid?.takeIf { it > 0L } != null) return@LaunchedEffect
 
         val targetCid = seedVideo.cid.takeIf { it > 0L }
             ?: currentDetail?.video?.cid?.takeIf { it > 0L }
             ?: return@LaunchedEffect
+        playStream?.cid?.takeIf { it > 0L }?.let { cachedCid ->
+            if (cachedCid == targetCid) return@LaunchedEffect
+        }
 
+        val pageBvid = effectivePages.find { it.cid == targetCid }?.bvid?.takeIf { it.isNotBlank() }
+            ?: seedVideo.bvid
         runCatching {
-            val stream = resolvePagePlayStream(targetCid)
+            val stream = resolvePagePlayStream(targetCid, bvid = pageBvid)
                 ?: return@LaunchedEffect
             overridePlayStream = stream.copy(
                 aid = seedVideo.aid.takeIf { it > 0L } ?: stream.aid,
@@ -886,12 +892,16 @@ fun VideoDetailScreen(
         if (pages.isEmpty()) return@LaunchedEffect
 
         val activeBvid = currentVideo.bvid
+        val seedBvid = seedVideo.bvid
         val playingCid = overridePlayStream?.cid?.takeIf { it > 0L }
             ?: playStream?.cid?.takeIf { it > 0L }
             ?: activePart?.cid?.takeIf { it > 0L }
         val seedEpid = seedVideo.pgcEpid().takeIf { it > 0L }
         val seedCid = seedVideo.cid.takeIf { it > 0L }
         fun pageMatches(page: BiliVideoPage): Boolean {
+            if (seedBvid.isNotBlank() && page.bvid.isNotBlank() && page.bvid == seedBvid) {
+                return true
+            }
             if (page.bvid.isNotBlank() && activeBvid.isNotBlank() && page.bvid != activeBvid) {
                 return false
             }
@@ -916,7 +926,8 @@ fun VideoDetailScreen(
         }
 
         runCatching {
-            val stream = resolvePagePlayStream(page.cid, page.epid)
+            val streamBvid = page.bvid.takeIf { it.isNotBlank() } ?: seedVideo.bvid
+            val stream = resolvePagePlayStream(page.cid, page.epid, streamBvid)
                 ?: return@LaunchedEffect
             overridePlayStream = stream.copy(aid = seedVideo.aid, cid = page.cid)
             onlineCount = api.getVideoOnlineCount(

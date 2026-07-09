@@ -112,13 +112,19 @@ private fun resolveStoredPlayStream(
     video: BiliVideoItem,
     playUrls: Map<String, BiliPlayStream>,
 ): BiliPlayStream? {
-    playUrls[video.playbackId()]?.let { return it }
+    val targetCid = video.cid.takeIf { it > 0L }
+    fun accept(cached: BiliPlayStream): Boolean {
+        if (cached.videoUrl.isBlank()) return false
+        val cachedCid = cached.cid.takeIf { it > 0L } ?: return false
+        return targetCid == null || cachedCid == targetCid
+    }
+    playUrls[video.playbackId()]?.let { if (accept(it)) return it }
     if (video.bvid.isNotBlank()) {
-        playUrls[video.bvid]?.let { return it }
+        playUrls[video.bvid]?.let { if (accept(it)) return it }
     }
     val cid = video.cid
     if (cid > 0L) {
-        return playUrls.values.firstOrNull { it.cid == cid }
+        return playUrls.values.firstOrNull { it.cid == cid && accept(it) }
     }
     return null
 }
@@ -128,7 +134,7 @@ private fun MutableMap<String, BiliPlayStream>.cachePlayStream(
     stream: BiliPlayStream,
 ) {
     this[video.playbackId()] = stream
-    if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc")) {
+    if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && video.cid <= 0L) {
         this[video.bvid] = stream
     }
 }
@@ -300,17 +306,25 @@ fun BilibiliApp() {
             return@runCatching resolved
         }
         val detail = api.getVideoView(video.bvid, credential()) ?: return@runCatching null
-        val cid = targetCid ?: detail.cid.takeIf { it > 0L } ?: return@runCatching null
-        val aid = video.aid.takeIf { it > 0L } ?: detail.aid
+        val resolvedVideo = if (targetCid != null && targetCid > 0L) {
+            video.copy(aid = video.aid.takeIf { it > 0L } ?: detail.aid)
+        } else {
+            api.resolveVideoForPlayback(video, credential())
+        }
+        val cid = resolvedVideo.cid.takeIf { it > 0L }
+            ?: detail.cid.takeIf { it > 0L }
+            ?: return@runCatching null
+        val aid = resolvedVideo.aid.takeIf { it > 0L } ?: detail.aid
+        val playBvid = resolvedVideo.bvid.takeIf { it.isNotBlank() } ?: video.bvid
         val stream = api.getPlayUrl(
-            bvid = video.bvid,
+            bvid = playBvid,
             cid = cid,
             credential = credential(),
             aid = aid,
-            referer = "https://www.bilibili.com/video/${video.bvid}",
+            referer = "https://www.bilibili.com/video/$playBvid",
         ) ?: return@runCatching null
         val resolved = stream.copy(aid = aid, cid = cid)
-        playUrls.cachePlayStream(video, resolved)
+        playUrls.cachePlayStream(resolvedVideo.copy(bvid = playBvid, cid = cid, aid = aid), resolved)
         resolved
     }.getOrNull()
 

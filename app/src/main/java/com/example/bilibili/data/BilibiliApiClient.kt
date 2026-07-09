@@ -139,7 +139,24 @@ class BilibiliApiClient {
             return video
         }
         val detail = getVideoDetail(video.bvid, credential) ?: return video
+        if (video.cid <= 0L && video.bvid.isNotBlank()) {
+            val matchedPage = detail.pages.find { page ->
+                page.cid > 0L && page.bvid == video.bvid
+            } ?: detail.pages.find { page ->
+                page.cid > 0L && page.bvid.isBlank()
+            }
+            val matchedCid = matchedPage?.cid?.takeIf { it > 0L }
+                ?: detail.video.cid.takeIf { it > 0L }
+            if (matchedCid != null) {
+                return video.copy(
+                    bvid = matchedPage?.bvid?.takeIf { it.isNotBlank() } ?: video.bvid,
+                    cid = matchedCid,
+                    aid = video.aid.takeIf { it > 0L } ?: detail.video.aid,
+                )
+            }
+        }
         val targetCid = resolveTargetCid(video.cid, detail.pages)
+            ?: detail.pages.find { it.bvid == video.bvid && it.cid > 0L }?.cid
             ?: detail.video.cid.takeIf { it > 0L }
             ?: detail.pages.firstOrNull()?.cid?.takeIf { it > 0L }
             ?: return video.copy(

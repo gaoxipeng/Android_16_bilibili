@@ -40,16 +40,26 @@ object BilibiliJsonParser {
         val owner = data.optJSONObject("owner") ?: JSONObject()
         val stat = data.optJSONObject("stat") ?: JSONObject()
         val pages = data.optJSONArray("pages")
-        val parsedPages = parseVideoPages(pages, data.optString("bvid"))
+        val parentBvid = data.optString("bvid")
+        val parsedPages = parseVideoPages(pages, parentBvid)
             .ifEmpty { parseUgcSeasonPages(data.optJSONObject("ugc_season")) }
-        val cid = parsedPages.firstOrNull()?.cid
+        val cid = data.optLong("cid").takeIf { it > 0L }
+            ?: parsedPages.find { it.bvid == parentBvid && it.cid > 0L }?.cid
+            ?: pages?.let { pageArray ->
+                (0 until pageArray.length())
+                    .mapNotNull { pageArray.optJSONObject(it) }
+                    .firstOrNull { pageObj ->
+                        val pageBvid = pageObj.optString("bvid", parentBvid)
+                        pageBvid.isBlank() || pageBvid == parentBvid
+                    }?.optLong("cid")?.takeIf { it > 0L }
+            }
+            ?: parsedPages.firstOrNull()?.cid
             ?: pages?.optJSONObject(0)?.optLong("cid")
-            ?: data.optLong("cid")
             ?: 0L
         val dimension = data.optJSONObject("dimension")
         val redirectUrl = data.optString("redirect_url")
         val redirectEpid = parsePgcEpidFromUri(redirectUrl) ?: 0L
-        val bvid = data.optString("bvid")
+        val bvid = parentBvid
         if (bvid.isBlank()) return null
         val video = BiliVideoItem(
             bvid = bvid,
