@@ -173,7 +173,8 @@ fun BilibiliApp() {
     PlaybackKeepScreenOnWindowEffect(coordinator)
 
     var selectedTab by remember { mutableStateOf(MainTab.Home) }
-    var historyReloadNonce by remember { mutableIntStateOf(0) }
+    var promoteHistoryKid by remember { mutableStateOf<String?>(null) }
+    var lastOpenedHistoryKid by remember { mutableStateOf<String?>(null) }
     var bottomBarExpanded by remember { mutableStateOf(true) }
 
     var homeVideos by remember { mutableStateOf(cachedHomeFeed?.videos ?: emptyList()) }
@@ -428,6 +429,7 @@ fun BilibiliApp() {
     }
 
     fun openHistoryVideo(item: BiliHistoryItem) {
+        lastOpenedHistoryKid = item.kid.takeIf { it.isNotBlank() }
         scope.launch {
             val resolvedVideo = api.resolveHistoryVideo(item, credential())
             val playStream = resolvePlayUrl(resolvedVideo)
@@ -582,7 +584,10 @@ fun BilibiliApp() {
             is AppNavEntry.VideoDetail -> {
                 coordinator.stopPlayback()
                 if (selectedTab == MainTab.History) {
-                    historyReloadNonce++
+                    lastOpenedHistoryKid?.takeIf { it.isNotBlank() }?.let { kid ->
+                        promoteHistoryKid = kid
+                    }
+                    lastOpenedHistoryKid = null
                 }
             }
             is AppNavEntry.UserProfile -> {
@@ -1135,7 +1140,8 @@ fun BilibiliApp() {
                         api = api,
                         credential = credential(),
                         loggedIn = activeAccount != null,
-                        reloadNonce = historyReloadNonce,
+                        promoteHistoryKid = promoteHistoryKid,
+                        onHistoryPromoteConsumed = { promoteHistoryKid = null },
                         onLoginClick = {
                             showLoginSheet = true
                         },

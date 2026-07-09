@@ -79,6 +79,7 @@ import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.BindFeedTabReselectEffect
 import com.example.bilibili.ui.FeedTabReselectHandler
 import com.example.bilibili.ui.isScrolledToTop
@@ -135,6 +136,22 @@ private fun buildHistoryEntries(items: List<BiliHistoryItem>): List<HistoryEntry
         )
     }
     return entries
+}
+
+private fun promoteHistoryItem(
+    items: List<BiliHistoryItem>,
+    kid: String,
+    progressSeconds: Int,
+): List<BiliHistoryItem>? {
+    val index = items.indexOfFirst { it.kid == kid }
+    if (index < 0) return null
+    val item = items[index]
+    val updated = item.copy(
+        viewAtSeconds = System.currentTimeMillis() / 1000,
+        progressSeconds = progressSeconds.coerceAtLeast(item.progressSeconds),
+    )
+    return (items.filterNot { it.kid == kid } + updated)
+        .sortedByDescending { it.viewAtSeconds }
 }
 
 internal data class HistoryActionMenuRequest(
@@ -217,7 +234,8 @@ fun HistoryScreen(
     api: BilibiliApiClient,
     credential: BilibiliCredential?,
     loggedIn: Boolean,
-    reloadNonce: Int = 0,
+    promoteHistoryKid: String? = null,
+    onHistoryPromoteConsumed: () -> Unit = {},
     onLoginClick: () -> Unit,
     onHistoryItemClick: (BiliHistoryItem) -> Unit,
     onVideoClick: (BiliVideoItem) -> Unit,
@@ -377,12 +395,43 @@ fun HistoryScreen(
         }
     }
 
-    LaunchedEffect(reloadNonce, loggedIn, credential?.dedeUserId) {
-        if (!loggedIn || credential == null || reloadNonce <= 0) return@LaunchedEffect
-        loadHistory(reset = true)
+    LaunchedEffect(promoteHistoryKid, loggedIn, credential?.dedeUserId) {
+        val kid = promoteHistoryKid?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        if (!loggedIn || credential == null || historyItems.isEmpty()) {
+            onHistoryPromoteConsumed()
+            return@LaunchedEffect
+        }
+        val entriesBefore = buildHistoryEntries(historyItems)
+        val entryIndexBefore = entriesBefore.indexOfFirst { it.item.kid == kid }
+        if (entryIndexBefore < 0) {
+            onHistoryPromoteConsumed()
+            return@LaunchedEffect
+        }
+        val item = historyItems.first { it.kid == kid }
+        val video = item.toVideoItem()
+        val storedProgressSeconds = (
+            coordinator.getPlaybackPosition(
+                videoPlaybackKey(video.playbackId(), ownerId = "detail"),
+            ) / 1000L
+        ).toInt()
+        val promoted = promoteHistoryItem(
+            items = historyItems,
+            kid = kid,
+            progressSeconds = maxOf(item.progressSeconds, storedProgressSeconds),
+        ) ?: run {
+            onHistoryPromoteConsumed()
+            return@LaunchedEffect
+        }
+        val firstVisible = historyListState.firstVisibleItemIndex
+        val firstOffset = historyListState.firstVisibleItemScrollOffset
+        historyItems = promoted
+        if (entryIndexBefore < firstVisible) {
+            historyListState.scrollToItem(firstVisible + 1, firstOffset)
+        }
+        onHistoryPromoteConsumed()
     }
 
-    LaunchedEffect(pagerState.currentPage, loggedIn, credential?.dedeUserId, reloadNonce) {
+    LaunchedEffect(pagerState.currentPage, loggedIn, credential?.dedeUserId) {
         if (!loggedIn || credential == null) return@LaunchedEffect
         if (pagerState.currentPage == HistoryContentTab.Favorites.ordinal && !favoritesLoaded && !favoriteLoading) {
             loadFavorites(reset = true)
