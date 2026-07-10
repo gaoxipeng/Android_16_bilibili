@@ -721,14 +721,15 @@ fun VideoDetailScreen(
     val currentVideo = currentDetail?.video ?: seedVideo
     val currentStream = overridePlayStream ?: playStream
     val currentCid = currentStream?.cid?.takeIf { it > 0L } ?: activePart?.cid ?: seedVideo.cid
-    val currentPlaybackId = when {
+    val currentContentPlaybackId = when {
         activeEpid > 0L -> "pgc:$activeEpid"
-        effectiveUgcSeason != null && effectiveUgcSeason.episodeCount > 1 ->
-            "ugc:${effectiveUgcSeason.id}"
         currentVideo.bvid.isNotBlank() && currentCid > 0L -> currentVideo.copy(cid = currentCid, epid = 0L).playbackId()
         else -> seedPlaybackId
     }
-    val playbackKey = remember(currentPlaybackId) { videoPlaybackKey(currentPlaybackId, ownerId = "detail") }
+    val playbackKey = remember(seedPlaybackId) { videoPlaybackKey(seedPlaybackId, ownerId = "detail") }
+    val contentPlaybackKey = remember(currentContentPlaybackId) {
+        videoPlaybackKey(currentContentPlaybackId, ownerId = "detail")
+    }
 
     LaunchedEffect(playbackKey, playbackActive) {
         if (playbackActive) {
@@ -771,19 +772,22 @@ fun VideoDetailScreen(
     val displayDurationSeconds = activePart?.durationSeconds?.takeIf { it > 0 }
         ?: currentVideo.durationSeconds
 
-    val historyVideo = when {
-        activePart != null -> currentVideo.copy(
-            cid = currentCid,
-            aid = currentStream?.aid?.takeIf { it > 0L } ?: currentVideo.aid,
-            title = displayTitle,
-        )
-        seedVideo.cid > 0L && seedVideo.cid == currentCid -> seedVideo
-        currentStream != null -> currentVideo.copy(
-            cid = currentCid,
-            aid = currentStream.aid.takeIf { it > 0L } ?: currentVideo.aid,
-        )
-        else -> currentVideo
-    }
+    val currentEpisodeCover = effectiveUgcSeason?.sections
+        ?.asSequence()
+        ?.flatMap { it.episodes.asSequence() }
+        ?.firstOrNull { episode ->
+            (episode.cid > 0L && episode.cid == currentCid) ||
+                (episode.bvid.isNotBlank() && episode.bvid == currentVideo.bvid)
+        }
+        ?.coverUrl
+        ?.takeIf { it.isNotBlank() }
+
+    val historyVideo = currentVideo.copy(
+        cid = currentCid,
+        aid = currentStream?.aid?.takeIf { it > 0L } ?: currentVideo.aid,
+        title = displayTitle,
+        coverUrl = currentEpisodeCover ?: currentVideo.coverUrl,
+    )
 
     LaunchedEffect(currentDetail?.ugcSeason, currentDetail?.pages) {
         currentDetail?.ugcSeason?.takeIf { it.shouldDisplay }?.let { preservedUgcSeason = it }
@@ -945,6 +949,13 @@ fun VideoDetailScreen(
         }
     }
 
+    fun pushNotificationMetadata(video: BiliVideoItem) {
+        VideoPlaybackMediaBridge.pushEpisodeMetadata(
+            playbackKey,
+            VideoPlaybackMetadata.fromVideo(video),
+        )
+    }
+
     fun switchToPart(page: BiliVideoPage) {
         if (page.bvid.isNotBlank() && page.bvid != currentVideo.bvid) {
             if (effectiveUgcSeason != null) {
@@ -959,19 +970,30 @@ fun VideoDetailScreen(
                             aid = currentVideo.aid.takeIf { it > 0L } ?: stream.aid,
                             cid = resolvedCid,
                         )
+                        val episodeCover = effectiveUgcSeason?.sections
+                            ?.asSequence()
+                            ?.flatMap { it.episodes.asSequence() }
+                            ?.firstOrNull { episode ->
+                                episode.bvid == page.bvid ||
+                                    (episode.cid > 0L && episode.cid == resolvedCid)
+                            }
+                            ?.coverUrl
+                            ?.takeIf { it.isNotBlank() }
                         val targetVideo = (detail?.video ?: seedVideo).copy(
                             bvid = page.bvid,
                             cid = resolvedCid,
                             epid = page.epid.takeIf { it > 0L } ?: currentVideo.epid,
                             title = page.title.ifBlank { currentVideo.title },
+                            coverUrl = episodeCover ?: currentVideo.coverUrl,
                             durationSeconds = page.durationSeconds.takeIf { it > 0 }
                                 ?: currentVideo.durationSeconds,
                         )
-                        coordinator.savePlaybackPosition(playbackKey, 0L)
                         detail = detail?.copy(video = targetVideo)
                         activePart = page
                         overridePlayStream = resolvedStream
-                        onSwitchVideoPart(targetVideo, page, resolvedStream, inPlace = true)
+                        coordinator.updateFullscreenMedia(playbackKey, targetVideo, resolvedStream)
+                        onSwitchVideoPart(targetVideo, page, resolvedStream, true)
+                        pushNotificationMetadata(targetVideo)
                     }.onFailure { error ->
                         if (error is CancellationException) return@onFailure
                         Toast.makeText(context, error.message ?: "切换分P失败", Toast.LENGTH_SHORT).show()
@@ -998,7 +1020,6 @@ fun VideoDetailScreen(
             runCatching {
                 coordinator.releaseHandoffPlayer()
                 if (page.epid > 0L && page.epid != activeEpid) {
-                    activeEpid = page.epid
                     val loadedDetail = api.getPgcVideoDetail(page.epid, credential)
                         ?: error("无法加载番剧详情")
                     detail = loadedDetail
@@ -1027,10 +1048,14 @@ fun VideoDetailScreen(
                     title = page.title.takeIf { it.isNotBlank() } ?: playbackVideo.title,
                     durationSeconds = page.durationSeconds.takeIf { it > 0 } ?: playbackVideo.durationSeconds,
                 )
-                coordinator.savePlaybackPosition(playbackKey, 0L)
+                if (page.epid > 0L) {
+                    activeEpid = page.epid
+                }
                 activePart = page
                 overridePlayStream = resolvedStream
-                onSwitchVideoPart(targetVideo, page, resolvedStream)
+                coordinator.updateFullscreenMedia(playbackKey, targetVideo, resolvedStream)
+                onSwitchVideoPart(targetVideo, page, resolvedStream, true)
+                pushNotificationMetadata(targetVideo)
             }.onFailure { error ->
                 if (error is CancellationException) return@onFailure
                 Toast.makeText(context, error.message ?: "切换分P失败", Toast.LENGTH_SHORT).show()
@@ -1044,38 +1069,67 @@ fun VideoDetailScreen(
             authorMid = episode.authorMid.takeIf { it > 0L } ?: currentVideo.authorMid,
         )
         if (mergedEpisode.bvid.isNotBlank() && mergedEpisode.bvid != currentVideo.bvid) {
-            if (effectiveUgcSeason != null) {
-                showCollectionSheet = false
-                switchToPart(
-                    BiliVideoPage(
-                        page = 0,
-                        cid = mergedEpisode.cid,
-                        title = mergedEpisode.title,
-                        durationSeconds = mergedEpisode.durationSeconds,
-                        bvid = mergedEpisode.bvid,
-                    ),
-                )
-                return
-            }
             showCollectionSheet = false
-            onOpenUgcEpisode(mergedEpisode)
+            switchScope.launch {
+                runCatching {
+                    val resolved = api.resolveVideoForPlayback(mergedEpisode, credential)
+                    val targetCid = resolved.cid.takeIf { it > 0L }
+                        ?: api.getVideoDetail(resolved.bvid, credential)?.pages?.firstOrNull()?.cid
+                        ?: error("无法获取播放地址")
+                    val stream = api.getPlayUrl(
+                        bvid = resolved.bvid,
+                        cid = targetCid,
+                        credential = credential,
+                        aid = resolved.aid,
+                        referer = "https://www.bilibili.com/video/${resolved.bvid}",
+                    ) ?: error("无法获取播放地址")
+                    val targetVideo = resolved.copy(
+                        cid = targetCid,
+                        title = mergedEpisode.title.ifBlank { resolved.title },
+                        coverUrl = mergedEpisode.coverUrl.ifBlank { resolved.coverUrl },
+                    )
+                    val targetPage = BiliVideoPage(
+                        page = 0,
+                        cid = targetCid,
+                        title = targetVideo.title,
+                        durationSeconds = targetVideo.durationSeconds,
+                        bvid = targetVideo.bvid,
+                    )
+                    val targetStream = stream.copy(
+                        aid = targetVideo.aid.takeIf { it > 0L } ?: stream.aid,
+                        cid = targetCid,
+                    )
+                    coordinator.releaseHandoffPlayer()
+                    detail = detail?.copy(video = targetVideo)
+                    activePart = targetPage
+                    overridePlayStream = targetStream
+                    coordinator.updateFullscreenMedia(playbackKey, targetVideo, targetStream)
+                    onSwitchVideoPart(targetVideo, targetPage, targetStream, true)
+                    pushNotificationMetadata(targetVideo)
+                }.onFailure { error ->
+                    if (error is CancellationException) return@onFailure
+                    Toast.makeText(context, error.message ?: "切换视频失败", Toast.LENGTH_SHORT).show()
+                }
+            }
             return
         }
         if (mergedEpisode.bvid.isNotBlank() && mergedEpisode.bvid == currentVideo.bvid) {
-            if (mergedEpisode.cid <= 0L || mergedEpisode.cid == currentCid) return
-            currentDetail?.pages?.find {
-                it.cid == mergedEpisode.cid &&
-                    (it.bvid.isBlank() || it.bvid == mergedEpisode.bvid)
-            }?.let { page ->
-                switchToPart(page)
-                return
-            }
-            effectivePages.find {
-                it.cid == mergedEpisode.cid &&
-                    (it.bvid.isBlank() || it.bvid == mergedEpisode.bvid)
-            }?.let { page ->
-                switchToPart(page)
-                return
+            if (mergedEpisode.cid > 0L && mergedEpisode.cid == currentCid) return
+            if (mergedEpisode.cid > 0L) {
+                currentDetail?.pages?.find {
+                    it.cid == mergedEpisode.cid &&
+                        (it.bvid.isBlank() || it.bvid == mergedEpisode.bvid)
+                }?.let { page ->
+                    switchToPart(page)
+                    return
+                }
+                effectivePages.find {
+                    it.cid == mergedEpisode.cid &&
+                        (it.bvid.isBlank() || it.bvid == mergedEpisode.bvid)
+                }?.let { page ->
+                    switchToPart(page)
+                    return
+                }
             }
         }
         switchScope.launch {
@@ -1122,6 +1176,7 @@ fun VideoDetailScreen(
                     cid = targetCid,
                 )
                 onUpdateVideoSeed(finalVideo, resolvedStream)
+                pushNotificationMetadata(finalVideo)
             }.onFailure { error ->
                 if (error is CancellationException) return@onFailure
                 Toast.makeText(context, error.message ?: "切换视频失败", Toast.LENGTH_SHORT).show()
@@ -1131,35 +1186,35 @@ fun VideoDetailScreen(
 
     SideEffect {
         if (!playbackActive) return@SideEffect
-        val controls = resolveMediaEpisodeControls(
-            pages = effectivePages,
-            ugcSeason = effectiveUgcSeason,
-            currentCid = currentCid,
-            currentBvid = currentVideo.bvid,
-            activePartPage = activePart?.page,
-            onSwitchPart = ::switchToPart,
-            onSwitchEpisode = { episode ->
-                switchToUgcEpisode(
-                    episode.toVideoItem(
-                        authorName = currentVideo.authorName,
-                        authorMid = currentVideo.authorMid,
-                    ),
-                )
-            },
-        )
-        VideoPlaybackMediaBridge.setEpisodeNavigator(playbackKey) { isPrevious ->
-            if (isPrevious) {
-                controls.onPrevious?.invoke()
-            } else {
-                controls.onNext?.invoke()
-            }
+        VideoPlaybackMediaBridge.setPlaybackMetadataProvider(playbackKey) {
+            VideoPlaybackMetadata.fromVideo(historyVideo)
         }
-        VideoPlaybackMediaBridge.updateEpisodeControls(controls, playbackKey)
+        VideoPlaybackMediaBridge.setEpisodeControlsProvider(playbackKey) {
+            resolveMediaEpisodeControls(
+                pages = effectivePages,
+                ugcSeason = effectiveUgcSeason,
+                currentCid = currentCid,
+                currentBvid = currentVideo.bvid,
+                activePartPage = activePart?.page,
+                onSwitchPart = ::switchToPart,
+                onSwitchEpisode = { episode ->
+                    switchToUgcEpisode(
+                        episode.toVideoItem(
+                            authorName = currentVideo.authorName,
+                            authorMid = currentVideo.authorMid,
+                        ),
+                    )
+                },
+            )
+        }
+        VideoPlaybackMediaBridge.refreshEpisodeControls(playbackKey)
+        VideoPlaybackMediaBridge.refreshPlaybackMetadata(playbackKey)
     }
 
     DisposableEffect(playbackKey) {
         onDispose {
-            VideoPlaybackMediaBridge.setEpisodeNavigator(playbackKey, null)
+            VideoPlaybackMediaBridge.setEpisodeControlsProvider(playbackKey, null)
+            VideoPlaybackMediaBridge.setPlaybackMetadataProvider(playbackKey, null)
         }
     }
 
@@ -1283,6 +1338,7 @@ fun VideoDetailScreen(
                         key(playbackKey) {
                         BilibiliVideoSurface(
                             playbackKey = playbackKey,
+                            contentPlaybackKey = contentPlaybackKey,
                             stream = currentStream,
                             isFullscreen = false,
                             coordinator = coordinator,

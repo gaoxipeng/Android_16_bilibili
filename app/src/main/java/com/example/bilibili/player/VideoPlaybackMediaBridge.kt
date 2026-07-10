@@ -32,20 +32,35 @@ object VideoPlaybackMediaBridge {
     private var episodeControls: MediaEpisodeControls = MediaEpisodeControls.EMPTY
 
     @Volatile
-    private var publishedControlsSignature: String? = null
+    private var publishedLayoutSignature: String? = null
 
     @Volatile
-    private var episodeNavigatorPlaybackKey: String? = null
+    private var publishedPlayerSignature: String? = null
 
     @Volatile
-    private var episodeNavigator: ((Boolean) -> Unit)? = null
+    private var episodeControlsProviderPlaybackKey: String? = null
+
+    @Volatile
+    private var episodeControlsProvider: (() -> MediaEpisodeControls)? = null
+
+    @Volatile
+    private var playbackMetadataProviderPlaybackKey: String? = null
+
+    @Volatile
+    private var playbackMetadataProvider: (() -> VideoPlaybackMetadata)? = null
+
+    @Volatile
+    private var cachedPlaybackMetadata: VideoPlaybackMetadata? = null
+
+    @Volatile
+    private var publishedMetadataSignature: String? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val mediaSessionCallback by lazy {
         VideoPlaybackMediaSessionCallback(
             context = appContext ?: throw IllegalStateException("VideoPlaybackMediaBridge not initialized"),
-            controlsProvider = { episodeControls },
+            controlsProvider = ::resolveEpisodeControls,
         )
     }
 
@@ -62,15 +77,24 @@ object VideoPlaybackMediaBridge {
         val context = appContext ?: return
         if (sessionPlayer === player && session != null) {
             sessionPlaybackKey = playbackKey
+            updatePlaybackMetadata(playbackKey, player, metadata)
+            publishEpisodeControls(resolveEpisodeControls(), forceLayout = true)
             ensureServiceStarted(context)
             VideoPlaybackMediaService.attachCurrentSession(session)
             return
         }
-        releaseSessionLocked()
+        val keepControlsProvider = episodeControlsProviderPlaybackKey == playbackKey
+        val keepMetadataProvider = playbackMetadataProviderPlaybackKey == playbackKey
+        releaseSessionLocked(
+            clearControlsProvider = !keepControlsProvider,
+            clearMetadataProvider = !keepMetadataProvider,
+        )
         sessionPlaybackKey = playbackKey
         sessionPlayer = player
-        episodeControls = MediaEpisodeControls.EMPTY
-        publishedControlsSignature = null
+        val initialControls = resolveEpisodeControls()
+        episodeControls = initialControls
+        publishedLayoutSignature = null
+        publishedPlayerSignature = null
         val pendingIntent = PendingIntent.getActivity(
             context,
             playbackKey.hashCode(),
@@ -80,46 +104,162 @@ object VideoPlaybackMediaBridge {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val wrappedPlayer = EpisodeNavigationPlayer(player).also { navigationPlayer = it }
+        val wrappedPlayer = EpisodeNavigationPlayer(player).also { wrapped ->
+            wrapped.updateControls(initialControls)
+            wrapped.updateMediaMetadata(metadata.toMediaMetadata())
+            navigationPlayer = wrapped
+        }
         session = MediaSession.Builder(context, wrappedPlayer)
             .setSessionActivity(pendingIntent)
             .setCallback(mediaSessionCallback)
             .setCustomLayout(
-                VideoPlaybackMediaSessionCallback.buildEpisodeControlButtons(context, episodeControls),
+                VideoPlaybackMediaSessionCallback.buildEpisodeControlButtons(context, initialControls),
             )
             .build()
+        updatePlaybackMetadata(playbackKey, player, metadata)
+        publishEpisodeControls(initialControls, forceLayout = true)
         ensureServiceStarted(context)
         VideoPlaybackMediaService.attachCurrentSession(session)
     }
 
     @Synchronized
-    fun setEpisodeNavigator(playbackKey: String, navigator: ((Boolean) -> Unit)?) {
-        if (navigator == null) {
-            if (episodeNavigatorPlaybackKey == playbackKey) {
-                episodeNavigator = null
-                episodeNavigatorPlaybackKey = null
+    fun updatePlaybackMetadata(
+        playbackKey: String,
+        player: ExoPlayer,
+        metadata: VideoPlaybackMetadata,
+    ) {
+        if (sessionPlaybackKey != playbackKey) return
+        val signature = "${metadata.title}:${metadata.artworkUrl}:${metadata.bvid}"
+        if (signature == publishedMetadataSignature) return
+        publishedMetadataSignature = signature
+        cachedPlaybackMetadata = metadata
+        val mediaMetadata = metadata.toMediaMetadata()
+
+        navigationPlayer?.updateMediaMetadata(mediaMetadata)
+        applyPlayerMediaMetadata(player, metadata)
+
+        val context = appContext ?: return
+        val currentSession = session ?: return
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            playbackKey.hashCode(),
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_OPEN_BVID, metadata.bvid)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        currentSession.setSessionActivity(pendingIntent)
+    }
+
+    private fun applyPlayerMediaMetadata(player: ExoPlayer, metadata: VideoPlaybackMetadata) {
+        val mediaMetadata = metadata.toMediaMetadata()
+        val index = player.currentMediaItemIndex
+        if (index !in 0 until player.mediaItemCount) return
+        val item = player.getMediaItemAt(index)
+        if (item.mediaMetadata == mediaMetadata) return
+        player.replaceMediaItem(
+            index,
+            item.buildUpon().setMediaMetadata(mediaMetadata).build(),
+        )
+    }
+
+    @Synchronized
+    fun setPlaybackMetadataProvider(playbackKey: String, provider: (() -> VideoPlaybackMetadata)?) {
+        if (provider == null) {
+            if (playbackMetadataProviderPlaybackKey == playbackKey) {
+                playbackMetadataProvider = null
+                playbackMetadataProviderPlaybackKey = null
             }
             return
         }
-        episodeNavigatorPlaybackKey = playbackKey
-        episodeNavigator = navigator
+        playbackMetadataProviderPlaybackKey = playbackKey
+        playbackMetadataProvider = provider
     }
 
-    fun dispatchEpisodeNavigation(previous: Boolean) {
+    @Synchronized
+    fun refreshPlaybackMetadata(playbackKey: String) {
+        if (sessionPlaybackKey != playbackKey) return
+        val player = sessionPlayer ?: return
+        updatePlaybackMetadata(playbackKey, player, resolvePlaybackMetadata())
+    }
+
+    fun pushEpisodeMetadata(playbackKey: String, metadata: VideoPlaybackMetadata) {
         mainHandler.post {
-            episodeNavigator?.invoke(previous)
+            val player = sessionPlayer ?: return@post
+            updatePlaybackMetadata(playbackKey, player, metadata)
         }
     }
 
     @Synchronized
-    fun updateEpisodeControls(controls: MediaEpisodeControls, playbackKey: String) {
-        if (sessionPlaybackKey != playbackKey) return
-        episodeControls = controls
-        navigationPlayer?.updateControls(controls)
+    private fun resolvePlaybackMetadata(): VideoPlaybackMetadata {
+        val playbackKey = sessionPlaybackKey
+        if (playbackKey != null && playbackKey == playbackMetadataProviderPlaybackKey) {
+            playbackMetadataProvider?.invoke()?.let { return it }
+        }
+        return cachedPlaybackMetadata ?: VideoPlaybackMetadata(
+            title = "哔哩哔哩视频",
+            artist = "哔哩哔哩",
+            artworkUrl = "",
+            bvid = playbackKey?.substringAfter(':', "").orEmpty(),
+        )
+    }
 
-        val signature = "${controls.isMultiEpisode}:${controls.hasPrevious}:${controls.hasNext}"
-        if (signature == publishedControlsSignature) return
-        publishedControlsSignature = signature
+    @Synchronized
+    fun setEpisodeControlsProvider(playbackKey: String, provider: (() -> MediaEpisodeControls)?) {
+        if (provider == null) {
+            if (episodeControlsProviderPlaybackKey == playbackKey) {
+                episodeControlsProvider = null
+                episodeControlsProviderPlaybackKey = null
+            }
+            return
+        }
+        episodeControlsProviderPlaybackKey = playbackKey
+        episodeControlsProvider = provider
+    }
+
+    @Synchronized
+    fun refreshEpisodeControls(playbackKey: String) {
+        if (sessionPlaybackKey != playbackKey) return
+        publishEpisodeControls(resolveEpisodeControls())
+    }
+
+    fun dispatchEpisodeNavigation(previous: Boolean) {
+        mainHandler.post {
+            val controls = resolveEpisodeControls()
+            if (previous) {
+                controls.onPrevious?.invoke()
+            } else {
+                controls.onNext?.invoke()
+            }
+        }
+    }
+
+    @Synchronized
+    private fun resolveEpisodeControls(): MediaEpisodeControls {
+        val playbackKey = sessionPlaybackKey
+        if (playbackKey == null || playbackKey != episodeControlsProviderPlaybackKey) {
+            return episodeControls
+        }
+        return episodeControlsProvider?.invoke() ?: episodeControls
+    }
+
+    @Synchronized
+    private fun publishEpisodeControls(
+        controls: MediaEpisodeControls,
+        forceLayout: Boolean = false,
+    ) {
+        episodeControls = controls
+
+        val playerSignature = "${controls.isMultiEpisode}:${controls.hasPrevious}:${controls.hasNext}"
+        if (playerSignature != publishedPlayerSignature) {
+            publishedPlayerSignature = playerSignature
+            navigationPlayer?.updateControls(controls)
+        }
+
+        val layoutSignature = controls.isMultiEpisode.toString()
+        if (!forceLayout && layoutSignature == publishedLayoutSignature) return
+        publishedLayoutSignature = layoutSignature
 
         val context = appContext ?: return
         val currentSession = session ?: return
@@ -139,8 +279,9 @@ object VideoPlaybackMediaBridge {
     @Synchronized
     fun clearEpisodeControls(playbackKey: String) {
         if (sessionPlaybackKey != playbackKey) return
-        publishedControlsSignature = null
-        updateEpisodeControls(MediaEpisodeControls.EMPTY, playbackKey)
+        publishedLayoutSignature = null
+        publishedPlayerSignature = null
+        publishEpisodeControls(MediaEpisodeControls.EMPTY, forceLayout = true)
     }
 
     @Synchronized
@@ -161,7 +302,10 @@ object VideoPlaybackMediaBridge {
     fun getSession(): MediaSession? = session
 
     @Synchronized
-    private fun releaseSessionLocked() {
+    private fun releaseSessionLocked(
+        clearControlsProvider: Boolean = true,
+        clearMetadataProvider: Boolean = true,
+    ) {
         session?.let { currentSession ->
             VideoPlaybackMediaService.detachCurrentSession(currentSession)
             currentSession.release()
@@ -171,9 +315,18 @@ object VideoPlaybackMediaBridge {
         navigationPlayer = null
         sessionPlaybackKey = null
         episodeControls = MediaEpisodeControls.EMPTY
-        publishedControlsSignature = null
-        episodeNavigator = null
-        episodeNavigatorPlaybackKey = null
+        publishedLayoutSignature = null
+        publishedPlayerSignature = null
+        publishedMetadataSignature = null
+        cachedPlaybackMetadata = null
+        if (clearControlsProvider) {
+            episodeControlsProvider = null
+            episodeControlsProviderPlaybackKey = null
+        }
+        if (clearMetadataProvider) {
+            playbackMetadataProvider = null
+            playbackMetadataProviderPlaybackKey = null
+        }
     }
 
     private fun ensureServiceStarted(context: Context) {

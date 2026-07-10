@@ -115,6 +115,7 @@ class VideoPlaybackCoordinator(
 
     private var handoffPlayer: ExoPlayer? = null
     private var handoffKey: String? = null
+    private var handoffPositionKey: String? = null
     private val releasedPlayers =
         Collections.synchronizedSet(Collections.newSetFromMap(IdentityHashMap<ExoPlayer, Boolean>()))
     @Volatile
@@ -184,6 +185,16 @@ class VideoPlaybackCoordinator(
         prepareFullscreenHandoff(key)
     }
 
+    fun updateFullscreenMedia(
+        key: String,
+        video: BiliVideoItem,
+        stream: BiliPlayStream,
+    ) {
+        if (fullscreenKey != key) return
+        fullscreenVideo = video
+        fullscreenStream = stream
+    }
+
     fun hasHandoffPlayer(key: String): Boolean = handoffKey == key
 
     fun pauseForOverlay() {
@@ -202,7 +213,7 @@ class VideoPlaybackCoordinator(
         pauseAll()
         handoffKey?.let { key ->
             handoffPlayer?.let { player ->
-                savePlaybackPosition(key, player.currentPosition)
+                savePlaybackPosition(handoffPositionKey ?: key, player.currentPosition)
             }
         }
         activeKey = null
@@ -298,12 +309,18 @@ class VideoPlaybackCoordinator(
         }
     }
 
-    fun stashPlayer(key: String, player: ExoPlayer, keepPlaying: Boolean = false) {
+    fun stashPlayer(
+        key: String,
+        player: ExoPlayer,
+        keepPlaying: Boolean = false,
+        positionKey: String = key,
+    ) {
         if (handoffKey != key) {
             releaseHandoffPlayer()
         }
         handoffKey = key
-        savePlaybackPosition(key, player.currentPosition)
+        handoffPositionKey = positionKey
+        savePlaybackPosition(positionKey, player.currentPosition)
         if (fullscreenKey == key) {
             portraitVideoFromPlayer(player)?.let { fullscreenPortraitVideo = it }
         }
@@ -330,11 +347,13 @@ class VideoPlaybackCoordinator(
     fun consumeHandoffPlayer(key: String): ExoPlayer? {
         if (handoffKey != key) return null
         handoffKey = null
+        handoffPositionKey = null
         return handoffPlayer.also { handoffPlayer = null }
     }
 
     fun releaseHandoffPlayer() {
         handoffKey = null
+        handoffPositionKey = null
         val player = handoffPlayer
         handoffPlayer = null
         releasePlayerOnce(player)

@@ -519,18 +519,19 @@ fun BilibiliApp() {
         val applyStream: (BiliPlayStream) -> Unit = { resolved ->
             val item = videoForPage(resolved)
             playUrls.cachePlayStream(item, resolved)
-            if (inPlace) return@applyStream
-            val playbackId = item.playbackId()
-            val playbackKey = videoPlaybackKey(playbackId, ownerId = "detail")
-            val sameArchive = item.bvid.isNotBlank() && item.bvid == video.bvid
-            if (!sameArchive) {
-                val progressSeconds = (
-                    coordinator.getPlaybackPosition(playbackKey) / 1000L
-                ).toInt()
-                navController.push(AppNavEntry.VideoDetail(item, progressSeconds = progressSeconds))
+            if (!inPlace) {
+                val playbackId = item.playbackId()
+                val playbackKey = videoPlaybackKey(playbackId, ownerId = "detail")
+                val sameArchive = item.bvid.isNotBlank() && item.bvid == video.bvid
+                if (!sameArchive) {
+                    val progressSeconds = (
+                        coordinator.getPlaybackPosition(playbackKey) / 1000L
+                    ).toInt()
+                    navController.push(AppNavEntry.VideoDetail(item, progressSeconds = progressSeconds))
+                }
+                coordinator.releaseHandoffPlayer()
+                coordinator.requestInlinePlayback(playbackKey)
             }
-            coordinator.releaseHandoffPlayer()
-            coordinator.requestInlinePlayback(playbackKey)
         }
         stream?.let { resolved ->
             val fixed = resolved.copy(
@@ -1312,6 +1313,10 @@ fun BilibiliApp() {
                 ) {
                     BilibiliVideoSurface(
                         playbackKey = fullscreenKey,
+                        contentPlaybackKey = videoPlaybackKey(
+                            fullscreenVideo.playbackId(),
+                            ownerId = "detail",
+                        ),
                         stream = stream,
                         isFullscreen = true,
                         coordinator = coordinator,

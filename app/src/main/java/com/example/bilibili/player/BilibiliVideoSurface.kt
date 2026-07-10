@@ -95,6 +95,7 @@ private val VideoControlBorderColor = Color(0x80999999)
 @Composable
 fun BilibiliVideoSurface(
     playbackKey: String,
+    contentPlaybackKey: String = playbackKey,
     stream: BiliPlayStream,
     isFullscreen: Boolean,
     coordinator: VideoPlaybackCoordinator,
@@ -122,28 +123,31 @@ fun BilibiliVideoSurface(
     val layerBackdrop = backdrop as? LayerBackdrop ?: rememberLayerBackdrop()
     val onStreamSourceErrorState = rememberUpdatedState(onStreamSourceError)
     val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
-    val initialHandoffPlayer = remember(playbackKey, streamToken) {
+    val initialHandoffPlayer = remember(playbackKey) {
         coordinator.consumeHandoffPlayer(playbackKey)
     }
-    var boundStreamToken by remember(playbackKey, streamToken) {
+    var boundStreamToken by remember(playbackKey) {
         mutableStateOf(if (initialHandoffPlayer != null) streamToken else null)
     }
-    var positionMs by remember(playbackKey, streamToken) {
+    var boundContentPlaybackKey by remember(playbackKey) {
+        mutableStateOf(if (initialHandoffPlayer != null) contentPlaybackKey else null)
+    }
+    var positionMs by remember(contentPlaybackKey, streamToken) {
         mutableLongStateOf(initialHandoffPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L)
     }
-    var durationMs by remember(playbackKey, streamToken) {
+    var durationMs by remember(contentPlaybackKey, streamToken) {
         mutableLongStateOf(initialHandoffPlayer?.duration?.takeIf { it > 0L } ?: 0L)
     }
-    var isPlaying by remember(playbackKey, streamToken) {
+    var isPlaying by remember(playbackKey) {
         mutableStateOf(initialHandoffPlayer?.isPlaying ?: true)
     }
-    var isBuffering by remember(playbackKey, streamToken) {
+    var isBuffering by remember(playbackKey) {
         mutableStateOf(initialHandoffPlayer?.playbackState == Player.STATE_BUFFERING || initialHandoffPlayer == null)
     }
-    var playbackState by remember(playbackKey, streamToken) {
+    var playbackState by remember(playbackKey) {
         mutableIntStateOf(initialHandoffPlayer?.playbackState ?: Player.STATE_IDLE)
     }
-    var playWhenReady by remember(playbackKey, streamToken) {
+    var playWhenReady by remember(playbackKey) {
         mutableStateOf(initialHandoffPlayer?.playWhenReady ?: true)
     }
     var selectedSpeed by remember(playbackKey) { mutableStateOf(1f) }
@@ -169,11 +173,12 @@ fun BilibiliVideoSurface(
         danmakuItems = coordinator.cachedDanmaku(danmakuCid) { loader(danmakuCid) }
     }
 
-    var player by remember(playbackKey, streamToken) { mutableStateOf<ExoPlayer?>(initialHandoffPlayer) }
+    var player by remember(playbackKey) { mutableStateOf<ExoPlayer?>(initialHandoffPlayer) }
     var playerHandedOff by remember(playbackKey) { mutableStateOf(false) }
     var sourceErrorReported by remember(playbackKey, streamToken) { mutableStateOf(false) }
     var isPortraitPlayback by remember(playbackKey) { mutableStateOf(portraitVideo) }
     var playerSizeKnown by remember(playbackKey) { mutableStateOf(false) }
+    val currentContentPlaybackKey = rememberUpdatedState(contentPlaybackKey)
 
     LaunchedEffect(portraitVideo) {
         if (portraitVideo) {
@@ -193,16 +198,16 @@ fun BilibiliVideoSurface(
         else -> null
     }
     val shotRefererUrl = resolvePlaybackReferer(
-        playbackKey = playbackKey,
+        playbackKey = contentPlaybackKey,
         playbackMetadata = playbackMetadata,
     )
     val resolvedVideoShot = videoShot
         ?: stream.cid.takeIf { it > 0L }?.let { coordinator.cachedVideoShot(it) }
     val resolvedScrubPreviewAspectRatio =
-        scrubPreviewAspectRatio ?: coordinator.cachedVideoAspectRatio(playbackKey)
+        scrubPreviewAspectRatio ?: coordinator.cachedVideoAspectRatio(contentPlaybackKey)
 
-    LaunchedEffect(playbackKey, scrubPreviewAspectRatio) {
-        coordinator.cacheVideoAspectRatio(playbackKey, scrubPreviewAspectRatio)
+    LaunchedEffect(contentPlaybackKey, scrubPreviewAspectRatio) {
+        coordinator.cacheVideoAspectRatio(contentPlaybackKey, scrubPreviewAspectRatio)
     }
 
     LaunchedEffect(resolvedVideoShot, shotRefererUrl) {
@@ -221,7 +226,12 @@ fun BilibiliVideoSurface(
         val handoffHandler: (String) -> Unit = handoffHandler@{ requestedKey ->
             if (requestedKey != playbackKey) return@handoffHandler
             val currentPlayer = player ?: return@handoffHandler
-            coordinator.stashPlayer(playbackKey, currentPlayer, keepPlaying = true)
+            coordinator.stashPlayer(
+                key = playbackKey,
+                player = currentPlayer,
+                keepPlaying = true,
+                positionKey = currentContentPlaybackKey.value,
+            )
             playerHandedOff = true
         }
         coordinator.registerHandoffPrepareHandler(handoffHandler)
@@ -230,18 +240,73 @@ fun BilibiliVideoSurface(
         }
     }
 
-    LaunchedEffect(playbackKey, stream.cid, stream.videoUrl, stream.audioUrl, shotRefererUrl, playbackEnabled) {
-        if (player != null && boundStreamToken == streamToken) return@LaunchedEffect
-
-        val streamChanged = boundStreamToken != null && boundStreamToken != streamToken
-        if (streamChanged) {
-            coordinator.releaseHandoffPlayer()
+    LaunchedEffect(
+        playbackKey,
+        contentPlaybackKey,
+        stream.cid,
+        stream.videoUrl,
+        stream.audioUrl,
+        shotRefererUrl,
+        playbackEnabled,
+        playbackMetadata?.title,
+        playbackMetadata?.artworkUrl,
+        playbackMetadata?.bvid,
+    ) {
+        if (player != null && boundStreamToken == streamToken) {
+            if (boundContentPlaybackKey != contentPlaybackKey) {
+                boundContentPlaybackKey = contentPlaybackKey
+            }
+            return@LaunchedEffect
         }
 
-        player?.let { coordinator.releasePlayerOnce(it) }
-        player = null
+        val existingPlayer = player
+        if (existingPlayer != null) {
+            // Keep the ExoPlayer (and therefore its MediaSession) alive while changing episodes.
+            // Recreating it makes Android briefly remove the notification's custom controls.
+            coordinator.releaseHandoffPlayer()
+            boundContentPlaybackKey
+                ?.takeIf { it != contentPlaybackKey }
+                ?.let { previousContentKey ->
+                    coordinator.savePlaybackPosition(
+                        previousContentKey,
+                        existingPlayer.currentPosition,
+                    )
+                }
+            val startPositionMs = if (boundContentPlaybackKey == contentPlaybackKey) {
+                existingPlayer.currentPosition.coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            existingPlayer.setMediaSource(
+                buildVideoMediaSource(
+                    context = context,
+                    stream = stream,
+                    playbackMetadata = playbackMetadata,
+                    referer = shotRefererUrl,
+                ),
+                startPositionMs,
+            )
+            existingPlayer.prepare()
+            existingPlayer.playWhenReady = playbackEnabled
+            if (playbackEnabled) {
+                existingPlayer.play()
+            } else {
+                existingPlayer.pause()
+            }
+            boundStreamToken = streamToken
+            boundContentPlaybackKey = contentPlaybackKey
+            playerHandedOff = false
+            positionMs = startPositionMs
+            durationMs = 0L
+            playbackState = existingPlayer.playbackState
+            isPlaying = existingPlayer.isPlaying
+            isBuffering = true
+            return@LaunchedEffect
+        }
+
         playerHandedOff = false
         boundStreamToken = streamToken
+        boundContentPlaybackKey = contentPlaybackKey
 
         fun bindHandoffPlayer(handedOff: ExoPlayer) {
             if (playbackEnabled) {
@@ -251,7 +316,7 @@ fun BilibiliVideoSurface(
                 }
                 handedOff.play()
             } else {
-                coordinator.savePlaybackPosition(playbackKey, handedOff.currentPosition)
+                coordinator.savePlaybackPosition(contentPlaybackKey, handedOff.currentPosition)
                 handedOff.playWhenReady = false
                 handedOff.pause()
             }
@@ -296,8 +361,7 @@ fun BilibiliVideoSurface(
             }
         }
         }
-        if (player != null) return@LaunchedEffect
-        val startPositionMs = coordinator.getPlaybackPosition(playbackKey)
+        val startPositionMs = coordinator.getPlaybackPosition(contentPlaybackKey)
         player = createExoPlayer(
             context = context,
             stream = stream,
@@ -331,7 +395,7 @@ fun BilibiliVideoSurface(
         fullscreenDanmakuMountAllowed = true
     }
 
-    LaunchedEffect(playbackEnabled, activePlayer) {
+    LaunchedEffect(playbackEnabled, activePlayer, contentPlaybackKey) {
         val playerRef = activePlayer ?: return@LaunchedEffect
         if (playbackEnabled) {
             if (playerRef.playbackState == Player.STATE_IDLE) {
@@ -342,7 +406,7 @@ fun BilibiliVideoSurface(
                 playerRef.play()
             }
         } else {
-            coordinator.savePlaybackPosition(playbackKey, playerRef.currentPosition)
+            coordinator.savePlaybackPosition(contentPlaybackKey, playerRef.currentPosition)
             playerRef.playWhenReady = false
             playerRef.pause()
         }
@@ -379,7 +443,7 @@ fun BilibiliVideoSurface(
         title = "哔哩哔哩视频",
         artist = "哔哩哔哩",
         artworkUrl = "",
-        bvid = playbackKey.substringAfter(':', playbackKey),
+        bvid = contentPlaybackKey.substringAfter(':', contentPlaybackKey),
     )
     DisposableEffect(
         activePlayer,
@@ -417,10 +481,36 @@ fun BilibiliVideoSurface(
         }
     }
 
+    LaunchedEffect(
+        activePlayer,
+        playbackKey,
+        isFullscreen,
+        coordinator.activeKey,
+        coordinator.fullscreenKey,
+        resolvedPlaybackMetadata.title,
+        resolvedPlaybackMetadata.artworkUrl,
+        resolvedPlaybackMetadata.bvid,
+    ) {
+        val isPrimaryPlayback = when {
+            isFullscreen -> coordinator.fullscreenKey == playbackKey
+            else -> coordinator.activeKey == playbackKey && coordinator.fullscreenKey == null
+        }
+        if (activePlayer == null || !isPrimaryPlayback) return@LaunchedEffect
+        VideoPlaybackMediaBridge.setPlaybackMetadataProvider(playbackKey) {
+            resolvedPlaybackMetadata
+        }
+        VideoPlaybackMediaBridge.refreshPlaybackMetadata(playbackKey)
+    }
+
+    DisposableEffect(playbackKey) {
+        onDispose {
+            VideoPlaybackMediaBridge.setPlaybackMetadataProvider(playbackKey, null)
+        }
+    }
+
     DisposableEffect(activePlayer, playbackKey, isFullscreen) {
-        val streamTokenAtMount = boundStreamToken
         val pauseHandler = {
-            coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
+            coordinator.savePlaybackPosition(currentContentPlaybackKey.value, activePlayer.currentPosition)
             activePlayer.playWhenReady = false
             activePlayer.pause()
             isPlaying = false
@@ -440,6 +530,9 @@ fun BilibiliVideoSurface(
                 if (duration > 0L) {
                     durationMs = duration
                 }
+                if (playing && activePlayer.playbackState == Player.STATE_READY) {
+                    isBuffering = false
+                }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -449,6 +542,7 @@ fun BilibiliVideoSurface(
                     durationMs = activePlayer.duration.coerceAtLeast(0L)
                     isBuffering = false
                     positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
+                    VideoPlaybackMediaBridge.refreshPlaybackMetadata(playbackKey)
                 }
                 if (state == Player.STATE_ENDED) {
                     playWhenReady = activePlayer.playWhenReady
@@ -496,8 +590,17 @@ fun BilibiliVideoSurface(
             }
         }
         activePlayer.addListener(listener)
+        when (activePlayer.playbackState) {
+            Player.STATE_READY -> {
+                isBuffering = false
+                durationMs = activePlayer.duration.coerceAtLeast(0L)
+                positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
+            }
+            Player.STATE_BUFFERING -> isBuffering = true
+            else -> isBuffering = false
+        }
         onDispose {
-            coordinator.savePlaybackPosition(playbackKey, activePlayer.currentPosition)
+            coordinator.savePlaybackPosition(currentContentPlaybackKey.value, activePlayer.currentPosition)
             activePlayer.removeListener(listener)
             if (isFullscreen) {
                 coordinator.unregisterFullscreenPauseHandler(playbackKey)
@@ -507,7 +610,6 @@ fun BilibiliVideoSurface(
             if (playerHandedOff) return@onDispose
             val stoppingPlayback = coordinator.playbackStopping ||
                 coordinator.activeKey == null && !isFullscreen
-            val streamStillCurrent = streamTokenAtMount != null && streamTokenAtMount == boundStreamToken
             when {
                 stoppingPlayback -> {
                     coordinator.releasePlayerOnce(activePlayer)
@@ -515,18 +617,28 @@ fun BilibiliVideoSurface(
                     VideoPlaybackMediaBridge.detachAll()
                     coordinator.clearReleasedPlayers()
                 }
-                !streamStillCurrent -> {
-                    coordinator.releaseHandoffPlayer()
-                    coordinator.releasePlayerOnce(activePlayer)
-                }
                 !isFullscreen && coordinator.fullscreenKey == playbackKey -> {
-                    coordinator.stashPlayer(playbackKey, activePlayer, keepPlaying = true)
+                    coordinator.stashPlayer(
+                        key = playbackKey,
+                        player = activePlayer,
+                        keepPlaying = true,
+                        positionKey = currentContentPlaybackKey.value,
+                    )
                 }
                 isFullscreen && coordinator.fullscreenKey == null && coordinator.activeKey == playbackKey -> {
-                    coordinator.stashPlayer(playbackKey, activePlayer, keepPlaying = true)
+                    coordinator.stashPlayer(
+                        key = playbackKey,
+                        player = activePlayer,
+                        keepPlaying = true,
+                        positionKey = currentContentPlaybackKey.value,
+                    )
                 }
                 !isFullscreen && coordinator.activeKey == playbackKey -> {
-                    coordinator.stashPlayer(playbackKey, activePlayer)
+                    coordinator.stashPlayer(
+                        key = playbackKey,
+                        player = activePlayer,
+                        positionKey = currentContentPlaybackKey.value,
+                    )
                 }
                 else -> {
                     VideoPlaybackMediaBridge.detach(playbackKey)
@@ -562,7 +674,7 @@ fun BilibiliVideoSurface(
         controlsHideSignal++
         controlsVisible = true
         positionMs = target
-        coordinator.savePlaybackPosition(playbackKey, target)
+        coordinator.savePlaybackPosition(contentPlaybackKey, target)
         activePlayer.seekTo(target)
         if (shouldResume) {
             if (activePlayer.playbackState == Player.STATE_IDLE ||

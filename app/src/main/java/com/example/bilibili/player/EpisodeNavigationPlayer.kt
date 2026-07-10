@@ -1,10 +1,10 @@
 package com.example.bilibili.player
 
-import android.os.Handler
-import android.os.Looper
 import androidx.media3.common.FlagSet
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import java.util.IdentityHashMap
 
 class EpisodeNavigationPlayer(
     player: Player,
@@ -12,31 +12,62 @@ class EpisodeNavigationPlayer(
     @Volatile
     var controls: MediaEpisodeControls = MediaEpisodeControls.EMPTY
 
-    private val availableCommandsListeners = LinkedHashSet<Player.Listener>()
+    @Volatile
+    private var mediaMetadataOverride: MediaMetadata? = null
+
+    private val listenerWrappers = IdentityHashMap<Player.Listener, Player.Listener>()
 
     fun updateControls(newControls: MediaEpisodeControls) {
         val previousCommands = availableCommands
         controls = newControls
         val nextCommands = availableCommands
         if (previousCommands != nextCommands) {
-            val event = Player.Events(
-                FlagSet.Builder().add(Player.EVENT_AVAILABLE_COMMANDS_CHANGED).build(),
+            notifyListenerEvent(Player.EVENT_AVAILABLE_COMMANDS_CHANGED)
+        }
+    }
+
+    fun updateMediaMetadata(mediaMetadata: MediaMetadata) {
+        mediaMetadataOverride = mediaMetadata
+        listenerWrappers.keys.toList().forEach { listener ->
+            listener.onMediaMetadataChanged(mediaMetadata)
+            listener.onEvents(
+                this,
+                Player.Events(FlagSet.Builder().add(Player.EVENT_MEDIA_METADATA_CHANGED).build()),
             )
-            availableCommandsListeners.forEach { listener ->
-                listener.onEvents(this, event)
+        }
+    }
+
+    override fun getMediaMetadata(): MediaMetadata {
+        return mediaMetadataOverride ?: super.getMediaMetadata()
+    }
+
+    private fun notifyListenerEvent(event: Int) {
+        val eventSet = Player.Events(FlagSet.Builder().add(event).build())
+        listenerWrappers.keys.toList().forEach { listener ->
+            if (event == Player.EVENT_AVAILABLE_COMMANDS_CHANGED) {
+                listener.onAvailableCommandsChanged(availableCommands)
             }
+            listener.onEvents(this, eventSet)
         }
     }
 
     override fun addListener(listener: Player.Listener) {
-        availableCommandsListeners.add(listener)
-        super.addListener(listener)
+        if (listenerWrappers.containsKey(listener)) return
+        val wrapper = object : Player.Listener by listener {
+            override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+                listener.onAvailableCommandsChanged(this@EpisodeNavigationPlayer.availableCommands)
+            }
+        }
+        listenerWrappers[listener] = wrapper
+        super.addListener(wrapper)
     }
 
     override fun removeListener(listener: Player.Listener) {
-        availableCommandsListeners.remove(listener)
-        super.removeListener(listener)
+        val wrapper = listenerWrappers.remove(listener) ?: return
+        super.removeListener(wrapper)
     }
+
+    override fun isCommandAvailable(command: Int): Boolean = availableCommands.contains(command)
 
     override fun getAvailableCommands(): Player.Commands {
         return super.getAvailableCommands()
@@ -49,15 +80,12 @@ class EpisodeNavigationPlayer(
                 remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
                 if (controls.isMultiEpisode) {
-                    if (controls.hasPrevious) {
-                        add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                        add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                    }
-                    if (controls.hasNext) {
-                        add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                        add(Player.COMMAND_SEEK_TO_NEXT)
-                    }
+                    add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                    add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                    add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    add(Player.COMMAND_SEEK_TO_NEXT)
                 }
+                add(Player.COMMAND_GET_METADATA)
             }
             .build()
     }
