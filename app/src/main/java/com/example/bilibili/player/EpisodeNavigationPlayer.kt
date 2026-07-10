@@ -1,5 +1,7 @@
 package com.example.bilibili.player
 
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.FlagSet
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
@@ -39,27 +41,40 @@ class EpisodeNavigationPlayer(
     override fun getAvailableCommands(): Player.Commands {
         return super.getAvailableCommands()
             .buildUpon()
-            .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
-            .remove(Player.COMMAND_SEEK_TO_NEXT)
             .remove(Player.COMMAND_SEEK_BACK)
             .remove(Player.COMMAND_SEEK_FORWARD)
             .apply {
+                remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+                remove(Player.COMMAND_SEEK_TO_NEXT)
+                remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
                 if (controls.isMultiEpisode) {
-                    add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                    add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                } else {
-                    remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                    remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    if (controls.hasPrevious) {
+                        add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                        add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                    }
+                    if (controls.hasNext) {
+                        add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                        add(Player.COMMAND_SEEK_TO_NEXT)
+                    }
                 }
             }
             .build()
     }
 
+    override fun seekToPrevious() {
+        VideoPlaybackMediaBridge.dispatchEpisodeNavigation(previous = true)
+    }
+
     override fun seekToPreviousMediaItem() {
-        controls.onPrevious?.invoke()
+        VideoPlaybackMediaBridge.dispatchEpisodeNavigation(previous = true)
+    }
+
+    override fun seekToNext() {
+        VideoPlaybackMediaBridge.dispatchEpisodeNavigation(previous = false)
     }
 
     override fun seekToNextMediaItem() {
-        controls.onNext?.invoke()
+        VideoPlaybackMediaBridge.dispatchEpisodeNavigation(previous = false)
     }
 }

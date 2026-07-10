@@ -33,6 +33,7 @@ data class BiliPlayStream(
     val audioUrl: String? = null,
     val aid: Long = 0L,
     val cid: Long = 0L,
+    val cachedAtMs: Long = 0L,
 ) {
     val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
 }

@@ -3,6 +3,8 @@ package com.example.bilibili.player
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
@@ -28,6 +30,17 @@ object VideoPlaybackMediaBridge {
 
     @Volatile
     private var episodeControls: MediaEpisodeControls = MediaEpisodeControls.EMPTY
+
+    @Volatile
+    private var publishedControlsSignature: String? = null
+
+    @Volatile
+    private var episodeNavigatorPlaybackKey: String? = null
+
+    @Volatile
+    private var episodeNavigator: ((Boolean) -> Unit)? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val mediaSessionCallback by lazy {
         VideoPlaybackMediaSessionCallback(
@@ -57,6 +70,7 @@ object VideoPlaybackMediaBridge {
         sessionPlaybackKey = playbackKey
         sessionPlayer = player
         episodeControls = MediaEpisodeControls.EMPTY
+        publishedControlsSignature = null
         val pendingIntent = PendingIntent.getActivity(
             context,
             playbackKey.hashCode(),
@@ -79,10 +93,34 @@ object VideoPlaybackMediaBridge {
     }
 
     @Synchronized
+    fun setEpisodeNavigator(playbackKey: String, navigator: ((Boolean) -> Unit)?) {
+        if (navigator == null) {
+            if (episodeNavigatorPlaybackKey == playbackKey) {
+                episodeNavigator = null
+                episodeNavigatorPlaybackKey = null
+            }
+            return
+        }
+        episodeNavigatorPlaybackKey = playbackKey
+        episodeNavigator = navigator
+    }
+
+    fun dispatchEpisodeNavigation(previous: Boolean) {
+        mainHandler.post {
+            episodeNavigator?.invoke(previous)
+        }
+    }
+
+    @Synchronized
     fun updateEpisodeControls(controls: MediaEpisodeControls, playbackKey: String) {
         if (sessionPlaybackKey != playbackKey) return
         episodeControls = controls
         navigationPlayer?.updateControls(controls)
+
+        val signature = "${controls.isMultiEpisode}:${controls.hasPrevious}:${controls.hasNext}"
+        if (signature == publishedControlsSignature) return
+        publishedControlsSignature = signature
+
         val context = appContext ?: return
         val currentSession = session ?: return
         currentSession.setCustomLayout(
@@ -101,6 +139,7 @@ object VideoPlaybackMediaBridge {
     @Synchronized
     fun clearEpisodeControls(playbackKey: String) {
         if (sessionPlaybackKey != playbackKey) return
+        publishedControlsSignature = null
         updateEpisodeControls(MediaEpisodeControls.EMPTY, playbackKey)
     }
 
@@ -132,9 +171,13 @@ object VideoPlaybackMediaBridge {
         navigationPlayer = null
         sessionPlaybackKey = null
         episodeControls = MediaEpisodeControls.EMPTY
+        publishedControlsSignature = null
+        episodeNavigator = null
+        episodeNavigatorPlaybackKey = null
     }
 
     private fun ensureServiceStarted(context: Context) {
+        if (VideoPlaybackMediaService.isActive()) return
         runCatching {
             ContextCompat.startForegroundService(
                 context,

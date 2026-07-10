@@ -77,7 +77,8 @@ private fun bilibiliDataSourceFactory(
     referer: String = BilibiliEndpoints.HOME,
     origin: String = "https://www.bilibili.com",
 ): DefaultDataSource.Factory {
-    val cookie = CookieManager.getInstance().getCookie(BilibiliEndpoints.HOME).orEmpty()
+    val cookie = PlaybackCookieProvider.cookieHeader?.takeIf { it.isNotBlank() }
+        ?: CookieManager.getInstance().getCookie(BilibiliEndpoints.HOME).orEmpty()
     val headers = buildMap {
         put("Accept", "*/*")
         put("Referer", referer)

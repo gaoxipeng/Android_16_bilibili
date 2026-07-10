@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
@@ -115,9 +116,11 @@ fun BilibiliVideoSurface(
     scrubPreviewAspectRatio: Float? = null,
     playbackMetadata: VideoPlaybackMetadata? = null,
     historyVideo: BiliVideoItem? = null,
+    onStreamSourceError: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val layerBackdrop = backdrop as? LayerBackdrop ?: rememberLayerBackdrop()
+    val onStreamSourceErrorState = rememberUpdatedState(onStreamSourceError)
     val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
     val initialHandoffPlayer = remember(playbackKey, streamToken) {
         coordinator.consumeHandoffPlayer(playbackKey)
@@ -168,6 +171,7 @@ fun BilibiliVideoSurface(
 
     var player by remember(playbackKey, streamToken) { mutableStateOf<ExoPlayer?>(initialHandoffPlayer) }
     var playerHandedOff by remember(playbackKey) { mutableStateOf(false) }
+    var sourceErrorReported by remember(playbackKey, streamToken) { mutableStateOf(false) }
     var isPortraitPlayback by remember(playbackKey) { mutableStateOf(portraitVideo) }
     var playerSizeKnown by remember(playbackKey) { mutableStateOf(false) }
 
@@ -450,6 +454,12 @@ fun BilibiliVideoSurface(
                     playWhenReady = activePlayer.playWhenReady
                     onPlaybackEnded?.invoke()
                 }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (sourceErrorReported) return
+                sourceErrorReported = true
+                onStreamSourceErrorState.value?.invoke()
             }
 
             override fun onPlayWhenReadyChanged(newPlayWhenReady: Boolean, reason: Int) {

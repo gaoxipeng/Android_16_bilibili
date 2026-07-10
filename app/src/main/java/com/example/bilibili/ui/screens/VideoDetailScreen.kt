@@ -44,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -257,13 +258,14 @@ fun VideoDetailScreen(
     myMid: Long?,
     onLoginRequired: () -> Unit,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
-    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream) -> Unit = { _, _, _ -> },
+    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream, Boolean) -> Unit = { _, _, _, _ -> },
     onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit = { _, _ -> },
     onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit = { _, _ -> },
     episodeSwitchScope: CoroutineScope? = null,
     onOpenUgcEpisode: (BiliVideoItem) -> Unit = {},
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
     playbackActive: Boolean = true,
+    onStreamSourceError: () -> Unit = {},
     initialProgressSeconds: Int = 0,
     modifier: Modifier = Modifier,
 ) {
@@ -721,6 +723,8 @@ fun VideoDetailScreen(
     val currentCid = currentStream?.cid?.takeIf { it > 0L } ?: activePart?.cid ?: seedVideo.cid
     val currentPlaybackId = when {
         activeEpid > 0L -> "pgc:$activeEpid"
+        effectiveUgcSeason != null && effectiveUgcSeason.episodeCount > 1 ->
+            "ugc:${effectiveUgcSeason.id}"
         currentVideo.bvid.isNotBlank() && currentCid > 0L -> currentVideo.copy(cid = currentCid, epid = 0L).playbackId()
         else -> seedPlaybackId
     }
@@ -943,6 +947,38 @@ fun VideoDetailScreen(
 
     fun switchToPart(page: BiliVideoPage) {
         if (page.bvid.isNotBlank() && page.bvid != currentVideo.bvid) {
+            if (effectiveUgcSeason != null) {
+                showCollectionSheet = false
+                switchScope.launch {
+                    runCatching {
+                        val streamBvid = page.bvid
+                        val stream = resolvePagePlayStream(page.cid, page.epid, streamBvid)
+                            ?: error("无法获取播放地址")
+                        val resolvedCid = page.cid.takeIf { it > 0L } ?: stream.cid
+                        val resolvedStream = stream.copy(
+                            aid = currentVideo.aid.takeIf { it > 0L } ?: stream.aid,
+                            cid = resolvedCid,
+                        )
+                        val targetVideo = (detail?.video ?: seedVideo).copy(
+                            bvid = page.bvid,
+                            cid = resolvedCid,
+                            epid = page.epid.takeIf { it > 0L } ?: currentVideo.epid,
+                            title = page.title.ifBlank { currentVideo.title },
+                            durationSeconds = page.durationSeconds.takeIf { it > 0 }
+                                ?: currentVideo.durationSeconds,
+                        )
+                        coordinator.savePlaybackPosition(playbackKey, 0L)
+                        detail = detail?.copy(video = targetVideo)
+                        activePart = page
+                        overridePlayStream = resolvedStream
+                        onSwitchVideoPart(targetVideo, page, resolvedStream, inPlace = true)
+                    }.onFailure { error ->
+                        if (error is CancellationException) return@onFailure
+                        Toast.makeText(context, error.message ?: "切换分P失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return
+            }
             showCollectionSheet = false
             onOpenUgcEpisode(
                 currentVideo.copy(
@@ -1008,6 +1044,19 @@ fun VideoDetailScreen(
             authorMid = episode.authorMid.takeIf { it > 0L } ?: currentVideo.authorMid,
         )
         if (mergedEpisode.bvid.isNotBlank() && mergedEpisode.bvid != currentVideo.bvid) {
+            if (effectiveUgcSeason != null) {
+                showCollectionSheet = false
+                switchToPart(
+                    BiliVideoPage(
+                        page = 0,
+                        cid = mergedEpisode.cid,
+                        title = mergedEpisode.title,
+                        durationSeconds = mergedEpisode.durationSeconds,
+                        bvid = mergedEpisode.bvid,
+                    ),
+                )
+                return
+            }
             showCollectionSheet = false
             onOpenUgcEpisode(mergedEpisode)
             return
@@ -1080,15 +1129,8 @@ fun VideoDetailScreen(
         }
     }
 
-    LaunchedEffect(
-        playbackKey,
-        effectivePages,
-        effectiveUgcSeason,
-        currentCid,
-        currentVideo.bvid,
-        activePart?.cid,
-        activePart?.page,
-    ) {
+    SideEffect {
+        if (!playbackActive) return@SideEffect
         val controls = resolveMediaEpisodeControls(
             pages = effectivePages,
             ugcSeason = effectiveUgcSeason,
@@ -1105,12 +1147,19 @@ fun VideoDetailScreen(
                 )
             },
         )
+        VideoPlaybackMediaBridge.setEpisodeNavigator(playbackKey) { isPrevious ->
+            if (isPrevious) {
+                controls.onPrevious?.invoke()
+            } else {
+                controls.onNext?.invoke()
+            }
+        }
         VideoPlaybackMediaBridge.updateEpisodeControls(controls, playbackKey)
     }
 
     DisposableEffect(playbackKey) {
         onDispose {
-            VideoPlaybackMediaBridge.clearEpisodeControls(playbackKey)
+            VideoPlaybackMediaBridge.setEpisodeNavigator(playbackKey, null)
         }
     }
 
@@ -1231,7 +1280,7 @@ fun VideoDetailScreen(
                         .background(Color.Black),
                 ) {
                     if (currentStream != null && streamMatchesTarget && !isVideoFullscreen) {
-                        key(playbackKey, currentStream.cid, currentStream.videoUrl) {
+                        key(playbackKey) {
                         BilibiliVideoSurface(
                             playbackKey = playbackKey,
                             stream = currentStream,
@@ -1279,6 +1328,7 @@ fun VideoDetailScreen(
                             ),
                             playbackMetadata = VideoPlaybackMetadata.fromVideo(historyVideo),
                             historyVideo = historyVideo,
+                            onStreamSourceError = onStreamSourceError,
                         )
                         }
                     } else if (currentStream != null && streamMatchesTarget) {

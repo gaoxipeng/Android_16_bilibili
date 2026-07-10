@@ -54,7 +54,10 @@ import com.example.bilibili.player.LocalBilibiliCredential
 import com.example.bilibili.player.LocalWatchHistoryReporter
 import com.example.bilibili.player.WatchHistoryReporter
 import com.example.bilibili.player.PlaybackKeepScreenOnWindowEffect
+import com.example.bilibili.player.PlaybackCookieProvider
 import com.example.bilibili.player.VideoPlaybackCoordinator
+import com.example.bilibili.player.isPlayStreamCacheStale
+import com.example.bilibili.player.withCacheTimestamp
 import com.example.bilibili.player.VideoPlaybackMediaBridge
 import com.example.bilibili.player.VideoPlaybackMetadata
 import com.example.bilibili.player.resolveStoredProgressSeconds
@@ -115,6 +118,7 @@ private fun resolveStoredPlayStream(
     val targetCid = video.cid.takeIf { it > 0L }
     fun accept(cached: BiliPlayStream): Boolean {
         if (cached.videoUrl.isBlank()) return false
+        if (cached.isPlayStreamCacheStale()) return false
         val cachedCid = cached.cid.takeIf { it > 0L } ?: return false
         return targetCid == null || cachedCid == targetCid
     }
@@ -133,9 +137,10 @@ private fun MutableMap<String, BiliPlayStream>.cachePlayStream(
     video: BiliVideoItem,
     stream: BiliPlayStream,
 ) {
-    this[video.playbackId()] = stream
+    val stamped = stream.withCacheTimestamp()
+    this[video.playbackId()] = stamped
     if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && video.cid <= 0L) {
-        this[video.bvid] = stream
+        this[video.bvid] = stamped
     }
 }
 
@@ -244,12 +249,29 @@ fun BilibiliApp() {
     val imageSaveHintController = remember { BiliImageSaveHintController() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    DisposableEffect(lifecycleOwner, backgroundPlaybackEnabled) {
+    fun refreshPlaybackSession() {
+        api.invalidateWbiCache()
+        activeAccount?.credential?.let { credential ->
+            webSession.applyCredential(credential)
+            PlaybackCookieProvider.update(credential.toCookieHeader())
+        }
+        playUrls.keys.toList().forEach { key ->
+            if (playUrls[key]?.isPlayStreamCacheStale() == true) {
+                playUrls.remove(key)
+            }
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, backgroundPlaybackEnabled, activeAccount?.uid) {
         val observer = LifecycleEventObserver { _, event ->
-            if (!backgroundPlaybackEnabled &&
-                (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP)
-            ) {
-                coordinator.pauseAll()
+            when (event) {
+                Lifecycle.Event.ON_START -> refreshPlaybackSession()
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    if (!backgroundPlaybackEnabled) {
+                        coordinator.pauseAll()
+                    }
+                }
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -278,7 +300,7 @@ fun BilibiliApp() {
                 cached.aid > 0L && cached.cid > 0L &&
                     (targetCid == null || cached.cid == targetCid)
             }
-            if (cacheValid) return@runCatching cached
+            if (cacheValid && !cached.isPlayStreamCacheStale()) return@runCatching cached
         }
         if (video.isPgcPlayback()) {
             val epid = video.pgcEpid()
@@ -328,6 +350,15 @@ fun BilibiliApp() {
         playUrls.cachePlayStream(resolvedVideo.copy(bvid = playBvid, cid = cid, aid = aid), resolved)
         resolved
     }.getOrNull()
+
+    fun refreshPlayStream(video: BiliVideoItem) {
+        playUrls.remove(video.playbackId())
+        if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && video.cid <= 0L) {
+            playUrls.remove(video.bvid)
+        }
+        coordinator.releaseHandoffPlayer()
+        scope.launch { resolvePlayUrl(video) }
+    }
 
     suspend fun seedVideoPartPage(video: BiliVideoItem, partPage: Int): BiliVideoItem {
         val identified = if (video.bvid.isBlank() && video.aid > 0L) {
@@ -472,7 +503,12 @@ fun BilibiliApp() {
         )
     }
 
-    fun switchVideoPart(video: BiliVideoItem, page: BiliVideoPage, stream: BiliPlayStream? = null) {
+    fun switchVideoPart(
+        video: BiliVideoItem,
+        page: BiliVideoPage,
+        stream: BiliPlayStream? = null,
+        inPlace: Boolean = false,
+    ) {
         fun videoForPage(resolved: BiliPlayStream): BiliVideoItem =
             video.copy(
                 cid = page.cid.takeIf { it > 0L } ?: resolved.cid,
@@ -483,6 +519,7 @@ fun BilibiliApp() {
         val applyStream: (BiliPlayStream) -> Unit = { resolved ->
             val item = videoForPage(resolved)
             playUrls.cachePlayStream(item, resolved)
+            if (inPlace) return@applyStream
             val playbackId = item.playbackId()
             val playbackKey = videoPlaybackKey(playbackId, ownerId = "detail")
             val sameArchive = item.bvid.isNotBlank() && item.bvid == video.bvid
@@ -867,6 +904,8 @@ fun BilibiliApp() {
 
     LaunchedEffect(activeAccount?.uid) {
         val account = activeAccount ?: return@LaunchedEffect
+        webSession.applyCredential(account.credential)
+        PlaybackCookieProvider.update(account.credential.toCookieHeader())
         if (account.credential.accessKey.isNotBlank()) return@LaunchedEffect
         val updatedCredential = api.exchangeAccessKey(account.credential)
         if (updatedCredential.accessKey.isBlank()) return@LaunchedEffect
@@ -897,7 +936,8 @@ fun BilibiliApp() {
 
     LaunchedEffect(homeVideos) {
         homeVideos.take(10).forEach { video ->
-            if (playUrls[video.playbackId()] == null) {
+            val cached = playUrls[video.playbackId()]
+            if (cached == null || cached.isPlayStreamCacheStale()) {
                 launch { resolvePlayUrl(video) }
             }
         }
@@ -905,7 +945,8 @@ fun BilibiliApp() {
 
     LaunchedEffect(followVideos) {
         followVideos.take(10).forEach { video ->
-            if (playUrls[video.playbackId()] == null) {
+            val cached = playUrls[video.playbackId()]
+            if (cached == null || cached.isPlayStreamCacheStale()) {
                 launch { resolvePlayUrl(video) }
             }
         }
@@ -913,7 +954,8 @@ fun BilibiliApp() {
 
     LaunchedEffect(hotVideos) {
         hotVideos.take(10).forEach { video ->
-            if (playUrls[video.playbackId()] == null) {
+            val cached = playUrls[video.playbackId()]
+            if (cached == null || cached.isPlayStreamCacheStale()) {
                 launch { resolvePlayUrl(video) }
             }
         }
@@ -1236,6 +1278,7 @@ fun BilibiliApp() {
                 onOpenRelationList = ::openUserRelationList,
                 onLoginRequired = { showLoginSheet = true },
                 onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
+                onRefreshPlayStream = ::refreshPlayStream,
                 episodeSwitchScope = scope,
             )
 
@@ -1294,6 +1337,7 @@ fun BilibiliApp() {
                         ),
                         playbackMetadata = VideoPlaybackMetadata.fromVideo(fullscreenVideo),
                         historyVideo = fullscreenVideo,
+                        onStreamSourceError = { refreshPlayStream(fullscreenVideo) },
                     )
                 }
             }
@@ -1399,7 +1443,7 @@ private fun AppNavStackLayers(
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
-    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
+    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?, Boolean) -> Unit,
     onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit,
     onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
@@ -1408,6 +1452,7 @@ private fun AppNavStackLayers(
     onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
     onLoginRequired: () -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
+    onRefreshPlayStream: (BiliVideoItem) -> Unit,
     episodeSwitchScope: CoroutineScope,
 ) {
     navStack.forEachIndexed { index, entry ->
@@ -1442,6 +1487,7 @@ private fun AppNavStackLayers(
                     onOpenRelationList = onOpenRelationList,
                     onLoginRequired = onLoginRequired,
                     onEnsurePlayStream = onEnsurePlayStream,
+                    onRefreshPlayStream = onRefreshPlayStream,
                     episodeSwitchScope = episodeSwitchScope,
                 )
                 }
@@ -1465,7 +1511,7 @@ private fun AppNavEntryContent(
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
-    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?) -> Unit,
+    onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?, Boolean) -> Unit,
     onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit,
     onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit,
     onOpenProfile: (Long, String, String) -> Unit,
@@ -1474,6 +1520,7 @@ private fun AppNavEntryContent(
     onOpenRelationList: (Long, String, String, String, UserRelationTab) -> Unit,
     onLoginRequired: () -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
+    onRefreshPlayStream: (BiliVideoItem) -> Unit,
     episodeSwitchScope: CoroutineScope,
 ) {
     when (entry) {
@@ -1513,6 +1560,7 @@ private fun AppNavEntryContent(
                 },
                 onOpenDescriptionVideo = onOpenDescriptionVideo,
                 playbackActive = isActive,
+                onStreamSourceError = { onRefreshPlayStream(entry.video) },
                 episodeSwitchScope = episodeSwitchScope,
                 modifier = Modifier.fillMaxSize(),
             )
