@@ -395,20 +395,16 @@ fun BilibiliVideoSurface(
         fullscreenDanmakuMountAllowed = true
     }
 
-    LaunchedEffect(playbackEnabled, activePlayer, contentPlaybackKey) {
+    LaunchedEffect(playbackEnabled, activePlayer) {
         val playerRef = activePlayer ?: return@LaunchedEffect
-        if (playbackEnabled) {
-            if (playerRef.playbackState == Player.STATE_IDLE) {
-                playerRef.prepare()
-            }
-            playerRef.playWhenReady = true
-            if (!playerRef.isPlaying || playerRef.playbackState == Player.STATE_READY) {
-                playerRef.play()
-            }
-        } else {
+        if (!playbackEnabled) {
             coordinator.savePlaybackPosition(contentPlaybackKey, playerRef.currentPosition)
             playerRef.playWhenReady = false
             playerRef.pause()
+            return@LaunchedEffect
+        }
+        if (playerRef.playbackState == Player.STATE_IDLE) {
+            playerRef.prepare()
         }
     }
 

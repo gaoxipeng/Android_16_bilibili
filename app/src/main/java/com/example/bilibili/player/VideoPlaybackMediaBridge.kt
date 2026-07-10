@@ -23,7 +23,7 @@ object VideoPlaybackMediaBridge {
     private var sessionPlayer: ExoPlayer? = null
 
     @Volatile
-    private var navigationPlayer: EpisodeNavigationPlayer? = null
+    private var sessionNavigationPlayer: EpisodeNavigationPlayer? = null
 
     @Volatile
     private var sessionPlaybackKey: String? = null
@@ -33,9 +33,6 @@ object VideoPlaybackMediaBridge {
 
     @Volatile
     private var publishedLayoutSignature: String? = null
-
-    @Volatile
-    private var publishedPlayerSignature: String? = null
 
     @Volatile
     private var episodeControlsProviderPlaybackKey: String? = null
@@ -61,6 +58,7 @@ object VideoPlaybackMediaBridge {
         VideoPlaybackMediaSessionCallback(
             context = appContext ?: throw IllegalStateException("VideoPlaybackMediaBridge not initialized"),
             controlsProvider = ::resolveEpisodeControls,
+            onEpisodeNavigationRequest = ::dispatchEpisodeNavigation,
         )
     }
 
@@ -91,10 +89,11 @@ object VideoPlaybackMediaBridge {
         )
         sessionPlaybackKey = playbackKey
         sessionPlayer = player
+        val navigationPlayer = EpisodeNavigationPlayer(player, ::resolveEpisodeControls)
+        sessionNavigationPlayer = navigationPlayer
         val initialControls = resolveEpisodeControls()
         episodeControls = initialControls
         publishedLayoutSignature = null
-        publishedPlayerSignature = null
         val pendingIntent = PendingIntent.getActivity(
             context,
             playbackKey.hashCode(),
@@ -104,12 +103,7 @@ object VideoPlaybackMediaBridge {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val wrappedPlayer = EpisodeNavigationPlayer(player).also { wrapped ->
-            wrapped.updateControls(initialControls)
-            wrapped.updateMediaMetadata(metadata.toMediaMetadata())
-            navigationPlayer = wrapped
-        }
-        session = MediaSession.Builder(context, wrappedPlayer)
+        session = MediaSession.Builder(context, navigationPlayer)
             .setSessionActivity(pendingIntent)
             .setCallback(mediaSessionCallback)
             .setCustomLayout(
@@ -133,9 +127,6 @@ object VideoPlaybackMediaBridge {
         if (signature == publishedMetadataSignature) return
         publishedMetadataSignature = signature
         cachedPlaybackMetadata = metadata
-        val mediaMetadata = metadata.toMediaMetadata()
-
-        navigationPlayer?.updateMediaMetadata(mediaMetadata)
         applyPlayerMediaMetadata(player, metadata)
 
         val context = appContext ?: return
@@ -153,15 +144,19 @@ object VideoPlaybackMediaBridge {
     }
 
     private fun applyPlayerMediaMetadata(player: ExoPlayer, metadata: VideoPlaybackMetadata) {
-        val mediaMetadata = metadata.toMediaMetadata()
         val index = player.currentMediaItemIndex
         if (index !in 0 until player.mediaItemCount) return
         val item = player.getMediaItemAt(index)
+        val mediaMetadata = metadata.toMediaMetadata()
         if (item.mediaMetadata == mediaMetadata) return
+        val position = player.currentPosition
         player.replaceMediaItem(
             index,
             item.buildUpon().setMediaMetadata(mediaMetadata).build(),
         )
+        if (player.currentPosition != position) {
+            player.seekTo(position)
+        }
     }
 
     @Synchronized
@@ -251,12 +246,6 @@ object VideoPlaybackMediaBridge {
     ) {
         episodeControls = controls
 
-        val playerSignature = "${controls.isMultiEpisode}:${controls.hasPrevious}:${controls.hasNext}"
-        if (playerSignature != publishedPlayerSignature) {
-            publishedPlayerSignature = playerSignature
-            navigationPlayer?.updateControls(controls)
-        }
-
         val layoutSignature = controls.isMultiEpisode.toString()
         if (!forceLayout && layoutSignature == publishedLayoutSignature) return
         publishedLayoutSignature = layoutSignature
@@ -280,7 +269,6 @@ object VideoPlaybackMediaBridge {
     fun clearEpisodeControls(playbackKey: String) {
         if (sessionPlaybackKey != playbackKey) return
         publishedLayoutSignature = null
-        publishedPlayerSignature = null
         publishEpisodeControls(MediaEpisodeControls.EMPTY, forceLayout = true)
     }
 
@@ -312,11 +300,10 @@ object VideoPlaybackMediaBridge {
         }
         session = null
         sessionPlayer = null
-        navigationPlayer = null
+        sessionNavigationPlayer = null
         sessionPlaybackKey = null
         episodeControls = MediaEpisodeControls.EMPTY
         publishedLayoutSignature = null
-        publishedPlayerSignature = null
         publishedMetadataSignature = null
         cachedPlaybackMetadata = null
         if (clearControlsProvider) {
