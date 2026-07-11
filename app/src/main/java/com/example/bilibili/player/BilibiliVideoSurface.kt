@@ -857,7 +857,12 @@ fun BilibiliVideoSurface(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 60.dp, top = 20.dp, end = 12.dp, bottom = 12.dp),
+                        .padding(
+                            start = if (isPortraitPlayback) 16.dp else 60.dp,
+                            top = 20.dp,
+                            end = 12.dp,
+                            bottom = 12.dp,
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
