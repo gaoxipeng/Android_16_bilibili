@@ -77,6 +77,7 @@ import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
+import com.example.bilibili.data.BilibiliJsonParser
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.player.videoPlaybackKey
@@ -306,7 +307,7 @@ fun HistoryScreen(
             if (reset) {
                 historyItems = page.items
             } else {
-                historyItems = (historyItems + page.items).distinctBy { it.kid }
+                historyItems = BilibiliJsonParser.deduplicatedHistoryItems(historyItems + page.items)
             }
             historyCursor = page.cursor
         } catch (e: CancellationException) {
@@ -643,13 +644,6 @@ fun HistoryScreen(
                                                     onClick = {
                                                         onHistoryItemClick(entry.item)
                                                     },
-                                                    onAuthorClick = {
-                                                        onAuthorClick(
-                                                            entry.item.authorMid,
-                                                            entry.item.authorName,
-                                                            entry.item.authorFace,
-                                                        )
-                                                    },
                                                     onMoreClick = { anchor ->
                                                         menuController.open(entry.item.kid, anchor) { kid ->
                                                             val cred = credential ?: return@open
@@ -833,12 +827,10 @@ private fun HistorySectionHeader(
 private fun HistoryItemRow(
     item: BiliHistoryItem,
     onClick: () -> Unit,
-    onAuthorClick: () -> Unit,
     onMoreClick: (Rect) -> Unit,
     modifier: Modifier = Modifier,
     compactTop: Boolean = false,
 ) {
-    val canOpenAuthor = item.authorMid > 0L
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -878,18 +870,15 @@ private fun HistoryItemRow(
                     lineHeight = 18.sp,
                 )
                 val authorLabel = item.displayAuthorName()
-                if (authorLabel.isNotBlank() || item.authorFace.isNotBlank() || canOpenAuthor) {
+                if (authorLabel.isNotBlank() || item.authorFace.isNotBlank() || item.authorMid > 0L) {
                     Spacer(Modifier.height(6.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(
-                                enabled = canOpenAuthor,
-                                onClick = onAuthorClick,
-                            ),
+                            .clickable(onClick = onClick),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        if (item.authorFace.isNotBlank() || canOpenAuthor) {
+                        if (item.authorFace.isNotBlank() || item.authorMid > 0L) {
                             VideoFeedAuthorAvatar(
                                 faceUrl = item.authorFace,
                                 authorName = authorLabel,

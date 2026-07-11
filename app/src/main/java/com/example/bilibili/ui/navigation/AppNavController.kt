@@ -42,7 +42,14 @@ sealed interface AppNavEntry {
 
 internal fun AppNavEntry.stableKey(index: Int): String = when (this) {
     AppNavEntry.Search -> "search@$index"
-    is AppNavEntry.VideoDetail -> "video:${video.playbackId()}@$index"
+    is AppNavEntry.VideoDetail -> {
+        val identity = when {
+            video.cid > 0L -> video.playbackId()
+            video.aid > 0L -> "${video.bvid.ifBlank { "av:${video.aid}" }}:aid:${video.aid}"
+            else -> video.playbackId()
+        }
+        "video:$identity@$index"
+    }
     is AppNavEntry.UserProfile -> "profile:$mid@$index"
     is AppNavEntry.DynamicDetail -> "dynamic:${item.id}@$index"
     is AppNavEntry.ArticleDetail -> "article:${webUrl.hashCode()}@$index"

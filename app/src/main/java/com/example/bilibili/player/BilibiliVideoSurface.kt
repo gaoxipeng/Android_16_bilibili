@@ -160,9 +160,12 @@ fun BilibiliVideoSurface(
         mutableStateOf(!isFullscreen)
     }
     var showDanmakuSettings by remember(playbackKey) { mutableStateOf(false) }
+    var showEpisodePicker by remember(playbackKey) { mutableStateOf(false) }
     val showDanmakuFeature = danmakuEnabled && danmakuCid > 0L && loadDanmaku != null
     val danmakuVisible = coordinator.danmakuVisible
     val danmakuSettings = coordinator.danmakuSettings
+    val episodePicker = coordinator.episodePickerFor(playbackKey).takeIf { isFullscreen }
+    val showEpisodePickerButton = episodePicker?.isAvailable == true
 
     LaunchedEffect(danmakuEnabled, danmakuCid, loadDanmaku) {
         val loader = loadDanmaku
@@ -252,10 +255,7 @@ fun BilibiliVideoSurface(
         playbackMetadata?.artworkUrl,
         playbackMetadata?.bvid,
     ) {
-        if (player != null && boundStreamToken == streamToken) {
-            if (boundContentPlaybackKey != contentPlaybackKey) {
-                boundContentPlaybackKey = contentPlaybackKey
-            }
+        if (player != null && boundStreamToken == streamToken && boundContentPlaybackKey == contentPlaybackKey) {
             return@LaunchedEffect
         }
 
@@ -491,7 +491,7 @@ fun BilibiliVideoSurface(
             isFullscreen -> coordinator.fullscreenKey == playbackKey
             else -> coordinator.activeKey == playbackKey && coordinator.fullscreenKey == null
         }
-        if (activePlayer == null || !isPrimaryPlayback) return@LaunchedEffect
+        if (!isPrimaryPlayback) return@LaunchedEffect
         VideoPlaybackMediaBridge.setPlaybackMetadataProvider(playbackKey) {
             resolvedPlaybackMetadata
         }
@@ -799,7 +799,7 @@ fun BilibiliVideoSurface(
         }
         }
 
-        if (controlsEnabled && !showDanmakuSettings) {
+        if (controlsEnabled && !showDanmakuSettings && !showEpisodePicker) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -902,7 +902,7 @@ fun BilibiliVideoSurface(
         }
 
         AnimatedVisibility(
-            visible = controlsEnabled && controlsVisible && !showDanmakuSettings,
+            visible = controlsEnabled && controlsVisible && !showDanmakuSettings && !showEpisodePicker,
             enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { it },
             exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { it },
             modifier = Modifier
@@ -953,6 +953,13 @@ fun BilibiliVideoSurface(
                     controlsVisible = false
                     showDanmakuSettings = true
                 },
+                showEpisodePickerButton = showEpisodePickerButton,
+                onEpisodePickerClick = {
+                    controlsHideSignal++
+                    controlsVisible = false
+                    showEpisodePicker = true
+                },
+                isFullscreen = isFullscreen,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(VideoControlBarHeight),
@@ -989,6 +996,16 @@ fun BilibiliVideoSurface(
                 .fillMaxSize()
                 .zIndex(30f),
         )
+
+        FullscreenEpisodePickerOverlay(
+            visible = showEpisodePicker,
+            pickerState = episodePicker,
+            onDismiss = { showEpisodePicker = false },
+            backdrop = layerBackdrop,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(30f),
+        )
     }
 }
 
@@ -1008,8 +1025,18 @@ private fun VideoControls(
     danmakuVisible: Boolean = true,
     onDanmakuToggle: () -> Unit = {},
     onDanmakuLongPress: () -> Unit = {},
+    showEpisodePickerButton: Boolean = false,
+    onEpisodePickerClick: () -> Unit = {},
+    isFullscreen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val controlSpacing = if (isFullscreen) 12.dp else 6.dp
+    val playToDanmakuExtra = when {
+        isFullscreen -> 6.dp
+        else -> 4.dp
+    }
+    val rightControlExtra = if (isFullscreen) 6.dp else 0.dp
+    val speedToRemainingExtra = if (isFullscreen) rightControlExtra else 8.dp
     val progress = if (durationMs > 0L) {
         (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -1036,7 +1063,7 @@ private fun VideoControls(
                 .fillMaxSize()
                 .padding(horizontal = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(controlSpacing),
         ) {
             Text(
                 text = formatVideoTime(positionMs),
@@ -1059,6 +1086,9 @@ private fun VideoControls(
                 )
             }
             if (showDanmakuToggle) {
+                if (playToDanmakuExtra > 0.dp) {
+                    Spacer(Modifier.width(playToDanmakuExtra))
+                }
                 Box(
                     modifier = Modifier
                         .zIndex(1f)
@@ -1094,6 +1124,29 @@ private fun VideoControls(
                         )
                     },
             )
+            if (showEpisodePickerButton) {
+                Box(
+                    modifier = Modifier
+                        .zIndex(1f)
+                        .sizeIn(minWidth = 40.dp, minHeight = 28.dp)
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                            onClick = onEpisodePickerClick,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "选集",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        style = TextStyle(fontSize = 14.sp),
+                    )
+                }
+            }
+            if (showEpisodePickerButton && rightControlExtra > 0.dp) {
+                Spacer(Modifier.width(rightControlExtra))
+            }
             Text(
                 text = speedLabel(speed),
                 color = Color.White,
@@ -1104,6 +1157,9 @@ private fun VideoControls(
                     onClick = onSpeedClick,
                 ),
             )
+            if (speedToRemainingExtra > 0.dp) {
+                Spacer(Modifier.width(speedToRemainingExtra))
+            }
             Text(
                 text = formatVideoTime((durationMs - positionMs).coerceAtLeast(0L)),
                 modifier = Modifier.widthIn(min = 36.dp),

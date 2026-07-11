@@ -2492,7 +2492,48 @@ object BilibiliJsonParser {
                 parseHistoryItem(list.optJSONObject(index) ?: continue)?.let(::add)
             }
         }
-        return BiliHistoryPage(items = items, cursor = cursor)
+        return BiliHistoryPage(items = deduplicatedHistoryItems(items), cursor = cursor)
+    }
+
+    fun historyDedupKey(item: BiliHistoryItem): String = when {
+        item.cid > 0L -> "cid:${item.cid}"
+        item.epid > 0L -> "ep:${item.epid}"
+        item.bvid.isNotBlank() -> "bv:${item.bvid}"
+        item.aid > 0L -> "aid:${item.aid}"
+        item.viewAtSeconds > 0L -> "view:${item.viewAtSeconds}"
+        else -> "title:${item.title}"
+    }
+
+    fun deduplicatedHistoryItems(items: List<BiliHistoryItem>): List<BiliHistoryItem> {
+        val result = mutableListOf<BiliHistoryItem>()
+        val indexByKey = mutableMapOf<String, Int>()
+        for (item in items) {
+            val key = historyDedupKey(item)
+            val existingIndex = indexByKey[key]
+            if (existingIndex != null) {
+                result[existingIndex] = preferredHistoryItem(result[existingIndex], item)
+            } else {
+                indexByKey[key] = result.size
+                result.add(item)
+            }
+        }
+        return result.sortedWith(
+            compareByDescending<BiliHistoryItem> { it.viewAtSeconds }
+                .thenByDescending { it.cid }
+                .thenByDescending { it.bvid },
+        )
+    }
+
+    private fun preferredHistoryItem(
+        existing: BiliHistoryItem,
+        candidate: BiliHistoryItem,
+    ): BiliHistoryItem {
+        val existingHasFace = existing.authorFace.isNotBlank()
+        val candidateHasFace = candidate.authorFace.isNotBlank()
+        if (existingHasFace != candidateHasFace) {
+            return if (candidateHasFace) candidate else existing
+        }
+        return if (candidate.viewAtSeconds >= existing.viewAtSeconds) candidate else existing
     }
 
     private fun parseHistoryItem(item: JSONObject): BiliHistoryItem? {
@@ -2502,9 +2543,11 @@ object BilibiliJsonParser {
         if (businessRaw != "archive" && businessRaw != "pgc") return null
 
         val business = BiliHistoryBusiness.from(businessRaw)
-        val bvid = item.optString("bvid").ifBlank { history?.optString("bvid").orEmpty() }
+        val itemBvid = item.optString("bvid").ifBlank { history?.optString("bvid").orEmpty() }
         val webUri = item.optString("uri")
             .ifBlank { history?.optString("uri").orEmpty() }
+        val uriBvid = extractBvidFromUrl(webUri)
+        val bvid = uriBvid.ifBlank { itemBvid }
         val kidValue: Long = item.optLong("kid").takeIf { it > 0L }
             ?: history?.optLong("kid")?.takeIf { it > 0L }
             ?: 0L
@@ -2518,12 +2561,14 @@ object BilibiliJsonParser {
             ?: kidValue.takeIf { business == BiliHistoryBusiness.Pgc && it > 0L }
             ?: parsePgcEpidFromUri(webUri)
             ?: 0L
-        val historyCid = history?.optLong("cid") ?: 0L
+        val historyCidField = history?.optLong("cid")?.takeIf { it > 0L } ?: 0L
         val aid = item.optLong("aid").takeIf { it > 0L }
-            ?: historyOid.takeIf { business != BiliHistoryBusiness.Pgc && it > 0L }
-            ?: history?.optLong("oid")?.takeIf { it > 0L }
+            ?: historyOid.takeIf { business == BiliHistoryBusiness.Archive }
             ?: 0L
-        val cid: Long = item.optLong("cid").takeIf { it > 0L } ?: historyCid
+        val cid: Long = item.optLong("cid").takeIf { it > 0L }
+            ?: historyCidField
+            ?: parseCidFromUri(webUri)
+            ?: 0L
 
         if (business == BiliHistoryBusiness.Archive && bvid.isBlank()) return null
         if (business == BiliHistoryBusiness.Pgc && epid <= 0L && cid <= 0L) return null
@@ -2560,6 +2605,9 @@ object BilibiliJsonParser {
                 .ifBlank { author?.optString("avatar").orEmpty() },
         )
         val badge = item.optString("badge")
+        val page = history?.optInt("page")?.takeIf { it > 0 }
+            ?: parsePageFromUri(webUri).takeIf { it > 0 }
+            ?: 0
         val kid = when {
             kidValue > 0L && business == BiliHistoryBusiness.Archive -> "archive_$kidValue"
             kidValue > 0L && business == BiliHistoryBusiness.Pgc -> "pgc_$kidValue"
@@ -2578,7 +2626,7 @@ object BilibiliJsonParser {
             aid = aid,
             cid = cid,
             epid = epid,
-            page = history?.optInt("page") ?: 0,
+            page = page,
             partTitle = history?.optString("part").orEmpty(),
             title = displayTitle,
             coverUrl = normalizeImageUrl(cover),
@@ -2602,6 +2650,33 @@ object BilibiliJsonParser {
             progress /= 1000L
         }
         return progress.toInt().coerceAtLeast(0)
+    }
+
+    fun parseBvidFromUri(uri: String): String = extractBvidFromUrl(uri)
+
+    fun parsePageFromUri(uri: String): Int =
+        if (uri.isBlank()) {
+            0
+        } else {
+            Regex("""[?&]p=(\d+)""", RegexOption.IGNORE_CASE)
+                .find(uri)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?: 0
+        }
+
+    fun parseCidFromUri(uri: String): Long? {
+        if (uri.isBlank()) return null
+        Regex("""[?&]cid=(\d+)""", RegexOption.IGNORE_CASE)
+            .find(uri)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toLongOrNull()
+            ?.takeIf { it > 0L }
+            ?.let { return it }
+        return null
     }
 
     fun parsePgcEpidFromUri(uri: String): Long? {

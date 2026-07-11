@@ -347,6 +347,22 @@ data class BiliUgcSeason(
             ),
         )
     }
+
+    fun toVideoPages(): List<BiliVideoPage> {
+        val episodes = sections.flatMap { it.episodes }
+        if (episodes.size <= 1) return emptyList()
+        return episodes.mapIndexedNotNull { index, episode ->
+            val cid = episode.cid.takeIf { it > 0L } ?: return@mapIndexedNotNull null
+            if (episode.bvid.isBlank()) return@mapIndexedNotNull null
+            BiliVideoPage(
+                page = index + 1,
+                cid = cid,
+                title = episode.title,
+                durationSeconds = episode.durationSeconds,
+                bvid = episode.bvid,
+            )
+        }
+    }
 }
 
 data class BiliUgcSeasonDisplayGroup(

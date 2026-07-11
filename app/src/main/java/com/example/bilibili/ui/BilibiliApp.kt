@@ -463,6 +463,9 @@ fun BilibiliApp() {
         lastOpenedHistoryKid = item.kid.takeIf { it.isNotBlank() }
         scope.launch {
             val resolvedVideo = api.resolveHistoryVideo(item, credential())
+            if (resolvedVideo.cid > 0L && resolvedVideo.bvid.isNotBlank()) {
+                playUrls.remove(resolvedVideo.bvid)
+            }
             val playStream = resolvePlayUrl(resolvedVideo)
             playStream?.let { stream -> playUrls.cachePlayStream(resolvedVideo, stream) }
             val playbackId = resolvedVideo.playbackId()
@@ -511,6 +514,7 @@ fun BilibiliApp() {
     ) {
         fun videoForPage(resolved: BiliPlayStream): BiliVideoItem =
             video.copy(
+                bvid = page.bvid.takeIf { it.isNotBlank() } ?: video.bvid,
                 cid = page.cid.takeIf { it > 0L } ?: resolved.cid,
                 epid = page.epid.takeIf { it > 0L } ?: video.epid,
                 title = page.title.takeIf { it.isNotBlank() } ?: video.title,

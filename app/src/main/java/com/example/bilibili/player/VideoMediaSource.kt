@@ -101,7 +101,7 @@ fun formatVideoTime(ms: Long): String {
 }
 
 fun speedLabel(speed: Float): String =
-    if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x"
+    if (speed == speed.toInt().toFloat()) "${speed.toInt()}×" else "${speed}×"
 
 fun resolveVideoReferer(
     playbackMetadata: VideoPlaybackMetadata?,

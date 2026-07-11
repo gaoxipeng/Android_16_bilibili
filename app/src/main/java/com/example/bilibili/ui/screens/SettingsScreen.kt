@@ -72,7 +72,7 @@ import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.theme.isAppLightTheme
 import kotlinx.coroutines.launch
 
-private const val AppVersionName = "1.1"
+private const val AppVersionName = "1.1.2"
 
 private val SettingsBottomBarInset = 96.dp
 private val SettingsAboutIconSize = 58.dp
@@ -135,10 +135,12 @@ private val appHelpSections = listOf(
         title = "视频播放",
         items = listOf(
             "点击视频卡片进入详情页播放；信息流内长按封面可进入小窗预览。",
-            "详情页支持弹幕开关、倍速播放与全屏观看。",
+            "详情页支持弹幕开关、倍速播放（× 符号）与全屏观看。",
+            "全屏播放支持选集按钮，可快速切换分 P 或合集内其他视频。",
             "长按控制栏「弹」可在播放器内打开弹幕设置，调节显示区域、不透明度、字号与速度。",
             "弹幕偏好修改后全局生效，视频与直播共用同一套设置。",
             "从简介或评论区进入 UP 主主页时，当前视频会自动暂停；返回后恢复播放。",
+            "简介页合集弹窗、通知栏与锁屏媒体控件均支持切换分 P / 合集集数。",
         ),
     ),
     HelpSection(
@@ -155,6 +157,7 @@ private val appHelpSections = listOf(
         title = "历史与设置",
         items = listOf(
             "「历史」页展示观看记录，按日期分组展示，支持删除单条或整组记录。",
+            "同一合集的多条历史记录会分别保留，点击可进入对应集数继续观看。",
             "「我的」页为个人主页，右上角齿轮进入设置。",
             "设置中可切换深色模式（浅色 / 深色 / 跟随系统）、信息流单列/双列布局。",
             "账号管理支持多账号：点击切换当前账号，左滑账号行可删除，「添加账号」通过网页登录保存新账号。",

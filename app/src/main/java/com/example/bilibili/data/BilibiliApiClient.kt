@@ -139,6 +139,31 @@ class BilibiliApiClient {
             return video
         }
         val detail = getVideoDetail(video.bvid, credential) ?: return video
+        if (video.cid <= 0L && video.aid > 0L) {
+            val episodeByAid = hydrateVideoUgcSeason(detail, credential)
+                .ugcSeason
+                ?.sections
+                ?.asSequence()
+                ?.flatMap { it.episodes.asSequence() }
+                ?.firstOrNull { it.aid == video.aid }
+            if (episodeByAid != null) {
+                return video.copy(
+                    bvid = episodeByAid.bvid.ifBlank { video.bvid },
+                    cid = episodeByAid.cid.takeIf { it > 0L } ?: video.cid,
+                    aid = episodeByAid.aid.takeIf { it > 0L } ?: video.aid,
+                    title = episodeByAid.title.ifBlank { video.title },
+                    coverUrl = episodeByAid.coverUrl.ifBlank { video.coverUrl },
+                    durationSeconds = episodeByAid.durationSeconds.takeIf { it > 0 }
+                        ?: video.durationSeconds,
+                )
+            }
+            if (detail.video.aid == video.aid && detail.video.cid > 0L) {
+                return video.copy(
+                    cid = detail.video.cid,
+                    aid = detail.video.aid,
+                )
+            }
+        }
         if (video.cid <= 0L && video.bvid.isNotBlank()) {
             val matchedPage = detail.pages.find { page ->
                 page.cid > 0L && page.bvid == video.bvid
@@ -235,12 +260,17 @@ class BilibiliApiClient {
             }
             return base
         }
-        val detail = getVideoDetail(item.bvid, credential)
+        val historyBvid = item.bvid.ifBlank { BilibiliJsonParser.parseBvidFromUri(item.webUri) }
+        val uriBvid = BilibiliJsonParser.parseBvidFromUri(item.webUri)
+        val entryBvid = uriBvid.ifBlank { historyBvid }
+        val detail = getVideoDetail(entryBvid.ifBlank { historyBvid }, credential)
         val redirectEpid = detail?.video?.pgcEpid()?.takeIf { it > 0L } ?: 0L
         if (redirectEpid > 0L) {
+            val hydrated = detail?.let { hydrateVideoUgcSeason(it, credential) }
+            val allPages = buildAllVideoPages(hydrated)
             val targetCid = resolveTargetCid(
                 explicitCid = item.cid,
-                pages = detail?.pages.orEmpty(),
+                pages = allPages,
                 partPage = item.page,
             ) ?: detail?.video?.cid?.takeIf { it > 0L }
             val base = item.toVideoItem().copy(
@@ -255,22 +285,87 @@ class BilibiliApiClient {
                 return mergePgcContextToVideo(context, base)
             }
         }
-        val targetCid = resolveTargetCid(
-            explicitCid = item.cid,
-            pages = detail?.pages.orEmpty(),
-            partPage = item.page,
-        )
-        val base = item.toVideoItem().let { video ->
-            if (targetCid != null) {
-                video.copy(
-                    cid = targetCid,
-                    aid = video.aid.takeIf { it > 0L } ?: item.aid,
-                )
-            } else {
-                video
+        return resolveHistoryArchiveVideo(item, entryBvid, historyBvid, uriBvid, credential)
+    }
+
+    private suspend fun resolveHistoryArchiveVideo(
+        item: BiliHistoryItem,
+        entryBvid: String,
+        historyBvid: String,
+        uriBvid: String,
+        credential: BilibiliCredential?,
+    ): BiliVideoItem {
+        if (entryBvid.isBlank() && historyBvid.isBlank()) return item.toVideoItem()
+
+        var detail = getVideoDetail(entryBvid.ifBlank { historyBvid }, credential)
+            ?.let { hydrateVideoUgcSeason(it, credential) }
+        var allPages = buildAllVideoPages(detail)
+        val seasonEpisodes = detail?.ugcSeason?.sections?.flatMap { it.episodes }.orEmpty()
+
+        val seasonEpisode = seasonEpisodes.firstOrNull { episode ->
+            when {
+                item.cid > 0L -> episode.cid == item.cid
+                item.aid > 0L -> episode.aid == item.aid
+                uriBvid.isNotBlank() && uriBvid != historyBvid -> episode.bvid == uriBvid
+                else -> false
             }
         }
+
+        var episodeBvid = seasonEpisode?.bvid?.takeIf { it.isNotBlank() }
+            ?: entryBvid.ifBlank { historyBvid }
+        var targetCid = resolveTargetCid(
+            explicitCid = item.cid,
+            pages = allPages,
+            partPage = item.page,
+        ) ?: seasonEpisode?.cid?.takeIf { it > 0L }
+
+        if (seasonEpisode != null) {
+            if (seasonEpisode.bvid.isNotBlank() && seasonEpisode.bvid != detail?.video?.bvid) {
+                detail = getVideoDetail(seasonEpisode.bvid, credential)
+                    ?.let { hydrateVideoUgcSeason(it, credential) }
+                allPages = buildAllVideoPages(detail)
+            }
+            episodeBvid = seasonEpisode.bvid.ifBlank { episodeBvid }
+            targetCid = seasonEpisode.cid.takeIf { it > 0L } ?: targetCid
+        } else if (targetCid == null && item.aid > 0L && detail?.video?.aid == item.aid) {
+            targetCid = detail?.video?.cid?.takeIf { it > 0L }
+            episodeBvid = detail?.video?.bvid?.takeIf { it.isNotBlank() } ?: episodeBvid
+        }
+
+        val matchedPage = targetCid?.let { cid -> allPages.find { it.cid == cid } }
+        if (matchedPage != null) {
+            episodeBvid = matchedPage.bvid.ifBlank { episodeBvid }
+        }
+
+        val resolvedTitle = matchedPage?.title?.takeIf { it.isNotBlank() }
+            ?: seasonEpisode?.title?.takeIf { it.isNotBlank() }
+            ?: item.title
+        val resolvedAid = item.aid.takeIf { it > 0L }
+            ?: seasonEpisode?.aid?.takeIf { it > 0L }
+            ?: detail?.video?.aid
+            ?: 0L
+        val resolvedCover = seasonEpisode?.coverUrl?.takeIf { it.isNotBlank() }
+            ?: item.coverUrl
+
+        val base = item.toVideoItem().copy(
+            bvid = episodeBvid,
+            cid = targetCid ?: item.cid,
+            aid = resolvedAid,
+            title = resolvedTitle,
+            coverUrl = resolvedCover,
+        )
+
+        if (base.cid > 0L && base.bvid.isNotBlank()) {
+            return base
+        }
         return resolveVideoForPlayback(base, credential)
+    }
+
+    private fun buildAllVideoPages(detail: BiliVideoDetail?): List<BiliVideoPage> {
+        if (detail == null) return emptyList()
+        val detailPages = detail.pages.takeIf { it.size > 1 }.orEmpty()
+        if (detailPages.isNotEmpty()) return detailPages
+        return detail.ugcSeason?.toVideoPages().orEmpty()
     }
 
     suspend fun getPgcEpisodeContext(
@@ -1564,7 +1659,12 @@ class BilibiliApiClient {
                 pageSize = pageSize,
             )
             val match = page.items.firstOrNull { item ->
-                item.business == BiliHistoryBusiness.Archive && when {
+                if (item.business != BiliHistoryBusiness.Archive) return@firstOrNull false
+                when {
+                    video.cid > 0L && item.cid > 0L -> {
+                        item.cid == video.cid &&
+                            (targetBvid.isBlank() || item.bvid == targetBvid || targetBvid == video.bvid)
+                    }
                     targetBvid.isNotBlank() -> item.bvid == targetBvid
                     else -> targetAid > 0L && item.aid == targetAid
                 }

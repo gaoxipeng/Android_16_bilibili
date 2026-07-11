@@ -127,6 +127,26 @@ class VideoPlaybackCoordinator(
     private val keepScreenOnOwners = mutableSetOf<String>()
     var keepScreenOnRequested by mutableStateOf(false)
         private set
+    private var episodePickerPlaybackKey: String? = null
+    var episodePickerState by mutableStateOf<VideoEpisodePickerState?>(null)
+        private set
+
+    fun updateEpisodePicker(playbackKey: String, state: VideoEpisodePickerState?) {
+        if (state == null) {
+            if (episodePickerPlaybackKey == playbackKey) {
+                episodePickerPlaybackKey = null
+                episodePickerState = null
+            }
+            return
+        }
+        episodePickerPlaybackKey = playbackKey
+        episodePickerState = state
+    }
+
+    fun episodePickerFor(playbackKey: String): VideoEpisodePickerState? {
+        if (playbackKey != episodePickerPlaybackKey) return null
+        return episodePickerState
+    }
 
     fun setKeepScreenOn(playbackKey: String, enabled: Boolean) {
         if (enabled) {
