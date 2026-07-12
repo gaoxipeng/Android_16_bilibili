@@ -235,6 +235,7 @@ fun BilibiliVideoSurface(
                 keepPlaying = true,
                 positionKey = currentContentPlaybackKey.value,
             )
+            player = null
             playerHandedOff = true
         }
         coordinator.registerHandoffPrepareHandler(handoffHandler)
@@ -254,7 +255,36 @@ fun BilibiliVideoSurface(
         playbackMetadata?.title,
         playbackMetadata?.artworkUrl,
         playbackMetadata?.bvid,
+        isFullscreen,
+        coordinator.fullscreenKey,
     ) {
+        if (!isFullscreen && player == null && coordinator.fullscreenKey != playbackKey) {
+            coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
+                if (playbackEnabled) {
+                    handedOff.playWhenReady = true
+                    if (handedOff.playbackState == Player.STATE_IDLE) {
+                        handedOff.prepare()
+                    }
+                    handedOff.play()
+                } else {
+                    coordinator.savePlaybackPosition(contentPlaybackKey, handedOff.currentPosition)
+                    handedOff.playWhenReady = false
+                    handedOff.pause()
+                }
+                positionMs = handedOff.currentPosition.coerceAtLeast(0L)
+                durationMs = handedOff.duration.coerceAtLeast(0L)
+                playbackState = handedOff.playbackState
+                playWhenReady = handedOff.playWhenReady
+                isPlaying = handedOff.isPlaying
+                isBuffering = handedOff.playbackState == Player.STATE_BUFFERING
+                player = handedOff
+                playerHandedOff = false
+                boundStreamToken = streamToken
+                boundContentPlaybackKey = contentPlaybackKey
+                return@LaunchedEffect
+            }
+        }
+
         if (player != null && boundStreamToken == streamToken && boundContentPlaybackKey == contentPlaybackKey) {
             return@LaunchedEffect
         }

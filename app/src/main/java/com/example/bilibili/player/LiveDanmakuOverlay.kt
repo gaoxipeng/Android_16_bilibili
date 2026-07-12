@@ -167,7 +167,7 @@ fun LiveDanmakuOverlay(
     val trackReleaseTimes = remember { FloatArray(LIVE_TRACK_COUNT) }
     var frameTick by remember { mutableIntStateOf(0) }
     val speedMultiplier = settings.speedLevel.durationMultiplier
-    val scrollDurationMs = (LIVE_SCROLL_DURATION_MS / speedMultiplier.coerceAtLeast(0.1f))
+    val scrollDurationMs = (LIVE_SCROLL_DURATION_MS * speedMultiplier.coerceAtLeast(0.1f))
         .toLong()
         .coerceIn(3_000L, 16_000L)
 

@@ -1378,8 +1378,6 @@ fun VideoDetailScreen(
                             onStreamSourceError = onStreamSourceError,
                         )
                         }
-                    } else if (currentStream != null && streamMatchesTarget) {
-                        Box(Modifier.fillMaxSize())
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator(color = Color.White)

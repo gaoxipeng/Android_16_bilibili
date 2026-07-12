@@ -109,6 +109,7 @@ import com.example.bilibili.data.DanmakuSettings
 import com.example.bilibili.data.LiveDanmakuClient
 import com.example.bilibili.player.DanmakuSettingsOverlay
 import com.example.bilibili.player.FullscreenOrientationEffect
+import com.example.bilibili.player.ImmersiveVideoChromeEffect
 import com.example.bilibili.player.LightContentStatusBarEffect
 import com.example.bilibili.player.LiveDanmakuOverlay
 import com.example.bilibili.player.isPortraitVideoSize
@@ -291,7 +292,8 @@ fun LiveRoomScreen(
         enabled = isFullscreen,
         portraitVideo = isPortraitStream,
     )
-    LightContentStatusBarEffect(enabled = true)
+    ImmersiveVideoChromeEffect(enabled = isFullscreen)
+    LightContentStatusBarEffect(enabled = !isFullscreen)
 
     LaunchedEffect(room.roomId, reloadToken) {
         val isFirstLoad = playInfo == null
@@ -398,10 +400,10 @@ fun LiveRoomScreen(
     val isPortraitLive = !isFullscreen && isPortraitStream == true
     val supportsClearScreen = isLayoutKnown && (!isFullscreen || isPortraitStream == false)
     val showLiveInfoUi = supportsClearScreen && !liveInfoCleared
-    val showLiveDanmakuOverlay = danmakuEnabled && !liveInfoCleared
+    val showLiveDanmakuOverlay = danmakuEnabled
     val showLivePlayerControls = livePlayerOverlayVisible && !liveInfoCleared
 
-    LaunchedEffect(room.roomId, isFullscreen, isPortraitStream) {
+    LaunchedEffect(room.roomId, isPortraitStream) {
         liveInfoCleared = false
     }
 
@@ -577,34 +579,23 @@ fun LiveRoomScreen(
                 )
                 if (credential != null) {
                     AnimatedVisibility(
-                        visible = showLiveInfoUi,
+                        visible = showLivePlayerControls,
                         enter = fadeIn(tween(200)),
                         exit = fadeOut(tween(180)),
                         modifier = Modifier
-                            .fillMaxSize()
+                            .align(Alignment.BottomCenter)
                             .zIndex(4f),
                     ) {
-                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                            val chatListMaxHeight = maxHeight * 0.45f
-                            Column(Modifier.fillMaxSize()) {
-                                Spacer(
-                                    Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth()
-                                        .pointerInput(Unit) {
-                                            detectTapGestures(onTap = { onLivePlayerOverlayTap() })
-                                        },
-                                )
-                                LiveRoomChatBottomBar(
-                                    recentChatEntries = recentChatEntries,
-                                    danmakuInput = danmakuInput,
-                                    onDanmakuInputChange = { danmakuInput = it },
-                                    onSendDanmaku = ::sendDanmaku,
-                                    maxListHeight = chatListMaxHeight,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                        }
+                        LiveDanmakuInputBar(
+                            danmakuInput = danmakuInput,
+                            onDanmakuInputChange = { danmakuInput = it },
+                            onSendDanmaku = ::sendDanmaku,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .imePadding()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        )
                     }
                 }
                 AnimatedVisibility(
@@ -617,6 +608,7 @@ fun LiveRoomScreen(
                 ) {
                     LiveRoomFullscreenTopBar(
                         title = liveRoomTitle,
+                        immersive = true,
                         onClose = {
                             onLivePlayerControlInteraction()
                             isFullscreen = false
@@ -1045,13 +1037,6 @@ private fun BoxScope.LiveRoomPlayerContent(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(end = 12.dp, top = 10.dp)
-                    .then(
-                        if (isFullscreen) {
-                            Modifier.statusBarsPadding()
-                        } else {
-                            Modifier
-                        },
-                    )
                     .zIndex(6f),
             ) {
                 LiveRefreshCapsule(
@@ -1613,12 +1598,13 @@ private fun LiveRecentDanmakuLine(
 private fun LiveRoomFullscreenTopBar(
     title: String,
     onClose: () -> Unit,
+    immersive: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .statusBarsPadding()
+            .then(if (immersive) Modifier else Modifier.statusBarsPadding())
             .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

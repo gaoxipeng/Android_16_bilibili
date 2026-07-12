@@ -67,6 +67,7 @@ import com.example.bilibili.ui.components.FeedRefreshHintOverlay
 import com.example.bilibili.ui.components.PressAgainExitConfirmWindowMillis
 import com.example.bilibili.ui.components.PressAgainExitHintOverlay
 import com.example.bilibili.ui.components.NavAnimatedOverlay
+import com.example.bilibili.ui.components.NavFullscreenZIndex
 import com.example.bilibili.ui.components.blockHiddenTouches
 import com.example.bilibili.ui.components.feedRefreshHintMessage
 import com.example.bilibili.ui.components.imageviewer.BiliImageSaveHintController
@@ -989,6 +990,11 @@ fun BilibiliApp() {
     val fullscreenKey = coordinator.fullscreenKey
     val navStack = navController.stack
     val navOverlayOpen = navController.hasOverlay
+    LaunchedEffect(navOverlayOpen) {
+        if (navOverlayOpen) {
+            feedRefreshHint = null
+        }
+    }
     val topVideoDetailEntry = navStack.lastVideoDetail()
     val coordinatorFullscreenVideo = coordinator.fullscreenVideo
     val coordinatorFullscreenStream = coordinator.fullscreenStream
@@ -1134,7 +1140,7 @@ fun BilibiliApp() {
                     },
                     coordinator = coordinator,
                     contentPadding = padding,
-                    showSearchBar = showFeedSearchBar,
+                    showSearchBar = activeAccount != null,
                     onSearchVisibleChange = { feedSearchVisible = it },
                     onSearchClick = ::openSearch,
                     pullRefreshState = homePullRefreshState,
@@ -1339,7 +1345,7 @@ fun BilibiliApp() {
                     Modifier
                         .fillMaxSize()
                         .background(Color.Black)
-                        .zIndex(100f),
+                        .zIndex(NavFullscreenZIndex),
                 ) {
                     BilibiliVideoSurface(
                         playbackKey = fullscreenKey,
@@ -1428,7 +1434,7 @@ fun BilibiliApp() {
                 )
             }
 
-            if (!navOverlayOpen && !liveRoomOpen) {
+            if (!liveRoomOpen) {
                 BilibiliLiquidBottomBar(
                 selectedTab = selectedTab,
                 onTabClick = ::handleBottomTabClick,

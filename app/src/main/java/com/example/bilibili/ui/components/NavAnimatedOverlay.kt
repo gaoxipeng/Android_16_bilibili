@@ -31,6 +31,7 @@ const val NavTransitionDurationMs = 280
 
 private const val NavOverlayTopZIndex = 590f
 private const val NavOverlayExitZIndex = 595f
+const val NavFullscreenZIndex = 600f
 
 fun navStackEnterTransition(): EnterTransition =
     slideInHorizontally(
