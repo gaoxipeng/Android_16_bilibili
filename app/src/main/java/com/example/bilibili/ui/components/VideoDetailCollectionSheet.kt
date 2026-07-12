@@ -3,9 +3,8 @@ package com.example.bilibili.ui.components
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import com.example.bilibili.ui.theme.isAppLightTheme
@@ -207,8 +206,8 @@ fun VideoDetailCollectionSheet(
 
         AnimatedVisibility(
             visible = visible,
-            enter = fadeIn(tween(120)) + slideInVertically(tween(140)) { it / 4 },
-            exit = fadeOut(tween(100)),
+            enter = slideInVertically(tween(140)) { it / 4 },
+            exit = slideOutVertically(tween(100)) { it / 4 },
             modifier = Modifier
                 .offset { IntOffset(panelOffsetX, panelOffsetY) }
                 .width(panelWidth),

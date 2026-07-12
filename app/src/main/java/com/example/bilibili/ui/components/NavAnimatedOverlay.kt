@@ -6,12 +6,12 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,13 +37,13 @@ fun navStackEnterTransition(): EnterTransition =
     slideInHorizontally(
         animationSpec = tween(NavTransitionDurationMs, easing = FastOutSlowInEasing),
         initialOffsetX = { fullWidth -> fullWidth },
-    ) + fadeIn(tween(NavTransitionDurationMs))
+    )
 
 fun navStackExitTransition(): ExitTransition =
     slideOutHorizontally(
         animationSpec = tween(NavTransitionDurationMs, easing = FastOutSlowInEasing),
         targetOffsetX = { fullWidth -> fullWidth },
-    ) + fadeOut(tween(NavTransitionDurationMs))
+    )
 
 @Composable
 fun <T> NavAnimatedOverlay(
@@ -78,32 +78,50 @@ fun <T> NavAnimatedOverlay(
     val avVisible = target != null || overlayVisible
     val transitionIdentity = animationKey ?: target
     val enteredKeys = remember { mutableStateMapOf<Any, Boolean>() }
-    val shouldAnimateEnter = stackAnimated &&
-        overlayVisible &&
-        transitionIdentity != null &&
-        enteredKeys[transitionIdentity] != true &&
-        (layerKey == null || pendingEnterKey == null || pendingEnterKey == layerKey)
     val shouldAnimateExit = stackAnimated &&
         !overlayVisible &&
         target == null &&
         (layerKey == null || pendingExit)
-    val effectiveEnter = if (shouldAnimateEnter) enter else EnterTransition.None
-    val effectiveExit = if (shouldAnimateExit) exit else ExitTransition.None
-    val effectiveExitHoldMillis = if (shouldAnimateExit) exitHoldMillis else 0L
     var skipAnimationToken by remember { mutableIntStateOf(0) }
+    val effectiveEnter = remember(transitionIdentity, skipAnimationToken, pendingEnterKey, overlayVisible) {
+        val animate = stackAnimated &&
+            overlayVisible &&
+            transitionIdentity != null &&
+            enteredKeys[transitionIdentity] != true &&
+            (layerKey == null || pendingEnterKey == null || pendingEnterKey == layerKey)
+        if (animate) enter else EnterTransition.None
+    }
+    val effectiveExit = remember(transitionIdentity, skipAnimationToken, pendingExitKey, overlayVisible, target) {
+        val animateExit = stackAnimated &&
+            !overlayVisible &&
+            target == null &&
+            (layerKey == null || pendingExit)
+        if (animateExit) exit else ExitTransition.None
+    }
+    val effectiveExitHoldMillis = if (shouldAnimateExit) exitHoldMillis else 0L
     val transitionState = remember(skipAnimationToken, transitionIdentity) {
-        val initiallyVisible = avVisible || (exitSeed != null && pendingExit)
-        MutableTransitionState(initiallyVisible).apply { targetState = avVisible }
+        MutableTransitionState(false)
     }
     SideEffect {
         transitionState.targetState = avVisible
     }
-    LaunchedEffect(overlayVisible, transitionIdentity, pendingEnterKey) {
-        if (overlayVisible && transitionIdentity != null) {
-            enteredKeys[transitionIdentity] = true
-            if (layerKey != null && pendingEnterKey == layerKey) {
-                onClearPendingEnter()
-            }
+    LaunchedEffect(avVisible, transitionIdentity, pendingExit) {
+        if (!avVisible && transitionIdentity != null && !pendingExit) {
+            enteredKeys.remove(transitionIdentity)
+        }
+    }
+    LaunchedEffect(
+        transitionState.isIdle,
+        transitionState.currentState,
+        overlayVisible,
+        transitionIdentity,
+        pendingEnterKey,
+    ) {
+        if (!overlayVisible || transitionIdentity == null) return@LaunchedEffect
+        if (!transitionState.isIdle || !transitionState.currentState) return@LaunchedEffect
+        enteredKeys[transitionIdentity] = true
+        if (layerKey != null && pendingEnterKey == layerKey) {
+            onClearPendingEnter()
         }
     }
     val isAnimating = !transitionState.isIdle
@@ -138,6 +156,7 @@ fun <T> NavAnimatedOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
                     .consumeTouchEvents(),
             ) {
                 content(item)

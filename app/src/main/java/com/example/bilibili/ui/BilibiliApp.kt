@@ -149,6 +149,20 @@ private fun MutableMap<String, BiliPlayStream>.cachePlayStream(
     }
 }
 
+private fun enrichVideoForDetailOpen(
+    video: BiliVideoItem,
+    playUrls: Map<String, BiliPlayStream>,
+): BiliVideoItem {
+    val cachedStream = resolveStoredPlayStream(video, playUrls) ?: return video
+    return video.copy(
+        cid = video.cid.takeIf { it > 0L } ?: cachedStream.cid,
+        aid = video.aid.takeIf { it > 0L } ?: cachedStream.aid,
+    )
+}
+
+private fun detailPlaybackKeyFor(video: BiliVideoItem): String =
+    videoPlaybackKey(video.playbackId(), ownerId = "detail")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BilibiliApp() {
@@ -407,6 +421,23 @@ fun BilibiliApp() {
         partPage: Int = 0,
         preferRecentWatchPart: Boolean = false,
     ) {
+        val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
+        val initialVideo = enrichVideoForDetailOpen(video, playUrls)
+        val initialProgress = if (progressSeconds > 0) {
+            progressSeconds
+        } else {
+            resolveStoredProgressSeconds(coordinator, initialVideo.playbackId(), 0)
+        }
+        val handoffKey = coordinator.handoffPlaybackKeyForVideo(initialVideo)
+            ?: detailPlaybackKeyFor(initialVideo)
+        if (!replacingVideoDetail) {
+            navController.push(AppNavEntry.VideoDetail(initialVideo, initialProgress))
+            if (coordinator.hasHandoffPlayer(handoffKey)) {
+                coordinator.requestInlinePlayback(handoffKey)
+            } else {
+                coordinator.stopPlayback()
+            }
+        }
         scope.launch {
             val cred = credential()
             var effectivePartPage = partPage
@@ -445,13 +476,28 @@ fun BilibiliApp() {
             }
             val playStream = resolvePlayUrl(resolvedVideo)
             playStream?.let { stream -> playUrls.cachePlayStream(resolvedVideo, stream) }
-            val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
-            navController.push(AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress))
+            val resolvedDetailKey = detailPlaybackKeyFor(resolvedVideo)
+            if (navController.top is AppNavEntry.VideoDetail) {
+                val current = navController.top as AppNavEntry.VideoDetail
+                if (current.video.bvid == resolvedVideo.bvid &&
+                    current.video.playbackId() == resolvedVideo.playbackId() &&
+                    playStream != null
+                ) {
+                    if (current.progressSeconds != resolvedProgress) {
+                        navController.replaceTop(
+                            AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress),
+                        )
+                    }
+                } else {
+                    navController.replaceTop(
+                        AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress),
+                    )
+                }
+            } else {
+                navController.push(AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress))
+            }
             if (replacingVideoDetail) {
                 coordinator.releaseHandoffPlayer()
-                coordinator.stopPlayback()
-            } else {
-                coordinator.stopPlayback()
             }
             saveResolvedProgress(
                 coordinator = coordinator,
@@ -459,9 +505,9 @@ fun BilibiliApp() {
                 progressSeconds = resolvedProgress,
             )
             if (playStream != null || replacingVideoDetail) {
-                coordinator.requestInlinePlayback(
-                    videoPlaybackKey(resolvedVideo.playbackId(), ownerId = "detail"),
-                )
+                val playbackKey = coordinator.handoffPlaybackKeyForVideo(resolvedVideo)
+                    ?: resolvedDetailKey
+                coordinator.requestInlinePlayback(playbackKey)
             }
         }
     }
@@ -483,12 +529,12 @@ fun BilibiliApp() {
                 serverProgressSeconds = maxOf(item.progressSeconds, serverProgress),
             )
             val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
+            if (!replacingVideoDetail) {
+                coordinator.stopPlayback()
+            }
             navController.push(AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress))
             if (replacingVideoDetail) {
                 coordinator.releaseHandoffPlayer()
-                coordinator.stopPlayback()
-            } else {
-                coordinator.stopPlayback()
             }
             saveResolvedProgress(
                 coordinator = coordinator,
@@ -632,7 +678,12 @@ fun BilibiliApp() {
         if (pendingPopSideEffect == null && navController.exitingLayer == null) return
         when (val removed = pendingPopSideEffect) {
             is AppNavEntry.VideoDetail -> {
-                coordinator.stopPlayback()
+                coordinator.pauseAll()
+                coordinator.activeKey = null
+                coordinator.fullscreenKey = null
+                coordinator.fullscreenPortraitVideo = null
+                coordinator.fullscreenVideo = null
+                coordinator.fullscreenStream = null
                 if (selectedTab == MainTab.History) {
                     lastOpenedHistoryKid?.takeIf { it.isNotBlank() }?.let { kid ->
                         promoteHistoryKid = kid
@@ -659,6 +710,11 @@ fun BilibiliApp() {
 
     fun popNavEntry() {
         val removed = navController.pop() ?: return
+        if (removed is AppNavEntry.VideoDetail) {
+            coordinator.requestDetailHandoffPreserve(
+                detailPlaybackKeyFor(removed.video),
+            )
+        }
         pendingPopSideEffect = removed
     }
 
@@ -951,33 +1007,6 @@ fun BilibiliApp() {
             MainTab.Live -> Unit
             MainTab.History -> Unit
             MainTab.Mine -> Unit
-        }
-    }
-
-    LaunchedEffect(homeVideos) {
-        homeVideos.take(10).forEach { video ->
-            val cached = playUrls[video.playbackId()]
-            if (cached == null || cached.isPlayStreamCacheStale()) {
-                launch { resolvePlayUrl(video) }
-            }
-        }
-    }
-
-    LaunchedEffect(followVideos) {
-        followVideos.take(10).forEach { video ->
-            val cached = playUrls[video.playbackId()]
-            if (cached == null || cached.isPlayStreamCacheStale()) {
-                launch { resolvePlayUrl(video) }
-            }
-        }
-    }
-
-    LaunchedEffect(hotVideos) {
-        hotVideos.take(10).forEach { video ->
-            val cached = playUrls[video.playbackId()]
-            if (cached == null || cached.isPlayStreamCacheStale()) {
-                launch { resolvePlayUrl(video) }
-            }
         }
     }
 
@@ -1618,6 +1647,9 @@ private fun AppNavEntryContent(
             )
         }
         is AppNavEntry.VideoDetail -> {
+            val detailStateKey = entry.video.bvid.ifBlank { "av:${entry.video.aid}" }
+                .ifBlank { entry.video.playbackId() }
+            key(detailStateKey) {
             VideoDetailScreen(
                 seedVideo = entry.video,
                 playStream = resolveStoredPlayStream(entry.video, playUrls),
@@ -1642,6 +1674,7 @@ private fun AppNavEntryContent(
                 episodeSwitchScope = episodeSwitchScope,
                 modifier = Modifier.fillMaxSize(),
             )
+            }
         }
         is AppNavEntry.UserProfile -> {
             BackHandler(enabled = isActive, onBack = onPopNav)

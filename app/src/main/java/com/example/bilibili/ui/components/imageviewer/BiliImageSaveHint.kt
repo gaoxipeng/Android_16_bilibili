@@ -3,8 +3,6 @@ package com.example.bilibili.ui.components.imageviewer
 import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -146,8 +144,8 @@ fun BiliImageSaveHintOverlay(
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     AnimatedVisibility(
         visible = hint != null,
-        enter = fadeIn(tween(220)) + slideInVertically(tween(220)) { fullHeight -> -fullHeight / 2 },
-        exit = fadeOut(tween(180)) + slideOutVertically(tween(180)) { fullHeight -> -fullHeight / 2 },
+        enter = slideInVertically(tween(220)) { fullHeight -> -fullHeight / 2 },
+        exit = slideOutVertically(tween(180)) { fullHeight -> -fullHeight / 2 },
         modifier = modifier
             .zIndex(zIndex)
             .padding(top = topInset + 10.dp),

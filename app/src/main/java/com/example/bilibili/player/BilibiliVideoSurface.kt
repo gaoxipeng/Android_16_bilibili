@@ -7,10 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import com.example.bilibili.ui.components.OverlayFadeTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,7 +33,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -85,9 +81,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
 
-private val VideoProgressLineWidth = 2.5.dp
+private val VideoProgressLineWidth = 3.dp
 
-private val VideoControlBarHeight = 32.dp
+private val VideoControlBarHeight = 34.dp
 private val VideoControlBarBottomGap = 6.dp
 private val VideoControlBorderWidth = 0.5.dp
 private val VideoControlBorderColor = Color(0x80999999)
@@ -118,13 +114,19 @@ fun BilibiliVideoSurface(
     playbackMetadata: VideoPlaybackMetadata? = null,
     historyVideo: BiliVideoItem? = null,
     onStreamSourceError: (() -> Unit)? = null,
+    showLoadingIndicator: Boolean = true,
+    onLoadingStateChange: ((Boolean) -> Unit)? = null,
+    autoPlayWhenReady: Boolean = false,
 ) {
     val context = LocalContext.current
     val layerBackdrop = backdrop as? LayerBackdrop ?: rememberLayerBackdrop()
     val onStreamSourceErrorState = rememberUpdatedState(onStreamSourceError)
     val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
-    val initialHandoffPlayer = remember(playbackKey) {
-        coordinator.consumeHandoffPlayer(playbackKey)
+    val handoffLookupKey = remember(playbackKey, historyVideo?.bvid, historyVideo?.cid) {
+        historyVideo?.let { coordinator.handoffPlaybackKeyForVideo(it) } ?: playbackKey
+    }
+    val initialHandoffPlayer = remember(playbackKey, handoffLookupKey) {
+        coordinator.consumeHandoffPlayer(handoffLookupKey)
     }
     var boundStreamToken by remember(playbackKey) {
         mutableStateOf(if (initialHandoffPlayer != null) streamToken else null)
@@ -257,22 +259,23 @@ fun BilibiliVideoSurface(
         playbackMetadata?.bvid,
         isFullscreen,
         coordinator.fullscreenKey,
+        historyVideo?.bvid,
+        historyVideo?.cid,
+        handoffLookupKey,
     ) {
+        if (!isFullscreen && coordinator.fullscreenKey == playbackKey) {
+            return@LaunchedEffect
+        }
         if (!isFullscreen && player == null && coordinator.fullscreenKey != playbackKey) {
-            coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
+            coordinator.consumeHandoffPlayer(handoffLookupKey)?.let { handedOff ->
                 if (playbackEnabled) {
-                    handedOff.playWhenReady = true
-                    if (handedOff.playbackState == Player.STATE_IDLE) {
-                        handedOff.prepare()
-                    }
-                    handedOff.play()
+                    handedOff.safePrepareAndPlay()
                 } else {
-                    coordinator.savePlaybackPosition(contentPlaybackKey, handedOff.currentPosition)
-                    handedOff.playWhenReady = false
-                    handedOff.pause()
+                    coordinator.savePlaybackPosition(contentPlaybackKey, handedOff.safeCurrentPosition())
+                    handedOff.safePause()
                 }
-                positionMs = handedOff.currentPosition.coerceAtLeast(0L)
-                durationMs = handedOff.duration.coerceAtLeast(0L)
+                positionMs = handedOff.safeCurrentPosition()
+                durationMs = runCatching { handedOff.duration.coerceAtLeast(0L) }.getOrDefault(0L)
                 playbackState = handedOff.playbackState
                 playWhenReady = handedOff.playWhenReady
                 isPlaying = handedOff.isPlaying
@@ -291,6 +294,17 @@ fun BilibiliVideoSurface(
 
         val existingPlayer = player
         if (existingPlayer != null) {
+            if (boundStreamToken == streamToken && boundContentPlaybackKey == contentPlaybackKey) {
+                return@LaunchedEffect
+            }
+            val boundCid = boundStreamToken?.substringBefore(':')?.toLongOrNull() ?: 0L
+            val samePlaybackContent = boundContentPlaybackKey == contentPlaybackKey ||
+                (boundCid > 0L && boundCid == stream.cid && stream.cid > 0L)
+            if (samePlaybackContent && existingPlayer.playbackState != Player.STATE_IDLE) {
+                boundStreamToken = streamToken
+                boundContentPlaybackKey = contentPlaybackKey
+                return@LaunchedEffect
+            }
             // Keep the ExoPlayer (and therefore its MediaSession) alive while changing episodes.
             // Recreating it makes Android briefly remove the notification's custom controls.
             coordinator.releaseHandoffPlayer()
@@ -374,15 +388,17 @@ fun BilibiliVideoSurface(
             playerHandedOff = false
         }
 
-        coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
+        coordinator.consumeHandoffPlayer(handoffLookupKey)?.let { handedOff ->
             bindHandoffPlayer(handedOff)
             return@LaunchedEffect
         }
 
-        val waitForHandoff = isFullscreen || coordinator.hasHandoffPlayer(playbackKey)
+        val waitForHandoff = isFullscreen ||
+            coordinator.hasHandoffPlayer(playbackKey) ||
+            coordinator.hasHandoffPlayer(handoffLookupKey)
         if (waitForHandoff) {
         repeat(96) { attempt ->
-            coordinator.consumeHandoffPlayer(playbackKey)?.let { handedOff ->
+            coordinator.consumeHandoffPlayer(handoffLookupKey)?.let { handedOff ->
                 bindHandoffPlayer(handedOff)
                 return@LaunchedEffect
             }
@@ -413,6 +429,13 @@ fun BilibiliVideoSurface(
     }
 
     val activePlayer = player
+    val activePlayerState = rememberUpdatedState(activePlayer)
+    val hasPendingHandoff = coordinator.hasHandoffPlayer(playbackKey) ||
+        coordinator.hasHandoffPlayer(handoffLookupKey)
+    val surfaceLoading = (activePlayer == null && !hasPendingHandoff) || isBuffering
+    LaunchedEffect(surfaceLoading, onLoadingStateChange) {
+        onLoadingStateChange?.invoke(surfaceLoading)
+    }
     LaunchedEffect(showDanmakuFeature, danmakuVisible, isFullscreen, activePlayer) {
         if (!showDanmakuFeature || !danmakuVisible || activePlayer == null) {
             fullscreenDanmakuMountAllowed = false
@@ -425,17 +448,23 @@ fun BilibiliVideoSurface(
         fullscreenDanmakuMountAllowed = true
     }
 
-    LaunchedEffect(playbackEnabled, activePlayer) {
-        val playerRef = activePlayer ?: return@LaunchedEffect
+    LaunchedEffect(playbackEnabled, activePlayer, coordinator.activeKey, coordinator.fullscreenKey, playbackKey, isFullscreen, autoPlayWhenReady, isBuffering) {
+        val playerRef = activePlayerState.value ?: return@LaunchedEffect
         if (!playbackEnabled) {
-            coordinator.savePlaybackPosition(contentPlaybackKey, playerRef.currentPosition)
-            playerRef.playWhenReady = false
-            playerRef.pause()
+            coordinator.savePlaybackPosition(contentPlaybackKey, playerRef.safeCurrentPosition())
+            playerRef.safePause()
+            isPlaying = false
+            playWhenReady = false
             return@LaunchedEffect
         }
-        if (playerRef.playbackState == Player.STATE_IDLE) {
-            playerRef.prepare()
+        val isPrimaryPlayback = when {
+            isFullscreen -> coordinator.fullscreenKey == playbackKey
+            else -> coordinator.activeKey == playbackKey && coordinator.fullscreenKey == null
         }
+        if (!isPrimaryPlayback && !autoPlayWhenReady) return@LaunchedEffect
+        playerRef.safePrepareAndPlay()
+        isPlaying = playerRef.isPlaying
+        playWhenReady = playerRef.playWhenReady
     }
 
     if (activePlayer == null) {
@@ -443,12 +472,8 @@ fun BilibiliVideoSurface(
             modifier = modifier.background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            if (!coordinator.hasHandoffPlayer(playbackKey)) {
-                CircularProgressIndicator(
-                    color = Color.White,
-                    modifier = Modifier.size(28.dp),
-                    strokeWidth = 2.dp,
-                )
+            if (showLoadingIndicator && !hasPendingHandoff) {
+                VideoPlayerLoadingIndicator()
             }
         }
         return
@@ -536,11 +561,16 @@ fun BilibiliVideoSurface(
 
     DisposableEffect(activePlayer, playbackKey, isFullscreen) {
         val pauseHandler = {
-            coordinator.savePlaybackPosition(currentContentPlaybackKey.value, activePlayer.currentPosition)
-            activePlayer.playWhenReady = false
-            activePlayer.pause()
-            isPlaying = false
-            playWhenReady = false
+            val currentPlayer = activePlayerState.value
+            if (currentPlayer != null && currentPlayer === player) {
+                coordinator.savePlaybackPosition(
+                    currentContentPlaybackKey.value,
+                    currentPlayer.safeCurrentPosition(),
+                )
+                currentPlayer.safePause()
+                isPlaying = false
+                playWhenReady = false
+            }
         }
         if (isFullscreen) {
             coordinator.registerFullscreenPauseHandler(playbackKey, pauseHandler)
@@ -549,30 +579,36 @@ fun BilibiliVideoSurface(
         }
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-                playWhenReady = activePlayer.playWhenReady
-                positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
-                val duration = activePlayer.duration
-                if (duration > 0L) {
-                    durationMs = duration
-                }
-                if (playing && activePlayer.playbackState == Player.STATE_READY) {
-                    isBuffering = false
+                val livePlayer = activePlayerState.value ?: return
+                runCatching {
+                    isPlaying = playing
+                    playWhenReady = livePlayer.playWhenReady
+                    positionMs = livePlayer.currentPosition.coerceAtLeast(0L)
+                    val duration = livePlayer.duration
+                    if (duration > 0L) {
+                        durationMs = duration
+                    }
+                    if (playing && livePlayer.playbackState == Player.STATE_READY) {
+                        isBuffering = false
+                    }
                 }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
-                playbackState = state
-                isBuffering = state == Player.STATE_BUFFERING
-                if (state == Player.STATE_READY) {
-                    durationMs = activePlayer.duration.coerceAtLeast(0L)
-                    isBuffering = false
-                    positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
-                    VideoPlaybackMediaBridge.refreshPlaybackMetadata(playbackKey)
-                }
-                if (state == Player.STATE_ENDED) {
-                    playWhenReady = activePlayer.playWhenReady
-                    onPlaybackEnded?.invoke()
+                val livePlayer = activePlayerState.value ?: return
+                runCatching {
+                    playbackState = state
+                    isBuffering = state == Player.STATE_BUFFERING
+                    if (state == Player.STATE_READY) {
+                        durationMs = livePlayer.duration.coerceAtLeast(0L)
+                        isBuffering = false
+                        positionMs = livePlayer.currentPosition.coerceAtLeast(0L)
+                        VideoPlaybackMediaBridge.refreshPlaybackMetadata(playbackKey)
+                    }
+                    if (state == Player.STATE_ENDED) {
+                        playWhenReady = livePlayer.playWhenReady
+                        onPlaybackEnded?.invoke()
+                    }
                 }
             }
 
@@ -601,74 +637,101 @@ fun BilibiliVideoSurface(
                 }
             }
         }
-        activePlayer.videoSize.let { videoSize ->
-            if (videoSize.width > 0 && videoSize.height > 0) {
-                playerSizeKnown = true
-                val portrait = isPortraitVideoSize(
-                    width = videoSize.width,
-                    height = videoSize.height,
-                    rotationDegrees = videoSize.unappliedRotationDegrees,
-                )
-                isPortraitPlayback = portrait
-                if (isFullscreen) {
-                    coordinator.updateFullscreenPortrait(portrait)
+        activePlayerState.value?.let { livePlayer ->
+            runCatching {
+                livePlayer.videoSize.let { videoSize ->
+                    if (videoSize.width > 0 && videoSize.height > 0) {
+                        playerSizeKnown = true
+                        val portrait = isPortraitVideoSize(
+                            width = videoSize.width,
+                            height = videoSize.height,
+                            rotationDegrees = videoSize.unappliedRotationDegrees,
+                        )
+                        isPortraitPlayback = portrait
+                        if (isFullscreen) {
+                            coordinator.updateFullscreenPortrait(portrait)
+                        }
+                    }
+                }
+                livePlayer.addListener(listener)
+                when (livePlayer.playbackState) {
+                    Player.STATE_READY -> {
+                        isBuffering = false
+                        durationMs = livePlayer.duration.coerceAtLeast(0L)
+                        positionMs = livePlayer.currentPosition.coerceAtLeast(0L)
+                    }
+                    Player.STATE_BUFFERING -> isBuffering = true
+                    else -> isBuffering = false
                 }
             }
         }
-        activePlayer.addListener(listener)
-        when (activePlayer.playbackState) {
-            Player.STATE_READY -> {
-                isBuffering = false
-                durationMs = activePlayer.duration.coerceAtLeast(0L)
-                positionMs = activePlayer.currentPosition.coerceAtLeast(0L)
-            }
-            Player.STATE_BUFFERING -> isBuffering = true
-            else -> isBuffering = false
-        }
         onDispose {
-            coordinator.savePlaybackPosition(currentContentPlaybackKey.value, activePlayer.currentPosition)
-            activePlayer.removeListener(listener)
+            val disposedPlayer = activePlayerState.value
+            if (disposedPlayer != null) {
+                coordinator.savePlaybackPosition(
+                    currentContentPlaybackKey.value,
+                    disposedPlayer.safeCurrentPosition(),
+                )
+                runCatching { disposedPlayer.removeListener(listener) }
+            }
             if (isFullscreen) {
                 coordinator.unregisterFullscreenPauseHandler(playbackKey)
             } else {
                 coordinator.unregisterInlinePauseHandler(playbackKey)
             }
             if (playerHandedOff) return@onDispose
+            val preserveForReentry = coordinator.shouldPreserveDetailHandoff(playbackKey)
             val stoppingPlayback = coordinator.playbackStopping ||
-                coordinator.activeKey == null && !isFullscreen
+                coordinator.activeKey == null && !isFullscreen && !preserveForReentry
             when {
+                preserveForReentry -> {
+                    disposedPlayer?.let { livePlayer ->
+                        coordinator.stashPlayer(
+                            key = playbackKey,
+                            player = livePlayer,
+                            positionKey = currentContentPlaybackKey.value,
+                        )
+                    }
+                    coordinator.clearDetailHandoffPreserve()
+                }
                 stoppingPlayback -> {
-                    coordinator.releasePlayerOnce(activePlayer)
+                    coordinator.releasePlayerOnce(disposedPlayer)
                     coordinator.releaseHandoffPlayer()
                     VideoPlaybackMediaBridge.detachAll()
                     coordinator.clearReleasedPlayers()
                 }
                 !isFullscreen && coordinator.fullscreenKey == playbackKey -> {
-                    coordinator.stashPlayer(
-                        key = playbackKey,
-                        player = activePlayer,
-                        keepPlaying = true,
-                        positionKey = currentContentPlaybackKey.value,
-                    )
+                    disposedPlayer?.let { livePlayer ->
+                        coordinator.stashPlayer(
+                            key = playbackKey,
+                            player = livePlayer,
+                            keepPlaying = true,
+                            positionKey = currentContentPlaybackKey.value,
+                        )
+                    }
                 }
                 isFullscreen && coordinator.fullscreenKey == null && coordinator.activeKey == playbackKey -> {
-                    coordinator.stashPlayer(
-                        key = playbackKey,
-                        player = activePlayer,
-                        keepPlaying = true,
-                        positionKey = currentContentPlaybackKey.value,
-                    )
+                    disposedPlayer?.let { livePlayer ->
+                        coordinator.stashPlayer(
+                            key = playbackKey,
+                            player = livePlayer,
+                            keepPlaying = true,
+                            positionKey = currentContentPlaybackKey.value,
+                        )
+                    }
                 }
                 !isFullscreen && coordinator.activeKey == playbackKey -> {
-                    coordinator.stashPlayer(
-                        key = playbackKey,
-                        player = activePlayer,
-                        positionKey = currentContentPlaybackKey.value,
-                    )
+                    disposedPlayer?.let { livePlayer ->
+                        coordinator.stashPlayer(
+                            key = playbackKey,
+                            player = livePlayer,
+                            positionKey = currentContentPlaybackKey.value,
+                        )
+                    }
                 }
                 else -> {
                     VideoPlaybackMediaBridge.detach(playbackKey)
-                    coordinator.releasePlayerOnce(activePlayer)
+                    coordinator.releasePlayerOnce(disposedPlayer)
                 }
             }
         }
@@ -768,7 +831,8 @@ fun BilibiliVideoSurface(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .clipToBounds(),
     ) {
         Box(
             modifier = Modifier
@@ -790,7 +854,9 @@ fun BilibiliVideoSurface(
                     }
                 },
                 update = { playerView ->
-                    playerView.player = activePlayer
+                    runCatching {
+                        playerView.player = activePlayerState.value?.takeIf { it === player }
+                    }
                     playerView.resizeMode = if (isFullscreen && isPortraitPlayback) {
                         AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     } else {
@@ -865,21 +931,17 @@ fun BilibiliVideoSurface(
             )
         }
 
-        if (isBuffering) {
-            CircularProgressIndicator(
-                color = Color.White,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(28.dp),
-                strokeWidth = 2.dp,
+        if (isBuffering && showLoadingIndicator) {
+            VideoPlayerLoadingIndicator(
+                modifier = Modifier.align(Alignment.Center),
             )
         }
 
         if (isFullscreen) {
             AnimatedVisibility(
                 visible = controlsVisible,
-                enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { -it },
-                exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
+                enter = OverlayFadeTransition.enter,
+                exit = OverlayFadeTransition.exit,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .zIndex(10f),
@@ -919,8 +981,8 @@ fun BilibiliVideoSurface(
         } else if (showFullscreenButton) {
             AnimatedVisibility(
                 visible = controlsVisible,
-                enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { -it },
-                exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
+                enter = OverlayFadeTransition.enter,
+                exit = OverlayFadeTransition.exit,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .zIndex(10f),
@@ -938,8 +1000,8 @@ fun BilibiliVideoSurface(
 
         AnimatedVisibility(
             visible = controlsEnabled && controlsVisible && !showDanmakuSettings && !showEpisodePicker,
-            enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { it },
-            exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { it },
+            enter = OverlayFadeTransition.enter,
+            exit = OverlayFadeTransition.exit,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(10f)
@@ -1102,9 +1164,9 @@ private fun VideoControls(
         ) {
             Text(
                 text = formatVideoTime(positionMs),
-                modifier = Modifier.widthIn(min = 36.dp),
+                modifier = Modifier.widthIn(min = 42.dp),
                 color = Color.White,
-                style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
             )
             IconButton(
@@ -1197,9 +1259,9 @@ private fun VideoControls(
             }
             Text(
                 text = formatVideoTime((durationMs - positionMs).coerceAtLeast(0L)),
-                modifier = Modifier.widthIn(min = 36.dp),
-                color = Color.White.copy(alpha = 0.82f),
-                style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                modifier = Modifier.widthIn(min = 42.dp),
+                color = Color.White,
+                style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
                 textAlign = TextAlign.End,
             )

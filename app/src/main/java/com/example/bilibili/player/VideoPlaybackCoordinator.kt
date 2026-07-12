@@ -121,6 +121,7 @@ class VideoPlaybackCoordinator(
     @Volatile
     var playbackStopping: Boolean = false
         private set
+    private var detailHandoffPreserveKey: String? = null
     private val inlinePauseHandlers = mutableMapOf<String, () -> Unit>()
     private val fullscreenPauseHandlers = mutableMapOf<String, () -> Unit>()
     private val handoffPrepareHandlers = mutableSetOf<(String) -> Unit>()
@@ -180,6 +181,10 @@ class VideoPlaybackCoordinator(
     }
 
     fun requestInlinePlayback(key: String) {
+        if (fullscreenKey == key) {
+            activeKey = key
+            return
+        }
         pauseInlineOnly(exceptKey = key)
         pauseFullscreenOnly()
         activeKey = key
@@ -217,13 +222,48 @@ class VideoPlaybackCoordinator(
 
     fun hasHandoffPlayer(key: String): Boolean = handoffKey == key
 
+    fun requestDetailHandoffPreserve(detailPlaybackKey: String) {
+        detailHandoffPreserveKey = detailPlaybackKey
+    }
+
+    fun shouldPreserveDetailHandoff(playbackKey: String): Boolean {
+        val preserveKey = detailHandoffPreserveKey ?: return false
+        if (preserveKey == playbackKey) return true
+        val preserveId = preserveKey.substringAfter(':', preserveKey)
+        val targetId = playbackKey.substringAfter(':', playbackKey)
+        val preserveBvid = preserveId.substringBefore(":cid:")
+        val targetBvid = targetId.substringBefore(":cid:")
+        return preserveBvid.isNotBlank() && preserveBvid == targetBvid
+    }
+
+    fun clearDetailHandoffPreserve() {
+        detailHandoffPreserveKey = null
+    }
+
+    fun handoffPlaybackKeyForVideo(video: BiliVideoItem, ownerId: String = "detail"): String? {
+        val primary = videoPlaybackKey(video.playbackId(), ownerId)
+        if (hasHandoffPlayer(primary)) return primary
+        val bvid = video.bvid
+        if (bvid.isBlank()) return null
+        val currentHandoff = handoffKey ?: return null
+        val handoffId = currentHandoff.substringAfter(':', currentHandoff)
+        if (handoffId == bvid || handoffId.startsWith("$bvid:cid:")) {
+            return currentHandoff
+        }
+        return null
+    }
+
     fun pauseForOverlay() {
         pauseAll()
     }
 
     fun pauseAll() {
-        inlinePauseHandlers.values.forEach { it() }
-        fullscreenPauseHandlers.values.forEach { it() }
+        inlinePauseHandlers.values.toList().forEach { handler ->
+            runCatching { handler() }
+        }
+        fullscreenPauseHandlers.values.toList().forEach { handler ->
+            runCatching { handler() }
+        }
     }
 
     fun stopPlayback() {

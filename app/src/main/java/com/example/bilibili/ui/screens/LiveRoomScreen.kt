@@ -45,15 +45,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.ime
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.shrinkHorizontally
+import com.example.bilibili.ui.components.OverlayFadeTransition
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -74,6 +70,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -208,6 +205,7 @@ fun LiveRoomScreen(
     var rankUsers by remember(room.roomId) { mutableStateOf<List<BiliLiveRankUser>>(emptyList()) }
     var livePlayerOverlayVisible by remember(room.roomId) { mutableStateOf(true) }
     var livePlayerOverlayHideSignal by remember(room.roomId) { mutableIntStateOf(0) }
+    var danmakuInputFocused by remember(room.roomId) { mutableStateOf(false) }
     var liveInfoCleared by remember(room.roomId) { mutableStateOf(false) }
     var anchorRelation by remember(room.roomId) { mutableStateOf(BiliAuthorRelation()) }
     var followLoading by remember(room.roomId) { mutableStateOf(false) }
@@ -364,8 +362,11 @@ fun LiveRoomScreen(
         }
     }
 
-    LaunchedEffect(loading, livePlayerOverlayHideSignal, showDanmakuSettings) {
-        if (loading || showDanmakuSettings) {
+    val imeBottomPadding = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+    val suppressControlsAutoHide = danmakuInputFocused || imeBottomPadding > 0.dp
+
+    LaunchedEffect(loading, livePlayerOverlayHideSignal, showDanmakuSettings, suppressControlsAutoHide) {
+        if (loading || showDanmakuSettings || suppressControlsAutoHide) {
             livePlayerOverlayVisible = true
             return@LaunchedEffect
         }
@@ -561,6 +562,7 @@ fun LiveRoomScreen(
                     showDanmakuSettings = showDanmakuSettings,
                     isFullscreen = true,
                     isPortraitLive = false,
+                    showBottomControlCapsules = false,
                     onDanmakuToggle = { coordinator.toggleDanmaku() },
                     onDanmakuLongPress = { showDanmakuSettings = true },
                     onFullscreenToggle = { isFullscreen = false },
@@ -579,29 +581,52 @@ fun LiveRoomScreen(
                 )
                 if (credential != null) {
                     AnimatedVisibility(
-                        visible = showLivePlayerControls,
-                        enter = fadeIn(tween(200)),
-                        exit = fadeOut(tween(180)),
+                        visible = showLivePlayerControls && !showDanmakuSettings,
+                        enter = OverlayFadeTransition.enter,
+                        exit = OverlayFadeTransition.exit,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .zIndex(4f),
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .imePadding()
+                            .padding(horizontal = 12.dp, vertical = 12.dp)
+                            .zIndex(8f),
                     ) {
-                        LiveDanmakuInputBar(
-                            danmakuInput = danmakuInput,
-                            onDanmakuInputChange = { danmakuInput = it },
-                            onSendDanmaku = ::sendDanmaku,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .navigationBarsPadding()
-                                .imePadding()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            LiveDanmakuInputBar(
+                                danmakuInput = danmakuInput,
+                                onDanmakuInputChange = { danmakuInput = it },
+                                onSendDanmaku = ::sendDanmaku,
+                                onFocusChange = { danmakuInputFocused = it },
+                                modifier = Modifier.weight(1f),
+                            )
+                            LiveRoomPlayerControls(
+                                danmakuEnabled = showLiveDanmakuOverlay,
+                                onDanmakuToggle = {
+                                    onLivePlayerControlInteraction()
+                                    coordinator.toggleDanmaku()
+                                },
+                                onDanmakuLongPress = {
+                                    onLivePlayerControlInteraction()
+                                    showDanmakuSettings = true
+                                },
+                                isFullscreen = true,
+                                onFullscreenToggle = {
+                                    onLivePlayerControlInteraction()
+                                    isFullscreen = false
+                                },
+                            )
+                        }
                     }
                 }
                 AnimatedVisibility(
                     visible = showLivePlayerControls && !showDanmakuSettings,
-                    enter = fadeIn(tween(200)) + slideInVertically(tween(220)) { -it },
-                    exit = fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it },
+                    enter = OverlayFadeTransition.enter,
+                    exit = OverlayFadeTransition.exit,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .zIndex(8f),
@@ -664,8 +689,8 @@ fun LiveRoomScreen(
                 )
                 AnimatedVisibility(
                     visible = showLiveInfoUi,
-                    enter = fadeIn(tween(200)),
-                    exit = fadeOut(tween(180)),
+                    enter = OverlayFadeTransition.enter,
+                    exit = OverlayFadeTransition.exit,
                     modifier = Modifier
                         .fillMaxSize()
                         .zIndex(4f),
@@ -712,6 +737,7 @@ fun LiveRoomScreen(
                                 danmakuInput = danmakuInput,
                                 onDanmakuInputChange = { danmakuInput = it },
                                 onSendDanmaku = ::sendDanmaku,
+                                onDanmakuInputFocusChange = { danmakuInputFocused = it },
                                 maxListHeight = maxChatListHeight,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -801,6 +827,7 @@ fun LiveRoomScreen(
                                 danmakuInput = danmakuInput,
                                 onDanmakuInputChange = { danmakuInput = it },
                                 onSendDanmaku = ::sendDanmaku,
+                                onFocusChange = { danmakuInputFocused = it },
                             )
                         }
                     } else {
@@ -828,7 +855,12 @@ private fun LiveRoomHeaderSlot(
     overlayControlsVisible: Boolean = true,
     onRefresh: (() -> Unit)? = null,
 ) {
-    if (visible) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = OverlayFadeTransition.enter,
+        exit = OverlayFadeTransition.exit,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         LiveRoomHeader(
             room = room,
             detail = detail,
@@ -844,7 +876,8 @@ private fun LiveRoomHeaderSlot(
                 .fillMaxWidth()
                 .statusBarsPadding(),
         )
-    } else {
+    }
+    if (!visible) {
         Spacer(
             modifier = Modifier
                 .fillMaxWidth()
@@ -915,6 +948,7 @@ private fun LiveRoomPlayerBlock(
     showDanmakuSettings: Boolean,
     isFullscreen: Boolean,
     isPortraitLive: Boolean,
+    showBottomControlCapsules: Boolean = true,
     onDanmakuToggle: () -> Unit,
     onDanmakuLongPress: () -> Unit,
     onFullscreenToggle: () -> Unit,
@@ -944,6 +978,7 @@ private fun LiveRoomPlayerBlock(
             showDanmakuSettings = showDanmakuSettings,
             isFullscreen = isFullscreen,
             isPortraitLive = isPortraitLive,
+            showBottomControlCapsules = showBottomControlCapsules,
             onDanmakuToggle = {
                 onControlInteraction()
                 onDanmakuToggle()
@@ -985,6 +1020,7 @@ private fun BoxScope.LiveRoomPlayerContent(
     showDanmakuSettings: Boolean,
     isFullscreen: Boolean,
     isPortraitLive: Boolean,
+    showBottomControlCapsules: Boolean = true,
     onDanmakuToggle: () -> Unit,
     onDanmakuLongPress: () -> Unit,
     onFullscreenToggle: () -> Unit,
@@ -1032,8 +1068,8 @@ private fun BoxScope.LiveRoomPlayerContent(
         if (!showDanmakuSettings && !isPortraitLive) {
             AnimatedVisibility(
                 visible = overlayControlsVisible,
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(180)),
+                enter = OverlayFadeTransition.enter,
+                exit = OverlayFadeTransition.exit,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(end = 12.dp, top = 10.dp)
@@ -1045,11 +1081,11 @@ private fun BoxScope.LiveRoomPlayerContent(
                 )
             }
         }
-        if (!showDanmakuSettings && !isPortraitLive) {
+        if (!showDanmakuSettings && !isPortraitLive && showBottomControlCapsules) {
             AnimatedVisibility(
                 visible = overlayControlsVisible,
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(180)),
+                enter = OverlayFadeTransition.enter,
+                exit = OverlayFadeTransition.exit,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 12.dp, bottom = if (isFullscreen) 40.dp else 10.dp)
@@ -1309,8 +1345,8 @@ private fun LiveRoomHeader(
                 if (onRefresh != null) {
                     AnimatedVisibility(
                         visible = overlayControlsVisible,
-                        enter = fadeIn(tween(200)),
-                        exit = fadeOut(tween(180)),
+                        enter = OverlayFadeTransition.enter,
+                        exit = OverlayFadeTransition.exit,
                     ) {
                         LiveRefreshCapsule(
                             loading = refreshLoading,
@@ -1435,6 +1471,7 @@ private fun LiveDanmakuInputBar(
     danmakuInput: String,
     onDanmakuInputChange: (String) -> Unit,
     onSendDanmaku: (String) -> Unit,
+    onFocusChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -1465,6 +1502,7 @@ private fun LiveDanmakuInputBar(
                 .weight(1f)
                 .defaultMinSize(minHeight = 36.dp)
                 .height(36.dp)
+                .onFocusChanged { onFocusChange(it.isFocused) }
                 .border(0.5.dp, LiveControlCapsuleBorderColor, capsuleShape)
                 .clip(capsuleShape)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1489,8 +1527,8 @@ private fun LiveDanmakuInputBar(
         )
         AnimatedVisibility(
             visible = isKeyboardVisible,
-            enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
-            exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End),
+            enter = expandHorizontally(expandFrom = Alignment.End),
+            exit = shrinkHorizontally(shrinkTowards = Alignment.End),
         ) {
             TextButton(
                 enabled = danmakuInput.isNotBlank(),
@@ -1645,6 +1683,7 @@ private fun LiveRoomChatBottomBar(
     onDanmakuInputChange: (String) -> Unit,
     onSendDanmaku: (String) -> Unit,
     maxListHeight: Dp,
+    onDanmakuInputFocusChange: (Boolean) -> Unit = {},
     reserveNavigationBar: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
@@ -1673,6 +1712,7 @@ private fun LiveRoomChatBottomBar(
             danmakuInput = danmakuInput,
             onDanmakuInputChange = onDanmakuInputChange,
             onSendDanmaku = onSendDanmaku,
+            onFocusChange = onDanmakuInputFocusChange,
         )
     }
 }

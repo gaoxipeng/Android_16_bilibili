@@ -3,8 +3,8 @@ package com.example.bilibili.ui.components
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -389,8 +389,8 @@ private fun VideoFeedOverlayCard(
 
         AnimatedVisibility(
             visible = showMetaOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = EnterTransition.None,
+            exit = ExitTransition.None,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(10.dp),
@@ -405,8 +405,8 @@ private fun VideoFeedOverlayCard(
 
         AnimatedVisibility(
             visible = showMetaOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = EnterTransition.None,
+            exit = ExitTransition.None,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()

@@ -2,8 +2,6 @@ package com.example.bilibili.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
@@ -453,8 +451,8 @@ fun HomeSearchCapsule(
 ) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(tween(160)) + slideInVertically(tween(200)) { -it / 2 },
-        exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { -it / 2 },
+        enter = slideInVertically(tween(200)) { -it / 2 },
+        exit = slideOutVertically(tween(160)) { -it / 2 },
         modifier = modifier
             .padding(top = contentPadding.calculateTopPadding() + HomeSearchBarTopGap)
             .padding(horizontal = HomeSearchBarHorizontalInset),

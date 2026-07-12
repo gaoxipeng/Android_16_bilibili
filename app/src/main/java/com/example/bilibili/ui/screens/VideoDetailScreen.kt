@@ -43,12 +43,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -91,6 +93,7 @@ import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.knownVideoAspectRatio
 import com.example.bilibili.player.resolveStoredProgressSeconds
 import com.example.bilibili.player.saveResolvedProgress
+import com.example.bilibili.player.VideoPlayerLoadingIndicator
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.CommentAuthorHeaderRow
 import com.example.bilibili.ui.components.BiliCommentImageStrip
@@ -274,7 +277,7 @@ fun VideoDetailScreen(
     val scope = rememberCoroutineScope()
     val switchScope = episodeSwitchScope ?: scope
     val seedPlaybackId = seedVideo.playbackId()
-    val seedStateKey = "${seedPlaybackId}:${seedVideo.aid}:${seedVideo.cid}:${seedVideo.epid}"
+    val seedStateKey = seedVideo.bvid.ifBlank { "av:${seedVideo.aid}" }.ifBlank { seedPlaybackId }
     val controlBackdrop = rememberVideoControlBackdrop()
 
     var preservedUgcSeason by remember(seedStateKey) { mutableStateOf<BiliUgcSeason?>(null) }
@@ -750,17 +753,11 @@ fun VideoDetailScreen(
         currentVideo.bvid.isNotBlank() && currentCid > 0L -> currentVideo.copy(cid = currentCid, epid = 0L).playbackId()
         else -> seedPlaybackId
     }
-    val playbackKey = remember(seedStateKey) { videoPlaybackKey(seedPlaybackId, ownerId = "detail") }
-    val contentPlaybackKey = remember(currentContentPlaybackId) {
+    val playbackKey = remember(currentContentPlaybackId) {
         videoPlaybackKey(currentContentPlaybackId, ownerId = "detail")
     }
-
-    LaunchedEffect(playbackKey, playbackActive) {
-        if (playbackActive) {
-            coordinator.requestInlinePlayback(playbackKey)
-        } else {
-            coordinator.pauseForOverlay()
-        }
+    val contentPlaybackKey = remember(currentContentPlaybackId) {
+        videoPlaybackKey(currentContentPlaybackId, ownerId = "detail")
     }
 
     LaunchedEffect(seedStateKey, initialProgressSeconds, credential?.dedeUserId) {
@@ -831,6 +828,27 @@ fun VideoDetailScreen(
         else -> {
             val streamCid = currentStream.cid.takeIf { it > 0L }
             streamCid == null || streamCid == playbackTargetCid
+        }
+    }
+
+    var playerSurfaceLoading by remember(playbackKey) {
+        val handoffKey = coordinator.handoffPlaybackKeyForVideo(currentVideo)
+        mutableStateOf(
+            !(coordinator.hasHandoffPlayer(playbackKey) || handoffKey != null),
+        )
+    }
+    val playerStreamReady = currentStream != null && streamMatchesTarget
+    val playbackActiveState = rememberUpdatedState(playbackActive)
+    val hasHandoffPlayer = coordinator.hasHandoffPlayer(playbackKey) ||
+        coordinator.handoffPlaybackKeyForVideo(currentVideo) != null
+
+    LaunchedEffect(playbackKey, playbackActive, playerStreamReady, hasHandoffPlayer, coordinator.fullscreenKey) {
+        when {
+            coordinator.fullscreenKey == playbackKey -> Unit
+            playbackActive && playerStreamReady ->
+                coordinator.requestInlinePlayback(playbackKey)
+            !playbackActive ->
+                coordinator.pauseForOverlay()
         }
     }
 
@@ -1210,6 +1228,9 @@ fun VideoDetailScreen(
     }
 
     val isVideoFullscreen = coordinator.fullscreenKey == playbackKey
+    val showPlayerLoadingOverlay = !isVideoFullscreen &&
+        !hasHandoffPlayer &&
+        (!playerStreamReady || playerSurfaceLoading)
     val configuration = LocalConfiguration.current
     val hazeState = rememberHazeState()
     val collectionMenuBackdrop = rememberLayerBackdrop()
@@ -1323,14 +1344,16 @@ fun VideoDetailScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f)
-                        .background(Color.Black),
+                        .background(Color.Black)
+                        .clipToBounds(),
                 ) {
-                    if (currentStream != null && streamMatchesTarget && !isVideoFullscreen) {
+                    if (playerStreamReady && !isVideoFullscreen) {
+                        val readyStream = currentStream ?: return@Box
                         key(playbackKey) {
                         BilibiliVideoSurface(
                             playbackKey = playbackKey,
                             contentPlaybackKey = contentPlaybackKey,
-                            stream = currentStream,
+                            stream = readyStream,
                             isFullscreen = false,
                             coordinator = coordinator,
                             backdrop = controlBackdrop,
@@ -1345,7 +1368,7 @@ fun VideoDetailScreen(
                                         historyVideo.videoHeight,
                                     ),
                                     video = historyVideo,
-                                    stream = currentStream,
+                                    stream = readyStream,
                                 )
                             },
                             onCloseFullscreen = {
@@ -1356,7 +1379,7 @@ fun VideoDetailScreen(
                             },
                             modifier = Modifier.fillMaxSize(),
                             danmakuEnabled = true,
-                            danmakuCid = currentStream.cid.takeIf { it > 0L }
+                            danmakuCid = readyStream.cid.takeIf { it > 0L }
                                 ?: currentVideo.cid,
                             loadDanmaku = { cid ->
                                 api.getDanmakuList(
@@ -1376,11 +1399,24 @@ fun VideoDetailScreen(
                             playbackMetadata = VideoPlaybackMetadata.fromVideo(historyVideo),
                             historyVideo = historyVideo,
                             onStreamSourceError = onStreamSourceError,
+                            showLoadingIndicator = false,
+                            autoPlayWhenReady = true,
+                            onLoadingStateChange = { loading ->
+                                if (playbackActiveState.value) {
+                                    playerSurfaceLoading = loading
+                                }
+                            },
                         )
                         }
-                    } else {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = Color.White)
+                    }
+                    if (showPlayerLoadingOverlay) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(Color.Black),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            VideoPlayerLoadingIndicator()
                         }
                     }
                 }
