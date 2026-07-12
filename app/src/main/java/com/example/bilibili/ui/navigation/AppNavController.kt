@@ -61,10 +61,21 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
     var stack by mutableStateOf(initial)
         private set
 
+    var pendingEnterKey by mutableStateOf<String?>(null)
+        private set
+
+    var pendingExitKey by mutableStateOf<String?>(null)
+        private set
+
+    var exitingLayer by mutableStateOf<NavExitingLayer?>(null)
+        private set
+
     val top: AppNavEntry? get() = stack.lastOrNull()
-    val hasOverlay: Boolean get() = stack.isNotEmpty()
+    val hasOverlay: Boolean get() = stack.isNotEmpty() || exitingLayer != null
 
     fun push(entry: AppNavEntry) {
+        pendingEnterKey = entry.stableKey(stack.size)
+        pendingExitKey = null
         stack = when (entry) {
             AppNavEntry.Search -> if (stack.any { it is AppNavEntry.Search }) {
                 stack
@@ -84,10 +95,30 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
 
     fun pop(): AppNavEntry? {
         if (stack.isEmpty()) return null
+        val index = stack.lastIndex
         val removed = stack.last()
+        pendingExitKey = removed.stableKey(index)
+        pendingEnterKey = null
+        exitingLayer = NavExitingLayer(entry = removed, index = index)
         stack = stack.dropLast(1)
         return removed
     }
+
+    fun clearPendingEnterKey() {
+        pendingEnterKey = null
+    }
+
+    fun clearExitingLayer() {
+        exitingLayer = null
+        pendingExitKey = null
+    }
+}
+
+data class NavExitingLayer(
+    val entry: AppNavEntry,
+    val index: Int,
+) {
+    val key: String get() = entry.stableKey(index)
 }
 
 fun List<AppNavEntry>.lastVideoDetail(): AppNavEntry.VideoDetail? =

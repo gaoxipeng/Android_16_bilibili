@@ -101,8 +101,12 @@ import androidx.compose.runtime.key
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.bilibili.ui.components.NavTransitionTouchShield
+import com.example.bilibili.ui.navigation.LocalNavTransitionCoordinator
 import com.example.bilibili.ui.navigation.AppNavController
 import com.example.bilibili.ui.navigation.AppNavEntry
+import com.example.bilibili.ui.navigation.NavExitingLayer
+import com.example.bilibili.ui.navigation.NavTransitionCoordinator
 import com.example.bilibili.ui.navigation.findVideoDetail
 import com.example.bilibili.ui.navigation.stableKey
 import com.example.bilibili.ui.navigation.lastVideoDetail
@@ -230,6 +234,8 @@ fun BilibiliApp() {
     }
     var showLoginSheet by remember { mutableStateOf(false) }
     val navController = remember { AppNavController() }
+    val navTransitionCoordinator = remember { NavTransitionCoordinator() }
+    var pendingPopSideEffect by remember { mutableStateOf<AppNavEntry?>(null) }
     var feedRefreshHint by remember { mutableStateOf<String?>(null) }
     var feedSearchVisible by remember { mutableStateOf(true) }
     var liveRoomOpen by remember { mutableStateOf(false) }
@@ -621,8 +627,9 @@ fun BilibiliApp() {
         )
     }
 
-    fun popNavEntry() {
-        when (navController.pop()) {
+    fun completeNavPopSideEffects() {
+        if (pendingPopSideEffect == null && navController.exitingLayer == null) return
+        when (val removed = pendingPopSideEffect) {
             is AppNavEntry.VideoDetail -> {
                 coordinator.stopPlayback()
                 if (selectedTab == MainTab.History) {
@@ -645,6 +652,13 @@ fun BilibiliApp() {
             is AppNavEntry.UserRelationList,
             null -> Unit
         }
+        pendingPopSideEffect = null
+        navController.clearExitingLayer()
+    }
+
+    fun popNavEntry() {
+        val removed = navController.pop() ?: return
+        pendingPopSideEffect = removed
     }
 
     fun openUserProfile(mid: Long, name: String = "", face: String = "") {
@@ -1074,6 +1088,7 @@ fun BilibiliApp() {
         LocalBilibiliCredential provides activeAccount?.credential,
         LocalWatchHistoryReporter provides watchHistoryReporter,
         LocalBiliImageSaveHint provides imageSaveHintController,
+        LocalNavTransitionCoordinator provides navTransitionCoordinator,
     ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -1256,8 +1271,19 @@ fun BilibiliApp() {
                 }
             }
 
+            NavTransitionTouchShield(
+                coordinator = navTransitionCoordinator,
+                modifier = Modifier.zIndex(594f),
+            )
+
             AppNavStackLayers(
                 navStack = navStack,
+                exitingLayer = navController.exitingLayer,
+                pendingEnterKey = navController.pendingEnterKey,
+                pendingExitKey = navController.pendingExitKey,
+                onClearPendingEnter = navController::clearPendingEnterKey,
+                onClearPendingExit = ::completeNavPopSideEffects,
+                onExitHidden = ::completeNavPopSideEffects,
                 api = api,
                 credential = credential(),
                 myMid = activeAccount?.uid?.toLongOrNull(),
@@ -1438,9 +1464,23 @@ fun BilibiliApp() {
     }
 }
 
+private data class NavRenderLayer(
+    val entry: AppNavEntry,
+    val index: Int,
+    val target: AppNavEntry?,
+) {
+    val key: String get() = entry.stableKey(index)
+}
+
 @Composable
 private fun AppNavStackLayers(
     navStack: List<AppNavEntry>,
+    exitingLayer: NavExitingLayer?,
+    pendingEnterKey: String?,
+    pendingExitKey: String?,
+    onClearPendingEnter: () -> Unit,
+    onClearPendingExit: () -> Unit,
+    onExitHidden: () -> Unit,
     api: BilibiliApiClient,
     credential: BilibiliCredential?,
     myMid: Long?,
@@ -1464,41 +1504,64 @@ private fun AppNavStackLayers(
     onRefreshPlayStream: (BiliVideoItem) -> Unit,
     episodeSwitchScope: CoroutineScope,
 ) {
-    navStack.forEachIndexed { index, entry ->
-        key(entry.stableKey(index)) {
+    val topActiveKey = navStack.lastOrNull()?.let { entry ->
+        entry.stableKey(navStack.lastIndex)
+    }
+    val renderLayers = buildList {
+        navStack.forEachIndexed { index, entry ->
+            add(NavRenderLayer(entry = entry, index = index, target = entry))
+        }
+        exitingLayer?.let { exiting ->
+            add(NavRenderLayer(entry = exiting.entry, index = exiting.index, target = null))
+        }
+    }
+
+    renderLayers.forEach { layer ->
+        key(layer.key) {
+            val isTop = layer.target != null && layer.key == topActiveKey
+            val isExitingLayer = layer.target == null && pendingExitKey == layer.key
             NavAnimatedOverlay(
-                target = entry,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(90f + index),
-            ) {
-                Box(Modifier.fillMaxSize().blockHiddenTouches(index == navStack.lastIndex)) {
+                target = layer.target,
+                exitSeed = if (layer.target == null) layer.entry else null,
+                modifier = Modifier.fillMaxSize(),
+                stackTop = isTop || isExitingLayer,
+                layerBaseZIndex = 90f + layer.index,
+                visible = isTop,
+                animationKey = layer.key,
+                layerKey = layer.key,
+                pendingEnterKey = pendingEnterKey,
+                pendingExitKey = pendingExitKey,
+                onClearPendingEnter = onClearPendingEnter,
+                onClearPendingExit = onClearPendingExit,
+                onHidden = onExitHidden,
+            ) { activeEntry ->
+                Box(Modifier.fillMaxSize().blockHiddenTouches(isTop || isExitingLayer)) {
                     AppNavEntryContent(
-                        entry = it,
-                        isActive = index == navStack.lastIndex,
-                    api = api,
-                    credential = credential,
-                    myMid = myMid,
-                    playUrls = playUrls,
-                    coordinator = coordinator,
-                    feedColumnCount = feedColumnCount,
-                    onFeedColumnCountChange = onFeedColumnCountChange,
-                    contentPadding = contentPadding,
-                    onPopNav = onPopNav,
-                    onOpenVideo = onOpenVideo,
-                    onOpenDescriptionVideo = onOpenDescriptionVideo,
-                    onSwitchVideoPart = onSwitchVideoPart,
-                    onUpdateVideoSeed = onUpdateVideoSeed,
-                    onReplaceVideo = onReplaceVideo,
-                    onOpenProfile = onOpenProfile,
-                    onOpenDynamic = onOpenDynamic,
-                    onOpenArticle = onOpenArticle,
-                    onOpenRelationList = onOpenRelationList,
-                    onLoginRequired = onLoginRequired,
-                    onEnsurePlayStream = onEnsurePlayStream,
-                    onRefreshPlayStream = onRefreshPlayStream,
-                    episodeSwitchScope = episodeSwitchScope,
-                )
+                        entry = activeEntry,
+                        isActive = isTop,
+                        api = api,
+                        credential = credential,
+                        myMid = myMid,
+                        playUrls = playUrls,
+                        coordinator = coordinator,
+                        feedColumnCount = feedColumnCount,
+                        onFeedColumnCountChange = onFeedColumnCountChange,
+                        contentPadding = contentPadding,
+                        onPopNav = onPopNav,
+                        onOpenVideo = onOpenVideo,
+                        onOpenDescriptionVideo = onOpenDescriptionVideo,
+                        onSwitchVideoPart = onSwitchVideoPart,
+                        onUpdateVideoSeed = onUpdateVideoSeed,
+                        onReplaceVideo = onReplaceVideo,
+                        onOpenProfile = onOpenProfile,
+                        onOpenDynamic = onOpenDynamic,
+                        onOpenArticle = onOpenArticle,
+                        onOpenRelationList = onOpenRelationList,
+                        onLoginRequired = onLoginRequired,
+                        onEnsurePlayStream = onEnsurePlayStream,
+                        onRefreshPlayStream = onRefreshPlayStream,
+                        episodeSwitchScope = episodeSwitchScope,
+                    )
                 }
             }
         }
