@@ -48,6 +48,7 @@ import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,6 +66,7 @@ import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 import kotlinx.coroutines.flow.first
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private val CollectionPanelCompanionGap = 8.dp
@@ -73,6 +75,23 @@ private val CollectionPanelHorizontalMargin = 16.dp
 private val CollectionPanelHeaderHeight = 38.dp
 private val CollectionPanelMaxListHeight = 320.dp
 private val CollectionPanelEpisodeRowHeight = 46.dp
+private val CollectionPanelSectionHeaderHeight = 32.dp
+
+private fun collectionSheetEpisodeCount(
+    ugcSeason: BiliUgcSeason?,
+    highlightSectionId: Long?,
+    pages: List<BiliVideoPage>,
+): Int {
+    if (ugcSeason != null) {
+        val sections = ugcSeason.sectionsToShow(highlightSectionId)
+        val showSectionHeaders = sections.size > 1
+        return sections.sumOf { section ->
+            val headerCount = if (showSectionHeaders && section.title.isNotBlank()) 1 else 0
+            headerCount + section.episodes.size
+        }
+    }
+    return pages.size
+}
 
 @Composable
 private fun collectionPanelSurfaceColor(isLightTheme: Boolean): Color {
@@ -142,7 +161,31 @@ fun VideoDetailCollectionSheet(
         val headerHeightPx = with(density) { CollectionPanelHeaderHeight.toPx() }
         val verticalPaddingPx = with(density) { 12.dp.toPx() }
         val maxListHeightPx = with(density) { CollectionPanelMaxListHeight.toPx() }
-        val panelHeightPx = headerHeightPx + maxListHeightPx + verticalPaddingPx
+        val rowHeightPx = with(density) { CollectionPanelEpisodeRowHeight.toPx() }
+        val sectionHeaderHeightPx = with(density) { CollectionPanelSectionHeaderHeight.toPx() }
+        val episodeCount = collectionSheetEpisodeCount(
+            ugcSeason = ugcSeason,
+            highlightSectionId = highlightSectionId,
+            pages = pages,
+        )
+        val listHeightPx = when {
+            episodeCount <= 0 -> 0f
+            ugcSeason != null -> {
+                val sections = ugcSeason.sectionsToShow(highlightSectionId)
+                val showSectionHeaders = sections.size > 1
+                var contentHeightPx = 0f
+                sections.forEach { section ->
+                    if (showSectionHeaders && section.title.isNotBlank()) {
+                        contentHeightPx += sectionHeaderHeightPx
+                    }
+                    contentHeightPx += section.episodes.size * rowHeightPx
+                }
+                min(maxListHeightPx, contentHeightPx)
+            }
+            else -> min(maxListHeightPx, episodeCount * rowHeightPx)
+        }
+        val panelHeightPx = headerHeightPx + listHeightPx + verticalPaddingPx
+        val listHeight = with(density) { listHeightPx.toDp() }
 
         val hasSpaceBelow = anchor.bottom + gapPx + panelHeightPx <= screenHeightPx - marginPx
         val targetY = if (hasSpaceBelow) {
@@ -169,6 +212,7 @@ fun VideoDetailCollectionSheet(
             currentBvid,
             currentCid,
             highlightSectionId,
+            listHeight,
         ) {
             if (!visible) return@LaunchedEffect
             val targetIndex = when {
@@ -183,9 +227,9 @@ fun VideoDetailCollectionSheet(
             } ?: return@LaunchedEffect
             snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .first { it > targetIndex }
-            val listHeightPx = maxListHeightPx
+            val listHeightPxForScroll = with(density) { listHeight.toPx() }
             val itemHeightPx = with(density) { CollectionPanelEpisodeRowHeight.roundToPx() }
-            val scrollOffset = -(listHeightPx / 2 - itemHeightPx / 2).roundToInt()
+            val scrollOffset = -(listHeightPxForScroll / 2 - itemHeightPx / 2).roundToInt()
             listState.animateScrollToItem(
                 index = targetIndex,
                 scrollOffset = scrollOffset,
@@ -227,6 +271,7 @@ fun VideoDetailCollectionSheet(
                     CollectionSheetPanelContent(
                         sheetTitle = sheetTitle,
                         listState = listState,
+                        listHeight = listHeight,
                         ugcSeason = ugcSeason,
                         highlightSectionId = highlightSectionId,
                         pages = pages,
@@ -251,6 +296,7 @@ fun VideoDetailCollectionSheet(
                     CollectionSheetPanelContent(
                         sheetTitle = sheetTitle,
                         listState = listState,
+                        listHeight = listHeight,
                         ugcSeason = ugcSeason,
                         highlightSectionId = highlightSectionId,
                         pages = pages,
@@ -272,6 +318,7 @@ fun VideoDetailCollectionSheet(
 private fun CollectionSheetPanelContent(
     sheetTitle: String,
     listState: LazyListState,
+    listHeight: Dp,
     ugcSeason: BiliUgcSeason?,
     highlightSectionId: Long?,
     pages: List<BiliVideoPage>,
@@ -303,7 +350,13 @@ private fun CollectionSheetPanelContent(
         state = listState,
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = CollectionPanelMaxListHeight),
+            .then(
+                if (listHeight > 0.dp) {
+                    Modifier.height(listHeight)
+                } else {
+                    Modifier.heightIn(max = CollectionPanelMaxListHeight)
+                },
+            ),
     ) {
         if (ugcSeason != null) {
             val sections = ugcSeason.sectionsToShow(highlightSectionId)

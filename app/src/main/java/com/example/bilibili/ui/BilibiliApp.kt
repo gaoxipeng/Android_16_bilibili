@@ -5,6 +5,8 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +29,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -163,6 +166,8 @@ private fun enrichVideoForDetailOpen(
 private fun detailPlaybackKeyFor(video: BiliVideoItem): String =
     videoPlaybackKey(video.playbackId(), ownerId = "detail")
 
+private const val HOME_LOAD_MORE_MAX_COUNT = 10
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BilibiliApp() {
@@ -211,6 +216,9 @@ fun BilibiliApp() {
     var homeFreshIdx by remember { mutableIntStateOf(cachedHomeFeed?.freshIdx ?: 1) }
     var homeFetchRow by remember { mutableIntStateOf(cachedHomeFeed?.fetchRow ?: 1) }
     var homeLastShowList by remember { mutableStateOf(cachedHomeFeed?.lastShowList.orEmpty()) }
+    var homeLoadMoreCount by remember { mutableIntStateOf(0) }
+    val homeListState = rememberLazyListState()
+    val homeStaggeredGridState = rememberLazyStaggeredGridState()
 
     var followLoading by remember { mutableStateOf(false) }
     var followLoadingMore by remember { mutableStateOf(false) }
@@ -775,6 +783,7 @@ fun BilibiliApp() {
             homeFreshIdx = 1
             homeFetchRow = 1
             homeLastShowList = ""
+            homeLoadMoreCount = 0
             runCatching {
                 val page = api.getHomeRecommend(credential())
                 homeVideos = page.videos
@@ -799,7 +808,14 @@ fun BilibiliApp() {
     }
 
     fun loadMoreHome() {
-        if (homeLoading || homeLoadingMore || !homeHasMore) return
+        if (
+            homeLoading ||
+            homeLoadingMore ||
+            !homeHasMore ||
+            homeLoadMoreCount >= HOME_LOAD_MORE_MAX_COUNT
+        ) {
+            return
+        }
         scope.launch {
             homeLoadingMore = true
             runCatching {
@@ -814,6 +830,7 @@ fun BilibiliApp() {
                 homeFetchRow = page.nextFetchRow
                 homeLastShowList = page.lastShowList
                 homeHasMore = page.hasMore
+                homeLoadMoreCount++
                 persistHomeFeedCache()
             }.onFailure { homeError = it.message }
             homeLoadingMore = false
@@ -913,7 +930,7 @@ fun BilibiliApp() {
                 selectedTab = MainTab.Home
             }
             refreshHome()
-            Toast.makeText(context, "登录成功", Toast.LENGTH_SHORT).show()
+            feedRefreshHint = "登录成功"
             refreshFollow()
         }
     }
@@ -1147,121 +1164,126 @@ fun BilibiliApp() {
                         .height(BottomBarFeedOverlapReserve + BottomBarBackdropSampleExtension)
                         .background(MaterialTheme.colorScheme.background),
                 )
-                when (selectedTab) {
-                MainTab.Home -> FeedTabReselectScope(MainTab.Home, feedTabReselectController) {
-                    HomeScreen(
-                    loggedIn = activeAccount != null,
-                    onLoginClick = { showLoginSheet = true },
-                    videos = homeVideos,
-                    playUrls = playUrls,
-                    loading = homeLoading,
-                    loadingMore = homeLoadingMore,
-                    hasMore = homeHasMore,
-                    error = homeError,
-                    onRefresh = ::refreshHome,
-                    onPullRefresh = { refreshHome(showRefreshHint = true) },
-                    onLoadMore = ::loadMoreHome,
-                    onVideoClick = { video -> openVideoDetail(video) },
-                    onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                    onAuthorClick = { mid ->
-                        val video = homeVideos.firstOrNull { it.authorMid == mid }
-                        openUserProfile(mid, video?.authorName.orEmpty())
-                    },
-                    coordinator = coordinator,
-                    contentPadding = padding,
-                    showSearchBar = activeAccount != null,
-                    onSearchVisibleChange = { feedSearchVisible = it },
-                    onSearchClick = ::openSearch,
-                    pullRefreshState = homePullRefreshState,
-                    showEmbeddedPullRefreshIndicator = false,
-                    feedColumnCount = feedColumnCount,
-                    )
+                KeepAliveTabLayer(visible = selectedTab == MainTab.Home) {
+                    FeedTabReselectScope(MainTab.Home, feedTabReselectController) {
+                        HomeScreen(
+                            loggedIn = activeAccount != null,
+                            onLoginClick = { showLoginSheet = true },
+                            videos = homeVideos,
+                            playUrls = playUrls,
+                            loading = homeLoading,
+                            loadingMore = homeLoadingMore,
+                            hasMore = homeHasMore && homeLoadMoreCount < HOME_LOAD_MORE_MAX_COUNT,
+                            error = homeError,
+                            onRefresh = ::refreshHome,
+                            onPullRefresh = { refreshHome(showRefreshHint = true) },
+                            onLoadMore = ::loadMoreHome,
+                            onVideoClick = { video -> openVideoDetail(video) },
+                            onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
+                            onAuthorClick = { mid ->
+                                val video = homeVideos.firstOrNull { it.authorMid == mid }
+                                openUserProfile(mid, video?.authorName.orEmpty())
+                            },
+                            coordinator = coordinator,
+                            contentPadding = padding,
+                            showSearchBar = activeAccount != null,
+                            onSearchVisibleChange = { feedSearchVisible = it },
+                            onSearchClick = ::openSearch,
+                            pullRefreshState = homePullRefreshState,
+                            showEmbeddedPullRefreshIndicator = false,
+                            feedColumnCount = feedColumnCount,
+                            listState = homeListState,
+                            staggeredGridState = homeStaggeredGridState,
+                        )
+                    }
                 }
-                MainTab.Following -> FeedTabReselectScope(MainTab.Following, feedTabReselectController) {
-                    FollowingScreen(
-                    loggedIn = activeAccount != null,
-                    followVideos = followVideos,
-                    followPlayUrls = playUrls,
-                    followLoading = followLoading,
-                    followLoadingMore = followLoadingMore,
-                    followHasMore = followHasMore,
-                    followError = followError,
-                    onLoginClick = {
-                        showLoginSheet = true
-                    },
-                    onRefreshFollow = ::refreshFollow,
-                    onPullRefreshFollow = { refreshFollow(showRefreshHint = true) },
-                    onLoadMoreFollow = ::loadMoreFollow,
-                    rankVideos = hotVideos,
-                    rankPlayUrls = playUrls,
-                    rankLoading = hotLoading,
-                    rankError = hotError,
-                    onRefreshRank = ::refreshHot,
-                    onPullRefreshRank = { refreshHot(showRefreshHint = true) },
-                    onVideoClick = { video -> openVideoDetail(video) },
-                    onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                    onFollowAuthorClick = { mid ->
-                        val video = followVideos.firstOrNull { it.authorMid == mid }
-                        openUserProfile(mid, video?.authorName.orEmpty())
-                    },
-                    onRankAuthorClick = { mid ->
-                        val video = hotVideos.firstOrNull { it.authorMid == mid }
-                        openUserProfile(mid, video?.authorName.orEmpty())
-                    },
-                    coordinator = coordinator,
-                    contentPadding = padding,
-                    followPullRefreshState = followPullRefreshState,
-                    rankPullRefreshState = hotPullRefreshState,
-                    showEmbeddedPullRefreshIndicator = true,
-                    feedColumnCount = feedColumnCount,
-                    )
+                KeepAliveTabLayer(visible = selectedTab == MainTab.Following) {
+                    FeedTabReselectScope(MainTab.Following, feedTabReselectController) {
+                        FollowingScreen(
+                            loggedIn = activeAccount != null,
+                            followVideos = followVideos,
+                            followPlayUrls = playUrls,
+                            followLoading = followLoading,
+                            followLoadingMore = followLoadingMore,
+                            followHasMore = followHasMore,
+                            followError = followError,
+                            onLoginClick = { showLoginSheet = true },
+                            onRefreshFollow = ::refreshFollow,
+                            onPullRefreshFollow = { refreshFollow(showRefreshHint = true) },
+                            onLoadMoreFollow = ::loadMoreFollow,
+                            rankVideos = hotVideos,
+                            rankPlayUrls = playUrls,
+                            rankLoading = hotLoading,
+                            rankError = hotError,
+                            onRefreshRank = ::refreshHot,
+                            onPullRefreshRank = { refreshHot(showRefreshHint = true) },
+                            onVideoClick = { video -> openVideoDetail(video) },
+                            onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
+                            onFollowAuthorClick = { mid ->
+                                val video = followVideos.firstOrNull { it.authorMid == mid }
+                                openUserProfile(mid, video?.authorName.orEmpty())
+                            },
+                            onRankAuthorClick = { mid ->
+                                val video = hotVideos.firstOrNull { it.authorMid == mid }
+                                openUserProfile(mid, video?.authorName.orEmpty())
+                            },
+                            coordinator = coordinator,
+                            contentPadding = padding,
+                            followPullRefreshState = followPullRefreshState,
+                            rankPullRefreshState = hotPullRefreshState,
+                            showEmbeddedPullRefreshIndicator = true,
+                            feedColumnCount = feedColumnCount,
+                        )
+                    }
                 }
-                MainTab.Live -> FeedTabReselectScope(MainTab.Live, feedTabReselectController) {
-                    LiveScreen(
-                        api = api,
-                        credential = credential(),
-                        loggedIn = activeAccount != null,
-                        coordinator = coordinator,
-                        onLoginClick = { showLoginSheet = true },
-                        contentPadding = padding,
-                        pullRefreshState = livePullRefreshState,
-                        showEmbeddedPullRefreshIndicator = true,
-                        onLiveRoomOpenChange = { liveRoomOpen = it },
-                        onOpenAnchorProfile = { mid, name, face -> openUserProfile(mid, name, face) },
-                        navOverlayOpen = navOverlayOpen,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                KeepAliveTabLayer(visible = selectedTab == MainTab.Live) {
+                    FeedTabReselectScope(MainTab.Live, feedTabReselectController) {
+                        LiveScreen(
+                            api = api,
+                            credential = credential(),
+                            loggedIn = activeAccount != null,
+                            coordinator = coordinator,
+                            onLoginClick = { showLoginSheet = true },
+                            contentPadding = padding,
+                            pullRefreshState = livePullRefreshState,
+                            showEmbeddedPullRefreshIndicator = true,
+                            onLiveRoomOpenChange = { liveRoomOpen = it },
+                            onOpenAnchorProfile = { mid, name, face ->
+                                openUserProfile(mid, name, face)
+                            },
+                            navOverlayOpen = navOverlayOpen,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
-                MainTab.History -> FeedTabReselectScope(MainTab.History, feedTabReselectController) {
-                    HistoryScreen(
-                        api = api,
-                        credential = credential(),
-                        loggedIn = activeAccount != null,
-                        promoteHistoryKid = promoteHistoryKid,
-                        onHistoryPromoteConsumed = { promoteHistoryKid = null },
-                        onLoginClick = {
-                            showLoginSheet = true
-                        },
-                        onHistoryItemClick = { item ->
-                            openHistoryVideo(item)
-                        },
-                        onVideoClick = { video -> openVideoDetail(video) },
-                        onFavoriteVideoClick = { video ->
-                            openVideoDetail(video, preferRecentWatchPart = true)
-                        },
-                        playUrls = playUrls,
-                        coordinator = coordinator,
-                        onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
-                        onAuthorClick = { mid, name, face -> openUserProfile(mid, name, face) },
-                        contentPadding = padding,
-                        pullRefreshState = historyPullRefreshState,
-                        showEmbeddedPullRefreshIndicator = true,
-                        onPullRefreshingChange = { historyPullRefreshing = it },
-                        feedColumnCount = feedColumnCount,
-                        menuController = historyMenuController,
-                    )
+                KeepAliveTabLayer(visible = selectedTab == MainTab.History) {
+                    FeedTabReselectScope(MainTab.History, feedTabReselectController) {
+                        HistoryScreen(
+                            api = api,
+                            credential = credential(),
+                            loggedIn = activeAccount != null,
+                            promoteHistoryKid = promoteHistoryKid,
+                            onHistoryPromoteConsumed = { promoteHistoryKid = null },
+                            onLoginClick = { showLoginSheet = true },
+                            onHistoryItemClick = { item -> openHistoryVideo(item) },
+                            onVideoClick = { video -> openVideoDetail(video) },
+                            onFavoriteVideoClick = { video ->
+                                openVideoDetail(video, preferRecentWatchPart = true)
+                            },
+                            playUrls = playUrls,
+                            coordinator = coordinator,
+                            onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
+                            onAuthorClick = { mid, name, face -> openUserProfile(mid, name, face) },
+                            contentPadding = padding,
+                            pullRefreshState = historyPullRefreshState,
+                            showEmbeddedPullRefreshIndicator = true,
+                            onPullRefreshingChange = { historyPullRefreshing = it },
+                            feedColumnCount = feedColumnCount,
+                            menuController = historyMenuController,
+                        )
+                    }
                 }
-                MainTab.Mine -> {
+                KeepAliveTabLayer(visible = selectedTab == MainTab.Mine) {
                     val account = activeAccount
                     MineScreen(
                         loggedIn = account != null,
@@ -1272,9 +1294,7 @@ fun BilibiliApp() {
                         credential = credential(),
                         playUrls = playUrls,
                         coordinator = coordinator,
-                        onLoginClick = {
-                            showLoginSheet = true
-                        },
+                        onLoginClick = { showLoginSheet = true },
                         onVideoClick = { video -> openVideoDetail(video) },
                         onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
                         onLoginRequired = { showLoginSheet = true },
@@ -1302,7 +1322,6 @@ fun BilibiliApp() {
                         onAddAccount = ::prepareAddAccount,
                         modifier = Modifier.fillMaxSize(),
                     )
-                }
                 }
             }
 
@@ -1741,6 +1760,22 @@ private fun AppNavEntryContent(
                 modifier = Modifier.fillMaxSize(),
             )
         }
+    }
+}
+
+@Composable
+private fun KeepAliveTabLayer(
+    visible: Boolean,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .alpha(if (visible) 1f else 0f)
+            .zIndex(if (visible) 0f else -1f)
+            .blockHiddenTouches(visible),
+    ) {
+        content()
     }
 }
 

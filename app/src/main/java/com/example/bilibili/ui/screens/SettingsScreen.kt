@@ -72,7 +72,7 @@ import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.theme.isAppLightTheme
 import kotlinx.coroutines.launch
 
-private const val AppVersionName = "1.1.2"
+private const val AppVersionName = "20260713"
 
 private val SettingsBottomBarInset = 96.dp
 private val SettingsAboutIconSize = 58.dp
@@ -104,6 +104,7 @@ private val appHelpSections = listOf(
         title = "开始使用",
         items = listOf(
             "本应用通过哔哩哔哩网页登录，首次使用请到「我的 → 设置」完成登录。",
+            "登录成功、下拉刷新后会在顶部显示胶囊提示（如「登录成功」「更新了 x 条视频」）。",
             "登录后可浏览首页推荐、关注动态、排行榜，以及查看观看历史与个人主页。",
             "首页、关注、历史页均支持下拉刷新；关注页内可切换「关注 / 排行」。",
         ),
@@ -116,6 +117,8 @@ private val appHelpSections = listOf(
             "直播页顶部可在「关注 / 推荐」之间切换，点击直播间可在应用内打开直播页。",
             "向下滚动列表时，底部栏会收起到左侧小胶囊；点击小胶囊可再次展开。",
             "再次点击当前选中的首页、关注或历史，会回到顶部并刷新内容。",
+            "从首页进入视频详情、用户主页或其他 Tab 后返回，首页会保留原有滚动位置。",
+            "首页上滑加载更多最多 10 次；下拉刷新后会重置并可继续加载。",
             "未登录时访问关注、历史等页面，会提示先完成登录。",
         ),
     ),
@@ -128,6 +131,7 @@ private val appHelpSections = listOf(
             "右侧展示榜一、榜二、榜三观众头像；在线人数约每 5 秒自动刷新。",
             "支持飘屏弹幕与底部弹幕列表，弹幕可包含表情；长按播放器「弹」可设置弹幕样式。",
             "播放器控件约 5 秒后自动隐藏，点击画面可再次显示；支持全屏观看与手动刷新直播流。",
+            "全屏时底部为弹幕输入框、弹幕开关与全屏按钮同一行；输入弹幕时控制栏不会自动隐藏。",
             "向右滑动可清屏隐藏界面，向左滑动或按返回键恢复；清屏时横屏直播保持原有画面比例。",
         ),
     ),
@@ -136,6 +140,7 @@ private val appHelpSections = listOf(
         items = listOf(
             "点击视频卡片进入详情页播放；信息流内长按封面可进入小窗预览。",
             "详情页支持弹幕开关、倍速播放（× 符号）与全屏观看。",
+            "从详情页返回后再次播放同一视频，会尽量延续上次进度与画面，减少黑屏重载。",
             "全屏播放支持选集按钮，可快速切换分 P 或合集内其他视频。",
             "长按控制栏「弹」可在播放器内打开弹幕设置，调节显示区域、不透明度、字号与速度。",
             "弹幕偏好修改后全局生效，视频与直播共用同一套设置。",
@@ -428,13 +433,6 @@ private fun SettingsHelpContent() {
         ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
-            Text(
-                text = "本页汇总了当前版本的主要功能与交互方式。部分能力依赖哔哩哔哩网页接口，若官方调整页面，个别入口可能暂时不可用。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         appHelpSections.forEach { section ->
             item {
                 SettingsHelpSectionCard(section = section)
