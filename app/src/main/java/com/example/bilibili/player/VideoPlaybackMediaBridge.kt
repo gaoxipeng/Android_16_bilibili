@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
-import androidx.core.content.ContextCompat
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import com.example.bilibili.MainActivity
@@ -319,10 +318,11 @@ object VideoPlaybackMediaBridge {
     private fun ensureServiceStarted(context: Context) {
         if (VideoPlaybackMediaService.isActive()) return
         runCatching {
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, VideoPlaybackMediaService::class.java),
-            )
+            // MediaSessionService promotes itself when playback actually requires a foreground
+            // notification. Starting it as an FGS here races with short-lived BUFFERING/PAUSED
+            // sessions: the session can be removed before Media3 posts its notification, after
+            // which Android kills the app for not calling startForeground() in time.
+            context.startService(Intent(context, VideoPlaybackMediaService::class.java))
         }
     }
 

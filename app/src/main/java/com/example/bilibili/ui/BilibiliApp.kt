@@ -3,6 +3,10 @@ package com.example.bilibili.ui
 import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -22,6 +26,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,6 +36,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -167,6 +176,7 @@ private fun detailPlaybackKeyFor(video: BiliVideoItem): String =
     videoPlaybackKey(video.playbackId(), ownerId = "detail")
 
 private const val HOME_LOAD_MORE_MAX_COUNT = 10
+private const val BottomBarHideGestureThresholdPx = 36f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -205,6 +215,34 @@ fun BilibiliApp() {
     var promoteHistoryKid by remember { mutableStateOf<String?>(null) }
     var lastOpenedHistoryKid by remember { mutableStateOf<String?>(null) }
     var bottomBarExpanded by remember { mutableStateOf(true) }
+    var bottomBarVisible by remember { mutableStateOf(true) }
+    var bottomBarScrollDistance by remember { mutableFloatStateOf(0f) }
+    val bottomBarScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val delta = available.y
+                if (delta == 0f) return Offset.Zero
+                if (bottomBarScrollDistance != 0f &&
+                    (bottomBarScrollDistance > 0f) != (delta > 0f)
+                ) {
+                    bottomBarScrollDistance = 0f
+                }
+                bottomBarScrollDistance = (bottomBarScrollDistance + delta)
+                    .coerceIn(-BottomBarHideGestureThresholdPx, BottomBarHideGestureThresholdPx)
+                when {
+                    bottomBarScrollDistance <= -BottomBarHideGestureThresholdPx -> {
+                        bottomBarVisible = false
+                        bottomBarScrollDistance = 0f
+                    }
+                    bottomBarScrollDistance >= BottomBarHideGestureThresholdPx -> {
+                        bottomBarVisible = true
+                        bottomBarScrollDistance = 0f
+                    }
+                }
+                return Offset.Zero
+            }
+        }
+    }
 
     var homeVideos by remember { mutableStateOf(cachedHomeFeed?.videos ?: emptyList()) }
     var followVideos by remember { mutableStateOf<List<BiliVideoItem>>(emptyList()) }
@@ -260,7 +298,6 @@ fun BilibiliApp() {
     val navTransitionCoordinator = remember { NavTransitionCoordinator() }
     var pendingPopSideEffect by remember { mutableStateOf<AppNavEntry?>(null) }
     var feedRefreshHint by remember { mutableStateOf<String?>(null) }
-    var feedSearchVisible by remember { mutableStateOf(true) }
     var liveRoomOpen by remember { mutableStateOf(false) }
     var pressAgainExitHintVisible by remember { mutableStateOf(false) }
     var lastExitBackPressAt by remember { mutableStateOf(0L) }
@@ -308,12 +345,14 @@ fun BilibiliApp() {
     }
 
     fun handleBottomTabClick(tab: MainTab) {
+        bottomBarVisible = true
         if (tab == selectedTab && tab in FeedTabReselectController.FEED_RESELECT_TABS) {
             feedTabReselectController.handleReselect(tab, scope)
             return
         }
         selectedTab = tab
         bottomBarExpanded = true
+        bottomBarVisible = true
     }
 
     fun credential() = activeAccount?.credential
@@ -1017,7 +1056,7 @@ fun BilibiliApp() {
     }
 
     LaunchedEffect(selectedTab) {
-        feedSearchVisible = true
+        bottomBarVisible = true
         when (selectedTab) {
             MainTab.Home -> Unit
             MainTab.Following -> if (activeAccount != null && followVideos.isEmpty()) refreshFollow()
@@ -1150,6 +1189,7 @@ fun BilibiliApp() {
                 Modifier
                     .fillMaxSize()
                     .layerBackdrop(bottomBarBackdrop)
+                    .nestedScroll(bottomBarScrollConnection)
                     .blockHiddenTouches(!navOverlayOpen),
             ) {
                 Box(
@@ -1187,7 +1227,8 @@ fun BilibiliApp() {
                             coordinator = coordinator,
                             contentPadding = padding,
                             showSearchBar = activeAccount != null,
-                            onSearchVisibleChange = { feedSearchVisible = it },
+                            // Search and bottom navigation share the root scroll visibility state.
+                            onSearchVisibleChange = {},
                             onSearchClick = ::openSearch,
                             pullRefreshState = homePullRefreshState,
                             showEmbeddedPullRefreshIndicator = false,
@@ -1451,7 +1492,7 @@ fun BilibiliApp() {
 
             if (showFeedSearchBar) {
                 HomeSearchCapsule(
-                    visible = feedSearchVisible,
+                    visible = bottomBarVisible,
                     contentPadding = padding,
                     onSearchClick = ::openSearch,
                     modifier = Modifier
@@ -1483,24 +1524,30 @@ fun BilibiliApp() {
             }
 
             if (!liveRoomOpen) {
-                BilibiliLiquidBottomBar(
-                selectedTab = selectedTab,
-                onTabClick = ::handleBottomTabClick,
-                expanded = bottomBarExpanded,
-                backdrop = bottomBarBackdrop,
-                onExpandRequest = { bottomBarExpanded = true },
-                onCollapsedTap = {
-                    if (selectedTab in FeedTabReselectController.FEED_RESELECT_TABS) {
-                        feedTabReselectController.handleReselect(selectedTab, scope)
-                    } else when (selectedTab) {
-                        MainTab.Mine -> if (activeAccount == null) showLoginSheet = true
-                        else -> Unit
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .zIndex(20f),
-            )
+                AnimatedVisibility(
+                    visible = bottomBarVisible,
+                    enter = slideInVertically(tween(200)) { it },
+                    exit = slideOutVertically(tween(160)) { it },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .zIndex(20f),
+                ) {
+                    BilibiliLiquidBottomBar(
+                        selectedTab = selectedTab,
+                        onTabClick = ::handleBottomTabClick,
+                        expanded = bottomBarExpanded,
+                        backdrop = bottomBarBackdrop,
+                        onExpandRequest = { bottomBarExpanded = true },
+                        onCollapsedTap = {
+                            if (selectedTab in FeedTabReselectController.FEED_RESELECT_TABS) {
+                                feedTabReselectController.handleReselect(selectedTab, scope)
+                            } else when (selectedTab) {
+                                MainTab.Mine -> if (activeAccount == null) showLoginSheet = true
+                                else -> Unit
+                            }
+                        },
+                    )
+                }
             }
         }
     }
