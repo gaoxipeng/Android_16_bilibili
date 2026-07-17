@@ -62,6 +62,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.bilibili.data.BiliAuthorCard
 import com.example.bilibili.data.BiliAuthorRelation
 import com.example.bilibili.data.BiliCommentItem
@@ -91,6 +94,7 @@ import com.example.bilibili.player.resolveVideoEpisodePickerState
 import com.example.bilibili.player.rememberVideoControlBackdrop
 import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.knownVideoAspectRatio
+import com.example.bilibili.player.isPlayStreamCacheStale
 import com.example.bilibili.player.resolveStoredProgressSeconds
 import com.example.bilibili.player.saveResolvedProgress
 import com.example.bilibili.player.VideoPlayerLoadingIndicator
@@ -269,7 +273,7 @@ fun VideoDetailScreen(
     onOpenUgcEpisode: (BiliVideoItem) -> Unit = {},
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
     playbackActive: Boolean = true,
-    onStreamSourceError: () -> Unit = {},
+    onStreamSourceError: (BiliVideoItem) -> Unit = {},
     initialProgressSeconds: Int = 0,
     modifier: Modifier = Modifier,
 ) {
@@ -753,8 +757,11 @@ fun VideoDetailScreen(
         currentVideo.bvid.isNotBlank() && currentCid > 0L -> currentVideo.copy(cid = currentCid, epid = 0L).playbackId()
         else -> seedPlaybackId
     }
-    val playbackKey = remember(currentContentPlaybackId) {
-        videoPlaybackKey(currentContentPlaybackId, ownerId = "detail")
+    // The detail screen owns one playback session even when its collection changes episode.
+    // Keeping this key stable lets the existing ExoPlayer and MediaSession swap media sources
+    // without Android removing and recreating the playback notification between episodes.
+    val playbackKey = remember(seedPlaybackId) {
+        videoPlaybackKey(seedPlaybackId, ownerId = "detail")
     }
     val contentPlaybackKey = remember(currentContentPlaybackId) {
         videoPlaybackKey(currentContentPlaybackId, ownerId = "detail")
@@ -809,6 +816,23 @@ fun VideoDetailScreen(
         title = displayTitle,
         coverUrl = currentEpisodeCover ?: currentVideo.coverUrl,
     )
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val currentStreamState = rememberUpdatedState(currentStream)
+    val historyVideoState = rememberUpdatedState(historyVideo)
+    val streamRefreshState = rememberUpdatedState(onStreamSourceError)
+
+    DisposableEffect(lifecycleOwner, playbackActive) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START && playbackActive) {
+                val resumedStream = currentStreamState.value
+                if (resumedStream == null || resumedStream.isPlayStreamCacheStale()) {
+                    streamRefreshState.value(historyVideoState.value)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     LaunchedEffect(currentDetail?.ugcSeason, currentDetail?.pages) {
         currentDetail?.ugcSeason?.takeIf { it.shouldDisplay }?.let { preservedUgcSeason = it }
@@ -1063,10 +1087,6 @@ fun VideoDetailScreen(
                 if (page.epid > 0L && page.epid != activeEpid) {
                     val loadedDetail = api.getPgcVideoDetail(page.epid, credential)
                         ?: error("无法加载番剧详情")
-                    detail = loadedDetail
-                    resetCommentState()
-                    activeEpid = page.epid
-                    activePart = page
                     val targetCid = page.cid.takeIf { it > 0L } ?: loadedDetail.video.cid
                     val stream = resolvePagePlayStream(targetCid, page.epid, page.bvid.ifBlank { loadedDetail.video.bvid })
                         ?: error("无法获取播放地址")
@@ -1081,7 +1101,13 @@ fun VideoDetailScreen(
                         durationSeconds = page.durationSeconds.takeIf { it > 0 }
                             ?: loadedDetail.video.durationSeconds,
                     )
+                    // Publish the new episode identity and its stream together. If the title is
+                    // changed before the stream lookup finishes, the player can bind the old
+                    // source to the new episode identity and never perform the real source swap.
                     detail = loadedDetail.copy(video = targetVideo)
+                    resetCommentState()
+                    activeEpid = page.epid
+                    activePart = page
                     overridePlayStream = resolvedStream
                     coordinator.updateFullscreenMedia(playbackKey, targetVideo, resolvedStream)
                     onSwitchVideoPart(targetVideo, page, resolvedStream, true)
@@ -1094,12 +1120,14 @@ fun VideoDetailScreen(
                         api.getVideoDetail(page.bvid, credential) ?: error("无法加载视频详情"),
                         credential,
                     )
-                    detail = loadedDetail
-                    preservedPages = loadedDetail.pages.takeIf { it.size > 1 }.orEmpty()
-                    preservedUgcSeason = loadedDetail.ugcSeason?.takeIf { it.shouldDisplay }
-                    resetCommentState()
                     val targetCid = page.cid.takeIf { it > 0L } ?: loadedDetail.video.cid
-                    val stream = resolvePagePlayStream(targetCid, page.epid, page.bvid)
+                    val stream = api.getPlayUrl(
+                        bvid = page.bvid,
+                        cid = targetCid,
+                        credential = credential,
+                        aid = loadedDetail.video.aid,
+                        referer = "https://www.bilibili.com/video/${page.bvid}",
+                    )
                         ?: error("无法获取播放地址")
                     val resolvedStream = stream.copy(
                         aid = loadedDetail.video.aid.takeIf { it > 0L } ?: stream.aid,
@@ -1123,6 +1151,9 @@ fun VideoDetailScreen(
                             ?: loadedDetail.video.durationSeconds,
                     )
                     detail = loadedDetail.copy(video = targetVideo)
+                    preservedPages = loadedDetail.pages.takeIf { it.size > 1 }.orEmpty()
+                    preservedUgcSeason = loadedDetail.ugcSeason?.takeIf { it.shouldDisplay }
+                    resetCommentState()
                     activePart = page
                     overridePlayStream = resolvedStream
                     coordinator.updateFullscreenMedia(playbackKey, targetVideo, resolvedStream)
@@ -1398,7 +1429,9 @@ fun VideoDetailScreen(
                             ),
                             playbackMetadata = VideoPlaybackMetadata.fromVideo(historyVideo),
                             historyVideo = historyVideo,
-                            onStreamSourceError = onStreamSourceError,
+                            onStreamSourceError = {
+                                onStreamSourceError(historyVideo)
+                            },
                             showLoadingIndicator = false,
                             autoPlayWhenReady = true,
                             onLoadingStateChange = { loading ->

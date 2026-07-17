@@ -1689,7 +1689,7 @@ private fun AppNavEntryContent(
                 },
                 onOpenDescriptionVideo = onOpenDescriptionVideo,
                 playbackActive = isActive,
-                onStreamSourceError = { onRefreshPlayStream(entry.video) },
+                onStreamSourceError = onRefreshPlayStream,
                 episodeSwitchScope = episodeSwitchScope,
                 modifier = Modifier.fillMaxSize(),
             )

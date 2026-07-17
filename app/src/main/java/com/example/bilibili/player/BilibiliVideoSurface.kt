@@ -87,6 +87,7 @@ private val VideoControlBarHeight = 34.dp
 private val VideoControlBarBottomGap = 6.dp
 private val VideoControlBorderWidth = 0.5.dp
 private val VideoControlBorderColor = Color(0x80999999)
+private const val StalledBufferRefreshDelayMs = 30_000L
 
 @Composable
 fun BilibiliVideoSurface(
@@ -435,6 +436,16 @@ fun BilibiliVideoSurface(
     val surfaceLoading = (activePlayer == null && !hasPendingHandoff) || isBuffering
     LaunchedEffect(surfaceLoading, onLoadingStateChange) {
         onLoadingStateChange?.invoke(surfaceLoading)
+    }
+    LaunchedEffect(isBuffering, playbackEnabled, streamToken, activePlayer) {
+        if (!isBuffering || !playbackEnabled || activePlayer == null || sourceErrorReported) {
+            return@LaunchedEffect
+        }
+        delay(StalledBufferRefreshDelayMs)
+        if (isBuffering && playbackEnabled && !sourceErrorReported) {
+            sourceErrorReported = true
+            onStreamSourceErrorState.value?.invoke()
+        }
     }
     LaunchedEffect(showDanmakuFeature, danmakuVisible, isFullscreen, activePlayer) {
         if (!showDanmakuFeature || !danmakuVisible || activePlayer == null) {
