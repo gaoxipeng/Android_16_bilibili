@@ -13,7 +13,6 @@ sealed interface AppNavEntry {
 
     data class VideoDetail(
         val video: BiliVideoItem,
-        val progressSeconds: Int = 0,
     ) : AppNavEntry
 
     data class UserProfile(

@@ -850,14 +850,27 @@ object BilibiliJsonParser {
 
     fun parsePlayUrl(json: JSONObject): BiliPlayStream? {
         val data = json.optJSONObject("data") ?: return null
+        val lastPlayTimeMs = data.optLong("last_play_time").coerceAtLeast(0L)
+        val lastPlayCid = data.optLong("last_play_cid").coerceAtLeast(0L)
         val dash = data.optJSONObject("dash")
         if (dash != null) {
             val videoUrl = dash.pickStreamUrl("video") ?: return null
             val audioUrl = dash.pickStreamUrl("audio")
-            return BiliPlayStream(videoUrl = videoUrl, audioUrl = audioUrl)
+            return BiliPlayStream(
+                videoUrl = videoUrl,
+                audioUrl = audioUrl,
+                lastPlayTimeMs = lastPlayTimeMs,
+                lastPlayCid = lastPlayCid,
+            )
         }
         val durl = data.optJSONArray("durl")?.optJSONObject(0)?.optString("url")
-        return durl?.takeIf { it.isNotBlank() }?.let { BiliPlayStream(videoUrl = it) }
+        return durl?.takeIf { it.isNotBlank() }?.let {
+            BiliPlayStream(
+                videoUrl = it,
+                lastPlayTimeMs = lastPlayTimeMs,
+                lastPlayCid = lastPlayCid,
+            )
+        }
     }
 
     private fun JSONObject.pickStreamUrl(type: String): String? {
@@ -2639,17 +2652,6 @@ object BilibiliJsonParser {
             progressSeconds = item.optInt("progress").coerceAtLeast(0),
             durationSeconds = durationSeconds,
         )
-    }
-
-    fun parseWatchHistoryProgress(json: JSONObject, durationSeconds: Int = 0): Int? {
-        if (json.optInt("code", -1) != 0) return null
-        val data = json.optJSONObject("data") ?: return null
-        var progress = data.optLong("progress")
-        if (progress <= 0L) return null
-        if (durationSeconds > 0 && progress > durationSeconds * 2L) {
-            progress /= 1000L
-        }
-        return progress.toInt().coerceAtLeast(0)
     }
 
     fun parseBvidFromUri(uri: String): String = extractBvidFromUrl(uri)

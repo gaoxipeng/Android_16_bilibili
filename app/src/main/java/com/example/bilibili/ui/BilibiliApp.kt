@@ -72,8 +72,6 @@ import com.example.bilibili.player.isPlayStreamCacheStale
 import com.example.bilibili.player.withCacheTimestamp
 import com.example.bilibili.player.VideoPlaybackMediaBridge
 import com.example.bilibili.player.VideoPlaybackMetadata
-import com.example.bilibili.player.resolveStoredProgressSeconds
-import com.example.bilibili.player.saveResolvedProgress
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.FeedRefreshHintOverlay
 import com.example.bilibili.ui.components.PressAgainExitConfirmWindowMillis
@@ -464,21 +462,14 @@ fun BilibiliApp() {
 
     fun openVideoDetail(
         video: BiliVideoItem,
-        progressSeconds: Int = 0,
         partPage: Int = 0,
-        preferRecentWatchPart: Boolean = false,
     ) {
         val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
         val initialVideo = enrichVideoForDetailOpen(video, playUrls)
-        val initialProgress = if (progressSeconds > 0) {
-            progressSeconds
-        } else {
-            resolveStoredProgressSeconds(coordinator, initialVideo.playbackId(), 0)
-        }
         val handoffKey = coordinator.handoffPlaybackKeyForVideo(initialVideo)
             ?: detailPlaybackKeyFor(initialVideo)
         if (!replacingVideoDetail) {
-            navController.push(AppNavEntry.VideoDetail(initialVideo, initialProgress))
+            navController.push(AppNavEntry.VideoDetail(initialVideo))
             if (coordinator.hasHandoffPlayer(handoffKey)) {
                 coordinator.requestInlinePlayback(handoffKey)
             } else {
@@ -487,40 +478,8 @@ fun BilibiliApp() {
         }
         scope.launch {
             val cred = credential()
-            var effectivePartPage = partPage
-            var hintProgress = progressSeconds
-            var workingVideo = video
-
-            if (
-                preferRecentWatchPart &&
-                partPage <= 0 &&
-                progressSeconds <= 0 &&
-                video.cid <= 0L
-            ) {
-                api.findRecentWatchHistoryForVideo(video, cred)?.let { history ->
-                    if (history.cid > 0L) {
-                        workingVideo = video.copy(
-                            cid = history.cid,
-                            aid = video.aid.takeIf { it > 0L } ?: history.aid,
-                        )
-                    } else if (history.page > 0) {
-                        effectivePartPage = history.page
-                    }
-                    if (hintProgress <= 0 && history.progressSeconds > 0) {
-                        hintProgress = history.progressSeconds
-                    }
-                }
-            }
-
-            val seededVideo = seedVideoPartPage(workingVideo, effectivePartPage)
+            val seededVideo = seedVideoPartPage(video, partPage)
             val resolvedVideo = api.resolveVideoForPlayback(seededVideo, cred)
-            val resolvedProgress = if (hintProgress > 0) {
-                hintProgress
-            } else {
-                val playbackId = resolvedVideo.playbackId()
-                val serverProgress = api.getVideoWatchProgress(resolvedVideo, cred) ?: 0
-                resolveStoredProgressSeconds(coordinator, playbackId, serverProgress)
-            }
             val playStream = resolvePlayUrl(resolvedVideo)
             playStream?.let { stream -> playUrls.cachePlayStream(resolvedVideo, stream) }
             val resolvedDetailKey = detailPlaybackKeyFor(resolvedVideo)
@@ -530,27 +489,16 @@ fun BilibiliApp() {
                     current.video.playbackId() == resolvedVideo.playbackId() &&
                     playStream != null
                 ) {
-                    if (current.progressSeconds != resolvedProgress) {
-                        navController.replaceTop(
-                            AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress),
-                        )
-                    }
+                    navController.replaceTop(AppNavEntry.VideoDetail(resolvedVideo))
                 } else {
-                    navController.replaceTop(
-                        AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress),
-                    )
+                    navController.replaceTop(AppNavEntry.VideoDetail(resolvedVideo))
                 }
             } else {
-                navController.push(AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress))
+                navController.push(AppNavEntry.VideoDetail(resolvedVideo))
             }
             if (replacingVideoDetail) {
                 coordinator.releaseHandoffPlayer()
             }
-            saveResolvedProgress(
-                coordinator = coordinator,
-                playbackId = resolvedVideo.playbackId(),
-                progressSeconds = resolvedProgress,
-            )
             if (playStream != null || replacingVideoDetail) {
                 val playbackKey = coordinator.handoffPlaybackKeyForVideo(resolvedVideo)
                     ?: resolvedDetailKey
@@ -568,26 +516,14 @@ fun BilibiliApp() {
             }
             val playStream = resolvePlayUrl(resolvedVideo)
             playStream?.let { stream -> playUrls.cachePlayStream(resolvedVideo, stream) }
-            val playbackId = resolvedVideo.playbackId()
-            val serverProgress = api.getVideoWatchProgress(resolvedVideo, credential()) ?: 0
-            val resolvedProgress = resolveStoredProgressSeconds(
-                coordinator = coordinator,
-                playbackId = playbackId,
-                serverProgressSeconds = maxOf(item.progressSeconds, serverProgress),
-            )
             val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
             if (!replacingVideoDetail) {
                 coordinator.stopPlayback()
             }
-            navController.push(AppNavEntry.VideoDetail(resolvedVideo, resolvedProgress))
+            navController.push(AppNavEntry.VideoDetail(resolvedVideo))
             if (replacingVideoDetail) {
                 coordinator.releaseHandoffPlayer()
             }
-            saveResolvedProgress(
-                coordinator = coordinator,
-                playbackId = playbackId,
-                progressSeconds = resolvedProgress,
-            )
             if (playStream != null || replacingVideoDetail) {
                 coordinator.requestInlinePlayback(
                     videoPlaybackKey(resolvedVideo.playbackId(), ownerId = "detail"),
@@ -600,7 +536,7 @@ fun BilibiliApp() {
         coordinator.releaseHandoffPlayer()
         coordinator.stopPlayback()
         playUrls.cachePlayStream(video, stream)
-        navController.push(AppNavEntry.VideoDetail(video, progressSeconds = 0))
+        navController.push(AppNavEntry.VideoDetail(video))
         coordinator.requestInlinePlayback(
             videoPlaybackKey(video.playbackId(), ownerId = "detail"),
         )
@@ -628,10 +564,7 @@ fun BilibiliApp() {
                 val playbackKey = videoPlaybackKey(playbackId, ownerId = "detail")
                 val sameArchive = item.bvid.isNotBlank() && item.bvid == video.bvid
                 if (!sameArchive) {
-                    val progressSeconds = (
-                        coordinator.getPlaybackPosition(playbackKey) / 1000L
-                    ).toInt()
-                    navController.push(AppNavEntry.VideoDetail(item, progressSeconds = progressSeconds))
+                    navController.push(AppNavEntry.VideoDetail(item))
                 }
                 coordinator.releaseHandoffPlayer()
                 coordinator.requestInlinePlayback(playbackKey)
@@ -1309,7 +1242,7 @@ fun BilibiliApp() {
                             onHistoryItemClick = { item -> openHistoryVideo(item) },
                             onVideoClick = { video -> openVideoDetail(video) },
                             onFavoriteVideoClick = { video ->
-                                openVideoDetail(video, preferRecentWatchPart = true)
+                                openVideoDetail(video)
                             },
                             playUrls = playUrls,
                             coordinator = coordinator,
@@ -1393,7 +1326,7 @@ fun BilibiliApp() {
                 onPopNav = ::popNavEntry,
                 onOpenVideo = ::openVideoDetail,
                 onOpenDescriptionVideo = { video, partPage ->
-                    openVideoDetail(video, progressSeconds = 0, partPage = partPage)
+                    openVideoDetail(video, partPage = partPage)
                 },
                 onSwitchVideoPart = ::switchVideoPart,
                 onUpdateVideoSeed = ::updateVideoDetailSeed,
@@ -1719,7 +1652,6 @@ private fun AppNavEntryContent(
             VideoDetailScreen(
                 seedVideo = entry.video,
                 playStream = resolveStoredPlayStream(entry.video, playUrls),
-                initialProgressSeconds = entry.progressSeconds,
                 api = api,
                 coordinator = coordinator,
                 credential = credential,

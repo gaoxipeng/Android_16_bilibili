@@ -33,9 +33,18 @@ data class BiliPlayStream(
     val audioUrl: String? = null,
     val aid: Long = 0L,
     val cid: Long = 0L,
+    val lastPlayTimeMs: Long = 0L,
+    val lastPlayCid: Long = 0L,
     val cachedAtMs: Long = 0L,
 ) {
     val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
+
+    fun resumePositionMs(targetCid: Long, durationSeconds: Int = 0): Long {
+        if (targetCid <= 0L || lastPlayCid != targetCid || lastPlayTimeMs <= 0L) return 0L
+        val durationMs = durationSeconds.takeIf { it > 0 }?.times(1000L) ?: 0L
+        if (durationMs > 0L && lastPlayTimeMs >= durationMs) return 0L
+        return lastPlayTimeMs
+    }
 }
 
 data class BiliVideoShot(

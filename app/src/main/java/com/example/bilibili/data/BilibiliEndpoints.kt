@@ -22,7 +22,6 @@ object BilibiliEndpoints {
     const val UGC_SEASON_ARCHIVES = "https://api.bilibili.com/x/polymer/web-space/seasons_archives_list"
     const val VIDEO_PLAYURL = "https://api.bilibili.com/x/player/wbi/playurl"
     const val HISTORY_REPORT = "https://api.bilibili.com/x/v2/history/report"
-    const val HISTORY_RESOURCE = "https://api.bilibili.com/x/v2/history/resource"
     const val HISTORY_CURSOR = "https://api.bilibili.com/x/web-interface/history/cursor"
     const val HISTORY_DELETE = "https://api.bilibili.com/x/v2/history/delete"
     const val MY_INFO = "https://api.bilibili.com/x/space/myinfo"

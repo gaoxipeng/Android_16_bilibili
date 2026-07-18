@@ -122,7 +122,8 @@ fun BilibiliVideoSurface(
     val context = LocalContext.current
     val layerBackdrop = backdrop as? LayerBackdrop ?: rememberLayerBackdrop()
     val onStreamSourceErrorState = rememberUpdatedState(onStreamSourceError)
-    val streamToken = "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}"
+    val streamToken =
+        "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}:${stream.lastPlayCid}:${stream.lastPlayTimeMs}"
     val handoffLookupKey = remember(playbackKey, historyVideo?.bvid, historyVideo?.cid) {
         historyVideo?.let { coordinator.handoffPlaybackKeyForVideo(it) } ?: playbackKey
     }
@@ -320,7 +321,7 @@ fun BilibiliVideoSurface(
             val startPositionMs = if (boundContentPlaybackKey == contentPlaybackKey) {
                 existingPlayer.currentPosition.coerceAtLeast(0L)
             } else {
-                0L
+                stream.resumePositionMs(stream.cid, historyVideo?.durationSeconds ?: 0)
             }
             existingPlayer.setMediaSource(
                 buildVideoMediaSource(
@@ -408,7 +409,10 @@ fun BilibiliVideoSurface(
             }
         }
         }
-        val startPositionMs = coordinator.getPlaybackPosition(contentPlaybackKey)
+        val startPositionMs = stream.resumePositionMs(
+            targetCid = stream.cid,
+            durationSeconds = historyVideo?.durationSeconds ?: 0,
+        )
         player = createExoPlayer(
             context = context,
             stream = stream,

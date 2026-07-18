@@ -95,8 +95,6 @@ import com.example.bilibili.player.rememberVideoControlBackdrop
 import com.example.bilibili.player.knownPortraitVideoHint
 import com.example.bilibili.player.knownVideoAspectRatio
 import com.example.bilibili.player.isPlayStreamCacheStale
-import com.example.bilibili.player.resolveStoredProgressSeconds
-import com.example.bilibili.player.saveResolvedProgress
 import com.example.bilibili.player.VideoPlayerLoadingIndicator
 import com.example.bilibili.player.videoPlaybackKey
 import com.example.bilibili.ui.components.CommentAuthorHeaderRow
@@ -274,7 +272,6 @@ fun VideoDetailScreen(
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
     playbackActive: Boolean = true,
     onStreamSourceError: (BiliVideoItem) -> Unit = {},
-    initialProgressSeconds: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -765,30 +762,6 @@ fun VideoDetailScreen(
     }
     val contentPlaybackKey = remember(currentContentPlaybackId) {
         videoPlaybackKey(currentContentPlaybackId, ownerId = "detail")
-    }
-
-    LaunchedEffect(seedStateKey, initialProgressSeconds, credential?.dedeUserId) {
-        if (initialProgressSeconds > 0) {
-            val resolvedVideo = api.resolveVideoForPlayback(seedVideo, credential)
-            saveResolvedProgress(
-                coordinator = coordinator,
-                playbackId = resolvedVideo.playbackId(),
-                progressSeconds = initialProgressSeconds,
-            )
-            return@LaunchedEffect
-        }
-        val resolvedVideo = api.resolveVideoForPlayback(seedVideo, credential)
-        val serverProgress = api.getVideoWatchProgress(resolvedVideo, credential) ?: 0
-        val resolvedProgress = resolveStoredProgressSeconds(
-            coordinator = coordinator,
-            playbackId = resolvedVideo.playbackId(),
-            serverProgressSeconds = serverProgress,
-        )
-        saveResolvedProgress(
-            coordinator = coordinator,
-            playbackId = resolvedVideo.playbackId(),
-            progressSeconds = resolvedProgress,
-        )
     }
 
     val displayTitle = activePart?.title?.takeIf { it.isNotBlank() }
