@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import com.example.bilibili.ui.theme.isAppLightTheme
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -449,10 +450,13 @@ fun HomeSearchCapsule(
     onSearchClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val topOffsetPx = with(LocalDensity.current) {
+        (contentPadding.calculateTopPadding() + HomeSearchBarTopGap).roundToPx()
+    }
     AnimatedVisibility(
         visible = visible,
-        enter = slideInVertically(tween(200)) { -it / 2 },
-        exit = slideOutVertically(tween(160)) { -it / 2 },
+        enter = slideInVertically(tween(200)) { -(it + topOffsetPx) },
+        exit = slideOutVertically(tween(160)) { -(it + topOffsetPx) },
         modifier = modifier
             .padding(top = contentPadding.calculateTopPadding() + HomeSearchBarTopGap)
             .padding(horizontal = HomeSearchBarHorizontalInset),
