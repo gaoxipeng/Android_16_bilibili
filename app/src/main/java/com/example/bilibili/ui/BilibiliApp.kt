@@ -694,6 +694,11 @@ fun BilibiliApp() {
             coordinator.requestDetailHandoffPreserve(
                 detailPlaybackKeyFor(removed.video),
             )
+            // Restore home chrome immediately so the search capsule does not wait
+            // for the detail exit animation or a later upward scroll gesture.
+            if (selectedTab == MainTab.Home) {
+                bottomBarVisible = true
+            }
         }
         pendingPopSideEffect = removed
     }
@@ -1016,7 +1021,7 @@ fun BilibiliApp() {
     val topVideoDetailEntry = navStack.lastVideoDetail()
     val coordinatorFullscreenVideo = coordinator.fullscreenVideo
     val coordinatorFullscreenStream = coordinator.fullscreenStream
-    val showFeedSearchBar = !navOverlayOpen && when (selectedTab) {
+    val showFeedSearchBar = navController.stack.isEmpty() && when (selectedTab) {
         MainTab.Home -> activeAccount != null
         else -> false
     }
