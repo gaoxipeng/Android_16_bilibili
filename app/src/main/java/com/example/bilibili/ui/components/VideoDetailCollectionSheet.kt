@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.PlatformTextStyle
@@ -168,7 +169,7 @@ fun VideoDetailCollectionSheet(
             highlightSectionId = highlightSectionId,
             pages = pages,
         )
-        val listHeightPx = when {
+        val unconstrainedListHeightPx = when {
             episodeCount <= 0 -> 0f
             ugcSeason != null -> {
                 val sections = ugcSeason.sectionsToShow(highlightSectionId)
@@ -184,19 +185,17 @@ fun VideoDetailCollectionSheet(
             }
             else -> min(maxListHeightPx, episodeCount * rowHeightPx)
         }
-        val panelHeightPx = headerHeightPx + listHeightPx + verticalPaddingPx
+        // Keep the sheet above the collection card and never cover it.
+        val maxPanelHeightAboveCardPx =
+            (anchor.top - gapPx - marginPx).coerceAtLeast(0f)
+        val maxListHeightAboveCardPx =
+            (maxPanelHeightAboveCardPx - headerHeightPx - verticalPaddingPx).coerceAtLeast(0f)
+        val listHeightPx = min(unconstrainedListHeightPx, maxListHeightAboveCardPx)
         val listHeight = with(density) { listHeightPx.toDp() }
 
-        val hasSpaceBelow = anchor.bottom + gapPx + panelHeightPx <= screenHeightPx - marginPx
-        val targetY = if (hasSpaceBelow) {
-            anchor.bottom + gapPx
-        } else {
-            anchor.top - gapPx - panelHeightPx
-        }
-        val maxY = (screenHeightPx - panelHeightPx - marginPx).coerceAtLeast(marginPx)
-        val panelOffsetY = targetY.coerceIn(marginPx, maxY).roundToInt()
         val panelOffsetX = marginPx.roundToInt()
         val panelWidth = with(density) { panelWidthPx.toDp() }
+        val clipRegionHeight = with(density) { (anchor.top - gapPx).coerceAtLeast(0f).toDp() }
         val isLightTheme = isAppLightTheme()
         val panelSurfaceColor = collectionPanelSurfaceColor(isLightTheme)
         val panelShape = RoundedCornerShape(CollectionPanelCornerRadius)
@@ -248,66 +247,76 @@ fun VideoDetailCollectionSheet(
             )
         }
 
-        AnimatedVisibility(
-            visible = visible,
-            enter = slideInVertically(tween(140)) { it / 4 },
-            exit = slideOutVertically(tween(100)) { it / 4 },
+        // Clip to the region above the collection card so enter/exit slides
+        // never draw over the card itself.
+        Box(
             modifier = Modifier
-                .offset { IntOffset(panelOffsetX, panelOffsetY) }
-                .width(panelWidth),
+                .fillMaxWidth()
+                .height(clipRegionHeight)
+                .clipToBounds(),
         ) {
-            if (hazeState != null) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(panelShape)
-                        .hazeEffect(state = hazeState) {
-                            style = panelHazeStyle
-                            blurRadius = ActionMenuBlurRadius
-                        }
-                        .border(LiquidMenuBorderWidth, panelBorderColor, panelShape)
-                        .padding(vertical = 6.dp),
-                ) {
-                    CollectionSheetPanelContent(
-                        sheetTitle = sheetTitle,
-                        listState = listState,
-                        listHeight = listHeight,
-                        ugcSeason = ugcSeason,
-                        highlightSectionId = highlightSectionId,
-                        pages = pages,
-                        currentBvid = currentBvid,
-                        currentCid = currentCid,
-                        authorName = authorName,
-                        authorMid = authorMid,
-                        onDismiss = onDismiss,
-                        onUgcEpisodeClick = onUgcEpisodeClick,
-                        onPartClick = onPartClick,
-                    )
-                }
-            } else {
-                SurfaceLiquidMenuCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    backdrop = menuBackdrop,
-                    cornerRadius = CollectionPanelCornerRadius,
-                    useMenuGlassStyle = true,
-                    surfaceColor = panelSurfaceColor,
-                    contentPadding = PaddingValues(vertical = 6.dp),
-                ) {
-                    CollectionSheetPanelContent(
-                        sheetTitle = sheetTitle,
-                        listState = listState,
-                        listHeight = listHeight,
-                        ugcSeason = ugcSeason,
-                        highlightSectionId = highlightSectionId,
-                        pages = pages,
-                        currentBvid = currentBvid,
-                        currentCid = currentCid,
-                        authorName = authorName,
-                        authorMid = authorMid,
-                        onDismiss = onDismiss,
-                        onUgcEpisodeClick = onUgcEpisodeClick,
-                        onPartClick = onPartClick,
-                    )
+            AnimatedVisibility(
+                visible = visible,
+                enter = slideInVertically(tween(160)) { height -> height },
+                exit = slideOutVertically(tween(120)) { height -> height },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset { IntOffset(panelOffsetX, 0) }
+                    .width(panelWidth),
+            ) {
+                if (hazeState != null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(panelShape)
+                            .hazeEffect(state = hazeState) {
+                                style = panelHazeStyle
+                                blurRadius = ActionMenuBlurRadius
+                            }
+                            .border(LiquidMenuBorderWidth, panelBorderColor, panelShape)
+                            .padding(vertical = 6.dp),
+                    ) {
+                        CollectionSheetPanelContent(
+                            sheetTitle = sheetTitle,
+                            listState = listState,
+                            listHeight = listHeight,
+                            ugcSeason = ugcSeason,
+                            highlightSectionId = highlightSectionId,
+                            pages = pages,
+                            currentBvid = currentBvid,
+                            currentCid = currentCid,
+                            authorName = authorName,
+                            authorMid = authorMid,
+                            onDismiss = onDismiss,
+                            onUgcEpisodeClick = onUgcEpisodeClick,
+                            onPartClick = onPartClick,
+                        )
+                    }
+                } else {
+                    SurfaceLiquidMenuCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        backdrop = menuBackdrop,
+                        cornerRadius = CollectionPanelCornerRadius,
+                        useMenuGlassStyle = true,
+                        surfaceColor = panelSurfaceColor,
+                        contentPadding = PaddingValues(vertical = 6.dp),
+                    ) {
+                        CollectionSheetPanelContent(
+                            sheetTitle = sheetTitle,
+                            listState = listState,
+                            listHeight = listHeight,
+                            ugcSeason = ugcSeason,
+                            highlightSectionId = highlightSectionId,
+                            pages = pages,
+                            currentBvid = currentBvid,
+                            currentCid = currentCid,
+                            authorName = authorName,
+                            authorMid = authorMid,
+                            onDismiss = onDismiss,
+                            onUgcEpisodeClick = onUgcEpisodeClick,
+                            onPartClick = onPartClick,
+                        )
+                    }
                 }
             }
         }

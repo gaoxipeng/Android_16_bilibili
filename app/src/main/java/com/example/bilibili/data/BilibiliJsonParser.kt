@@ -2801,6 +2801,21 @@ object BilibiliJsonParser {
         }.distinct()
     }
 
+    fun parseVideoTags(json: JSONObject): List<String> {
+        val data = json.optJSONArray("data") ?: return emptyList()
+        val seen = linkedSetOf<String>()
+        for (index in 0 until data.length()) {
+            val item = data.optJSONObject(index) ?: continue
+            val name = stripSearchHighlight(
+                item.optString("tag_name").ifBlank { item.optString("name") },
+            )
+            if (name.isNotBlank()) {
+                seen += name
+            }
+        }
+        return seen.toList()
+    }
+
     private fun stripSearchHighlight(raw: String): String =
         raw.replace(Regex("<[^>]+>"), "").trim()
 

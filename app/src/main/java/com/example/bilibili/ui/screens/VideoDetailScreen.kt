@@ -5,10 +5,13 @@ import android.content.res.Configuration
 import android.view.OrientationEventListener
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +31,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -114,6 +119,7 @@ import com.example.bilibili.ui.components.VideoDetailTabBar
 import com.example.bilibili.ui.components.VideoDetailCollectionSheet
 import com.example.bilibili.ui.components.VideoDetailMultiPartSection
 import com.example.bilibili.ui.components.VideoDetailUgcSeasonSection
+import com.example.bilibili.ui.theme.isAppLightTheme
 import com.example.bilibili.util.BiliLinkTarget
 import com.example.bilibili.util.ExternalUrlOpener
 import com.example.bilibili.util.BilibiliAppLauncher
@@ -270,6 +276,7 @@ fun VideoDetailScreen(
     episodeSwitchScope: CoroutineScope? = null,
     onOpenUgcEpisode: (BiliVideoItem) -> Unit = {},
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
+    onSearchTagClick: (String) -> Unit = {},
     playbackActive: Boolean = true,
     onStreamSourceError: (BiliVideoItem) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -287,6 +294,7 @@ fun VideoDetailScreen(
     var detail by remember(seedStateKey) { mutableStateOf<BiliVideoDetail?>(null) }
     var authorCard by remember(seedStateKey) { mutableStateOf(placeholderAuthorCard(seedVideo)) }
     var onlineCount by remember(seedStateKey) { mutableStateOf(0L) }
+    var videoTags by remember(seedStateKey) { mutableStateOf<List<String>>(emptyList()) }
     var commentSort by remember(seedStateKey) { mutableStateOf(BiliCommentSort.Hot) }
     var comments by remember(seedStateKey) { mutableStateOf<List<BiliCommentItem>>(emptyList()) }
     var commentCount by remember(seedStateKey) { mutableStateOf(0L) }
@@ -661,6 +669,15 @@ fun VideoDetailScreen(
             if (error is CancellationException) throw error
             Toast.makeText(context, error.message ?: "加载失败", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    LaunchedEffect(detail?.video?.aid, credential?.dedeUserId) {
+        val aid = detail?.video?.aid?.takeIf { it > 0L } ?: seedVideo.aid.takeIf { it > 0L }
+        if (aid == null) {
+            videoTags = emptyList()
+            return@LaunchedEffect
+        }
+        videoTags = api.getVideoTags(aid = aid, credential = credential)
     }
 
     LaunchedEffect(commentSort) {
@@ -1549,46 +1566,58 @@ fun VideoDetailScreen(
                             )
                         }
                         item(key = "intro-desc") {
-                            BiliRichText(
-                                text = currentVideo.description.ifBlank { "暂无简介" },
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                style = MaterialTheme.typography.bodyMedium,
-                                onLinkClick = { target ->
-                                    when (target) {
-                                        is BiliLinkTarget.UserSpace -> {
-                                            onAuthorClick(
-                                                BiliUserProfile(
-                                                    mid = target.mid,
-                                                    name = "",
-                                                    face = "",
-                                                    sign = "",
-                                                    level = 0,
-                                                ),
-                                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                BiliRichText(
+                                    text = currentVideo.description.ifBlank { "暂无简介" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    onLinkClick = { target ->
+                                        when (target) {
+                                            is BiliLinkTarget.UserSpace -> {
+                                                onAuthorClick(
+                                                    BiliUserProfile(
+                                                        mid = target.mid,
+                                                        name = "",
+                                                        face = "",
+                                                        sign = "",
+                                                        level = 0,
+                                                    ),
+                                                )
+                                            }
+                                            is BiliLinkTarget.Video -> {
+                                                onOpenDescriptionVideo(
+                                                    BiliVideoItem(
+                                                        bvid = target.bvid,
+                                                        aid = target.aid,
+                                                        title = "",
+                                                        coverUrl = "",
+                                                        authorName = currentVideo.authorName,
+                                                        authorMid = currentVideo.authorMid,
+                                                        viewCount = 0,
+                                                        danmakuCount = 0,
+                                                        likeCount = 0,
+                                                        durationSeconds = 0,
+                                                    ),
+                                                    target.partPage,
+                                                )
+                                            }
+                                            is BiliLinkTarget.External -> {
+                                                ExternalUrlOpener.open(context, target.url)
+                                            }
                                         }
-                                        is BiliLinkTarget.Video -> {
-                                            onOpenDescriptionVideo(
-                                                BiliVideoItem(
-                                                    bvid = target.bvid,
-                                                    aid = target.aid,
-                                                    title = "",
-                                                    coverUrl = "",
-                                                    authorName = currentVideo.authorName,
-                                                    authorMid = currentVideo.authorMid,
-                                                    viewCount = 0,
-                                                    danmakuCount = 0,
-                                                    likeCount = 0,
-                                                    durationSeconds = 0,
-                                                ),
-                                                target.partPage,
-                                            )
-                                        }
-                                        is BiliLinkTarget.External -> {
-                                            ExternalUrlOpener.open(context, target.url)
-                                        }
-                                    }
-                                },
-                            )
+                                    },
+                                )
+                                if (videoTags.isNotEmpty()) {
+                                    VideoDetailTagChipFlow(
+                                        tags = videoTags,
+                                        onTagClick = onSearchTagClick,
+                                    )
+                                }
+                            }
                         }
                         item(key = "intro-actions") {
                             VideoDetailActionBar(
@@ -2314,4 +2343,67 @@ private fun shouldShowCommentText(content: String, pictures: List<BiliCommentPic
     if (pictures.isEmpty()) return true
     val trimmed = content.trim()
     return trimmed != "[图片]" && trimmed != "图片评论"
+}
+
+private val VideoDetailTagChipSpacing = 8.dp
+private val VideoDetailTagChipShape = RoundedCornerShape(percent = 50)
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VideoDetailTagChipFlow(
+    tags: List<String>,
+    onTagClick: (String) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(VideoDetailTagChipSpacing),
+        verticalArrangement = Arrangement.spacedBy(VideoDetailTagChipSpacing),
+    ) {
+        tags.forEach { tag ->
+            VideoDetailTagChip(
+                title = tag,
+                onClick = { onTagClick(tag) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoDetailTagChip(
+    title: String,
+    onClick: () -> Unit,
+) {
+    val lightTheme = isAppLightTheme()
+    val background = if (lightTheme) {
+        Color.Black.copy(alpha = 0.02f)
+    } else {
+        Color.White.copy(alpha = 0.05f)
+    }
+    val border = if (lightTheme) {
+        Color.Black.copy(alpha = 0.03f)
+    } else {
+        Color.White.copy(alpha = 0.06f)
+    }
+    val content = if (lightTheme) {
+        Color(0xFF596173)
+    } else {
+        Color(0xFFC5C8D4)
+    }
+    Text(
+        text = title,
+        modifier = Modifier
+            .clip(VideoDetailTagChipShape)
+            .background(background)
+            .border(width = 0.5.dp, color = border, shape = VideoDetailTagChipShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+        color = content,
+        fontSize = 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        lineHeight = 14.sp,
+    )
 }

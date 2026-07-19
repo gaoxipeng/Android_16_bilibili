@@ -119,6 +119,7 @@ fun SearchScreen(
     onUserClick: (Long, String, String) -> Unit,
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
     modifier: Modifier = Modifier,
+    initialQuery: String = "",
     feedColumnCount: Int = FeedLayoutStore.COLUMN_COUNT_TWO,
     handleSystemBack: Boolean = true,
 ) {
@@ -183,6 +184,13 @@ fun SearchScreen(
         searchGeneration++
         focusManager.clearFocus()
         keyboardController?.hide()
+    }
+
+    LaunchedEffect(initialQuery) {
+        val seed = initialQuery.trim()
+        if (seed.isNotBlank() && activeQuery != seed) {
+            submitQuery(seed)
+        }
     }
 
     suspend fun loadVideos(reset: Boolean, generation: Int) {

@@ -678,7 +678,7 @@ fun BilibiliApp() {
                     )
                 }
             }
-            AppNavEntry.Search,
+            is AppNavEntry.Search,
             is AppNavEntry.DynamicDetail,
             is AppNavEntry.ArticleDetail,
             is AppNavEntry.UserRelationList,
@@ -724,9 +724,9 @@ fun BilibiliApp() {
         )
     }
 
-    fun openSearch() {
+    fun openSearch(initialQuery: String = "") {
         coordinator.pauseForOverlay()
-        navController.push(AppNavEntry.Search)
+        navController.push(AppNavEntry.Search(initialQuery = initialQuery))
     }
 
     fun persistHomeFeedCache() {
@@ -1162,7 +1162,7 @@ fun BilibiliApp() {
                             showSearchBar = activeAccount != null,
                             // Search and bottom navigation share the root scroll visibility state.
                             onSearchVisibleChange = {},
-                            onSearchClick = ::openSearch,
+                            onSearchClick = { openSearch() },
                             pullRefreshState = homePullRefreshState,
                             showEmbeddedPullRefreshIndicator = false,
                             feedColumnCount = feedColumnCount,
@@ -1328,6 +1328,7 @@ fun BilibiliApp() {
                 onOpenDescriptionVideo = { video, partPage ->
                     openVideoDetail(video, partPage = partPage)
                 },
+                onSearchTagClick = ::openSearch,
                 onSwitchVideoPart = ::switchVideoPart,
                 onUpdateVideoSeed = ::updateVideoDetailSeed,
                 onReplaceVideo = ::replaceVideoDetail,
@@ -1427,7 +1428,7 @@ fun BilibiliApp() {
                 HomeSearchCapsule(
                     visible = bottomBarVisible,
                     contentPadding = padding,
-                    onSearchClick = ::openSearch,
+                    onSearchClick = { openSearch() },
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
@@ -1526,6 +1527,7 @@ private fun AppNavStackLayers(
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
+    onSearchTagClick: (String) -> Unit,
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?, Boolean) -> Unit,
     onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit,
     onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit,
@@ -1584,6 +1586,7 @@ private fun AppNavStackLayers(
                         onPopNav = onPopNav,
                         onOpenVideo = onOpenVideo,
                         onOpenDescriptionVideo = onOpenDescriptionVideo,
+                        onSearchTagClick = onSearchTagClick,
                         onSwitchVideoPart = onSwitchVideoPart,
                         onUpdateVideoSeed = onUpdateVideoSeed,
                         onReplaceVideo = onReplaceVideo,
@@ -1617,6 +1620,7 @@ private fun AppNavEntryContent(
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
+    onSearchTagClick: (String) -> Unit,
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?, Boolean) -> Unit,
     onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit,
     onReplaceVideo: (BiliVideoItem, BiliPlayStream) -> Unit,
@@ -1630,7 +1634,7 @@ private fun AppNavEntryContent(
     episodeSwitchScope: CoroutineScope,
 ) {
     when (entry) {
-        AppNavEntry.Search -> {
+        is AppNavEntry.Search -> {
             SearchScreen(
                 api = api,
                 credential = credential,
@@ -1640,6 +1644,7 @@ private fun AppNavEntryContent(
                 onVideoClick = { video -> onOpenVideo(video, 0) },
                 onUserClick = { mid, name, face -> onOpenProfile(mid, name, face) },
                 onEnsurePlayStream = onEnsurePlayStream,
+                initialQuery = entry.initialQuery,
                 feedColumnCount = feedColumnCount,
                 handleSystemBack = isActive,
                 modifier = Modifier.fillMaxSize(),
@@ -1667,6 +1672,7 @@ private fun AppNavEntryContent(
                     onOpenVideo(video, 0)
                 },
                 onOpenDescriptionVideo = onOpenDescriptionVideo,
+                onSearchTagClick = onSearchTagClick,
                 playbackActive = isActive,
                 onStreamSourceError = onRefreshPlayStream,
                 episodeSwitchScope = episodeSwitchScope,

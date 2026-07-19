@@ -468,12 +468,11 @@ private fun VideoFeedOverlayCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Text(
-                        text = "${formatCount(video.viewCount)}播放",
-                        modifier = Modifier.padding(start = 8.dp),
+                    VideoMetaStatsRow(
+                        viewCount = video.viewCount,
+                        danmakuCount = video.danmakuCount,
                         color = overlaySubtextColor,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
+                        modifier = Modifier.padding(start = 8.dp),
                     )
                 }
             }
@@ -550,6 +549,59 @@ private fun CoverVideoStatsRow(
         CoverOverlayStat(
             icon = BiliVideoDanmakuCountIcon,
             value = formatCount(danmakuCount),
+        )
+    }
+}
+
+@Composable
+private fun VideoMetaStatsRow(
+    viewCount: Long,
+    danmakuCount: Long,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        VideoMetaStat(
+            icon = BiliVideoPlayCountIcon,
+            value = formatCount(viewCount),
+            color = color,
+        )
+        VideoMetaStat(
+            icon = BiliVideoDanmakuCountIcon,
+            value = formatCount(danmakuCount),
+            color = color,
+        )
+    }
+}
+
+@Composable
+private fun VideoMetaStat(
+    icon: ImageVector,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(12.dp),
+            tint = color,
+        )
+        Text(
+            text = value,
+            color = color,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

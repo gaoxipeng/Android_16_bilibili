@@ -40,6 +40,7 @@ object BilibiliEndpoints {
     const val VIDEO_COMMENTS = "https://api.bilibili.com/x/v2/reply/wbi/main"
     const val VIDEO_COMMENT_REPLIES = "https://api.bilibili.com/x/v2/reply/reply"
     const val VIDEO_ONLINE = "https://api.bilibili.com/x/player/online/total"
+    const val VIDEO_TAGS = "https://api.bilibili.com/x/tag/archive/tags"
     const val VIDEO_SHOT = "https://api.bilibili.com/x/player/videoshot"
     const val VIDEO_ARCHIVE_RELATION = "https://api.bilibili.com/x/web-interface/archive/relation"
     const val VIDEO_HAS_LIKE = "https://api.bilibili.com/x/web-interface/archive/has/like"

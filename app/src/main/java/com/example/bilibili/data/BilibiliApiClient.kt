@@ -918,6 +918,21 @@ class BilibiliApiClient {
         }.getOrDefault(0L)
     }
 
+    suspend fun getVideoTags(
+        aid: Long,
+        credential: BilibiliCredential? = null,
+    ): List<String> = withContext(Dispatchers.IO) {
+        if (aid <= 0L) return@withContext emptyList()
+        runCatching {
+            getJson(
+                url = BilibiliEndpoints.VIDEO_TAGS,
+                params = mapOf("aid" to aid.toString()),
+                credential = credential,
+                referer = BilibiliEndpoints.HOME,
+            ).let(BilibiliJsonParser::parseVideoTags)
+        }.getOrDefault(emptyList())
+    }
+
     suspend fun getDanmakuList(
         cid: Long,
         durationSeconds: Int = 0,

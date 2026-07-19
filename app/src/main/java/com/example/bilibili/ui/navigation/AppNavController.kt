@@ -9,7 +9,7 @@ import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.UserRelationTab
 
 sealed interface AppNavEntry {
-    data object Search : AppNavEntry
+    data class Search(val initialQuery: String = "") : AppNavEntry
 
     data class VideoDetail(
         val video: BiliVideoItem,
@@ -40,7 +40,7 @@ sealed interface AppNavEntry {
 }
 
 internal fun AppNavEntry.stableKey(index: Int): String = when (this) {
-    AppNavEntry.Search -> "search@$index"
+    is AppNavEntry.Search -> "search@$index"
     is AppNavEntry.VideoDetail -> {
         val identity = video.bvid.ifBlank { "av:${video.aid}" }.ifBlank { video.playbackId() }
         "video:$identity@$index"
@@ -72,11 +72,7 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
         pendingEnterKey = entry.stableKey(stack.size)
         pendingExitKey = null
         stack = when (entry) {
-            AppNavEntry.Search -> if (stack.any { it is AppNavEntry.Search }) {
-                stack
-            } else {
-                stack + entry
-            }
+            is AppNavEntry.Search -> stack.filterNot { it is AppNavEntry.Search } + entry
             is AppNavEntry.VideoDetail -> when (stack.lastOrNull()) {
                 is AppNavEntry.VideoDetail -> stack.dropLast(1) + entry
                 else -> stack + entry
