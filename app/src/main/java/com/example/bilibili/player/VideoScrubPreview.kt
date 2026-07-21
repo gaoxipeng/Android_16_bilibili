@@ -38,6 +38,46 @@ data class VideoShotTile(
     val row: Int,
 )
 
+/** 对齐 Mac VideoScrubPreviewLayout：竖屏按真实画面比例定框，避免 160×90 元数据把竖屏压扁。 */
+private object VideoScrubPreviewLayout {
+    val maxLandscapeWidth = 176.dp
+    val maxPortraitHeight = 180.dp
+    val minPortraitWidth = 72.dp
+
+    fun aspectRatio(
+        videoShot: BiliVideoShot?,
+        playerAspectRatio: Float?,
+    ): Float {
+        val player = playerAspectRatio?.takeIf { it.isFinite() && it > 0f }
+        if (player != null) {
+            // videoshot 元数据常为 160×90；竖屏用真实播放比例。
+            if (player < 1f) return player
+            val shot = videoShot?.takeIf { it.tileWidth > 0 && it.tileHeight > 0 }
+            if (shot != null) {
+                return shot.tileWidth.toFloat() / shot.tileHeight.toFloat().coerceAtLeast(1f)
+            }
+            return player
+        }
+        val shot = videoShot?.takeIf { it.tileWidth > 0 && it.tileHeight > 0 }
+        if (shot != null) {
+            return shot.tileWidth.toFloat() / shot.tileHeight.toFloat().coerceAtLeast(1f)
+        }
+        return 16f / 9f
+    }
+
+    fun size(aspectRatio: Float): Pair<Dp, Dp> {
+        val ratio = aspectRatio.takeIf { it.isFinite() && it > 0f } ?: (16f / 9f)
+        return if (ratio < 1f) {
+            val height = maxPortraitHeight
+            val width = (height * ratio).coerceAtLeast(minPortraitWidth)
+            width to height
+        } else {
+            val width = maxLandscapeWidth
+            width to (width / ratio)
+        }
+    }
+}
+
 fun BiliVideoShot.locateTile(positionMs: Long, durationMs: Long): VideoShotTile? {
     if (images.isEmpty() || totalTiles <= 0) return null
     val thumbnailIndex = if (indexSeconds.isNotEmpty()) {
@@ -73,11 +113,17 @@ fun VideoScrubPreviewOverlay(
     progressFraction: Float,
     videoShot: BiliVideoShot?,
     modifier: Modifier = Modifier,
-    previewWidth: Dp = 176.dp,
     previewAspectRatio: Float? = null,
     refererUrl: String = com.example.bilibili.data.BilibiliEndpoints.HOME,
 ) {
     if (!visible) return
+
+    val resolvedAspect = remember(videoShot, previewAspectRatio) {
+        VideoScrubPreviewLayout.aspectRatio(videoShot, previewAspectRatio)
+    }
+    val (previewWidth, previewHeight) = remember(resolvedAspect) {
+        VideoScrubPreviewLayout.size(resolvedAspect)
+    }
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val fraction = progressFraction.coerceIn(0f, 1f)
@@ -95,7 +141,7 @@ fun VideoScrubPreviewOverlay(
                     tile = tile,
                     videoShot = videoShot,
                     width = previewWidth,
-                    previewAspectRatio = previewAspectRatio,
+                    height = previewHeight,
                     refererUrl = refererUrl,
                 )
             }
@@ -118,17 +164,12 @@ private fun VideoShotTilePreview(
     tile: VideoShotTile,
     videoShot: BiliVideoShot,
     width: Dp,
-    previewAspectRatio: Float?,
+    height: Dp,
     refererUrl: String,
 ) {
-    val metadataAspectRatio = videoShot.tileWidth.toFloat() / videoShot.tileHeight.toFloat().coerceAtLeast(1f)
     var tileBitmap by remember(tile.imageUrl, tile.column, tile.row) {
         mutableStateOf<android.graphics.Bitmap?>(null)
     }
-    val aspectRatio = previewAspectRatio ?: tileBitmap?.let { bitmap ->
-        bitmap.width.toFloat() / bitmap.height.toFloat().coerceAtLeast(1f)
-    } ?: metadataAspectRatio
-    val height = width / aspectRatio.coerceIn(0.5f, 2.4f)
 
     LaunchedEffect(tile, videoShot.tileColumns, videoShot.tileRows, refererUrl) {
         tileBitmap = VideoShotImageLoader.loadTile(tile, videoShot, refererUrl)
@@ -147,7 +188,8 @@ private fun VideoShotTilePreview(
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = null,
-                contentScale = if (previewAspectRatio != null) ContentScale.FillBounds else ContentScale.Crop,
+                // 与 Mac .fill 一致：等比铺满并裁掉雪碧格里的左右黑边，避免 FillBounds 压扁。
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .width(width)
                     .height(height),

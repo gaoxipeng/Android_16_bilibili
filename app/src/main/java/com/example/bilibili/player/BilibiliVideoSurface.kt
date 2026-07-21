@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.height
@@ -50,15 +51,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -88,6 +94,8 @@ private val VideoControlBarHeight = 34.dp
 private val VideoControlBarBottomGap = 6.dp
 private val VideoControlBorderWidth = 0.5.dp
 private val VideoControlBorderColor = Color(0x80999999)
+/** 对齐 Mac VideoControlLabelStyle：白字在亮画面上靠软阴影保可读。 */
+private val VideoControlLabelShadowColor = Color.Black.copy(alpha = 0.72f)
 private const val StalledBufferRefreshDelayMs = 30_000L
 
 @Composable
@@ -1199,14 +1207,14 @@ private fun VideoControls(
                 text = formatVideoTime(positionMs),
                 modifier = Modifier.widthIn(min = 42.dp),
                 color = Color.White,
-                style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
             )
             IconButton(
                 onClick = onPlayPause,
                 modifier = Modifier.size(25.dp),
             ) {
-                Icon(
+                VideoControlIcon(
                     painter = painterResource(
                         if (isPlaying) R.drawable.ic_video_pause else R.drawable.ic_video_play,
                     ),
@@ -1234,8 +1242,10 @@ private fun VideoControls(
                     Text(
                         text = "弹",
                         color = if (danmakuVisible) Color.White else Color.White.copy(alpha = 0.42f),
-                        fontWeight = if (danmakuVisible) FontWeight.Bold else FontWeight.Normal,
-                        style = TextStyle(fontSize = 14.sp),
+                        style = videoControlLabelTextStyle(
+                            fontSize = 14.sp,
+                            fontWeight = if (danmakuVisible) FontWeight.Bold else FontWeight.Normal,
+                        ),
                     )
                 }
             }
@@ -1269,8 +1279,7 @@ private fun VideoControls(
                     Text(
                         text = "选集",
                         color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(fontSize = 14.sp),
+                        style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                     )
                 }
             }
@@ -1280,7 +1289,7 @@ private fun VideoControls(
             Text(
                 text = speedLabel(speed),
                 color = Color.White,
-                style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                style = videoControlLabelTextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold),
                 modifier = Modifier.clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
@@ -1294,7 +1303,7 @@ private fun VideoControls(
                 text = formatVideoTime((durationMs - positionMs).coerceAtLeast(0L)),
                 modifier = Modifier.widthIn(min = 42.dp),
                 color = Color.White,
-                style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
                 textAlign = TextAlign.End,
             )
@@ -1303,6 +1312,52 @@ private fun VideoControls(
 }
 
 private val VideoControlCapsuleShape = RoundedCornerShape(percent = 50)
+
+@Composable
+private fun videoControlLabelTextStyle(
+    fontSize: TextUnit,
+    fontWeight: FontWeight,
+): TextStyle {
+    val density = LocalDensity.current
+    val shadow = remember(density) {
+        Shadow(
+            color = VideoControlLabelShadowColor,
+            offset = Offset(0f, with(density) { 1.dp.toPx() }),
+            blurRadius = with(density) { 2.8.dp.toPx() },
+        )
+    }
+    return TextStyle(
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        shadow = shadow,
+    )
+}
+
+@Composable
+private fun VideoControlIcon(
+    painter: Painter,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    tint: Color = Color.White,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Icon(
+            painter = painter,
+            contentDescription = null,
+            modifier = Modifier
+                .matchParentSize()
+                .offset(y = 1.dp)
+                .blur(2.5.dp),
+            tint = VideoControlLabelShadowColor.copy(alpha = VideoControlLabelShadowColor.alpha * tint.alpha),
+        )
+        Icon(
+            painter = painter,
+            contentDescription = contentDescription,
+            modifier = Modifier.matchParentSize(),
+            tint = tint,
+        )
+    }
+}
 
 @Composable
 private fun VideoOverlayTextButton(
@@ -1325,10 +1380,7 @@ private fun VideoOverlayTextButton(
         Text(
             text = text,
             color = Color.White,
-            style = TextStyle(
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-            ),
+            style = videoControlLabelTextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold),
             textAlign = TextAlign.Center,
         )
     }
