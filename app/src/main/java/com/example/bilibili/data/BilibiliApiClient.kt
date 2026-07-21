@@ -1208,14 +1208,43 @@ class BilibiliApiClient {
                 put("cid", cid.toString())
                 if (index != null) put("index", index)
             }
-            getJson(BilibiliEndpoints.VIDEO_SHOT, params, credential, referer = referer)
-                .let(BilibiliJsonParser::parseVideoShot)
+            val json = getJson(BilibiliEndpoints.VIDEO_SHOT, params, credential, referer = referer)
+            resolveVideoShot(json, referer)
         }.getOrNull()
         val shot = fetchShot(index = "1") ?: fetchShot(index = null) ?: fetchShot(index = "2")
         synchronized(videoShotCache) {
             videoShotCache[cid] = shot
         }
         shot
+    }
+
+    private suspend fun resolveVideoShot(
+        json: org.json.JSONObject,
+        referer: String,
+    ): BiliVideoShot? {
+        val parsed = BilibiliJsonParser.parseVideoShot(json) ?: return null
+        val data = json.optJSONObject("data") ?: return parsed
+        val pvdataUrl = data.optString("pvdata")
+            .trim()
+            .takeIf { it.isNotBlank() }
+            ?.let { raw ->
+                when {
+                    raw.startsWith("//") -> "https:$raw"
+                    raw.startsWith("http://") -> "https://${raw.removePrefix("http://")}"
+                    else -> raw
+                }
+            }
+        var indices = parsed.indexSeconds
+        if (pvdataUrl != null) {
+            val pvIndices = runCatching {
+                VideoShotTimeline.parsePvdataTimeline(
+                    getBytes(pvdataUrl, emptyMap(), referer = referer),
+                )
+            }.getOrDefault(emptyList())
+            indices = VideoShotTimeline.preferTimeline(indices, pvIndices)
+        }
+        indices = VideoShotTimeline.normalized(indices, parsed.totalTiles)
+        return if (indices == parsed.indexSeconds) parsed else parsed.copy(indexSeconds = indices)
     }
 
     suspend fun getPlayUrl(

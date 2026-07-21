@@ -41,10 +41,15 @@ data class VideoShotTile(
 fun BiliVideoShot.locateTile(positionMs: Long, durationMs: Long): VideoShotTile? {
     if (images.isEmpty() || totalTiles <= 0) return null
     val thumbnailIndex = if (indexSeconds.isNotEmpty()) {
-        val positionSec = (positionMs / 1000L).toInt()
-        indexSeconds.indexOfLast { it <= positionSec }.coerceAtLeast(0)
+        // 与 Mac tile(at:) 一致：按秒向下取整，超出时间轴覆盖范围则不显示。
+        val positionSec = (positionMs / 1000L).toInt().coerceAtLeast(0)
+        val lastCoveredSecond = indexSeconds.last()
+        if (positionSec > lastCoveredSecond) return null
+        val index = indexSeconds.indexOfLast { it <= positionSec }.coerceAtLeast(0)
+        if (index >= totalTiles) return null
+        index
     } else if (durationMs > 0L) {
-        ((positionMs.toFloat() / durationMs.toFloat()) * totalTiles)
+        ((positionMs.toDouble() / durationMs.toDouble()) * totalTiles)
             .roundToInt()
             .coerceIn(0, totalTiles - 1)
     } else {
