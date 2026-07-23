@@ -1,6 +1,7 @@
 package com.example.bilibili
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -26,5 +27,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             BilibiliApp()
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 }

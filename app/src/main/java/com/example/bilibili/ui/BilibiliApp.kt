@@ -1,7 +1,9 @@
 package com.example.bilibili.ui
 
 import android.app.Activity
+import android.content.Intent
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -31,6 +33,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +46,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.core.util.Consumer
 import com.example.bilibili.data.AppearanceMode
 import com.example.bilibili.data.AppearanceSettingsStore
 import com.example.bilibili.data.BiliHistoryItem
@@ -511,6 +515,48 @@ fun BilibiliApp() {
                 coordinator.requestInlinePlayback(playbackKey)
             }
         }
+    }
+
+    fun isSameMediaSessionVideo(current: BiliVideoItem, target: BiliVideoItem): Boolean {
+        if (target.epid > 0L && current.epid == target.epid) return true
+        if (target.bvid.isNotBlank() && current.bvid == target.bvid) {
+            return target.cid <= 0L || current.cid <= 0L || current.cid == target.cid
+        }
+        if (target.aid > 0L && current.aid == target.aid) {
+            return target.cid <= 0L || current.cid <= 0L || current.cid == target.cid
+        }
+        return false
+    }
+
+    val revealOrOpenVideoFromMediaSession: (BiliVideoItem) -> Unit = { video ->
+        liveRoomOpen = false
+        val detailIndex = navController.stack.indexOfLast { entry ->
+            entry is AppNavEntry.VideoDetail && isSameMediaSessionVideo(entry.video, video)
+        }
+        if (detailIndex >= 0) {
+            while (navController.stack.lastIndex > detailIndex) {
+                navController.pop() ?: break
+            }
+        } else {
+            openVideoDetail(video)
+        }
+    }
+    val openFromMediaSessionLatest = rememberUpdatedState(revealOrOpenVideoFromMediaSession)
+    val activity = context as? ComponentActivity
+    DisposableEffect(activity) {
+        if (activity == null) {
+            return@DisposableEffect onDispose { }
+        }
+        val consume: (Intent?) -> Unit = { intent ->
+            val video = VideoPlaybackMediaBridge.consumeOpenVideoExtra(intent)
+            if (video != null) {
+                openFromMediaSessionLatest.value.invoke(video)
+            }
+        }
+        consume(activity.intent)
+        val listener = Consumer<Intent> { intent -> consume(intent) }
+        activity.addOnNewIntentListener(listener)
+        onDispose { activity.removeOnNewIntentListener(listener) }
     }
 
     fun openHistoryVideo(item: BiliHistoryItem) {

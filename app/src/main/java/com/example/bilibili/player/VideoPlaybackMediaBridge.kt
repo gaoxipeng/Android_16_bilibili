@@ -8,9 +8,18 @@ import android.os.Looper
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import com.example.bilibili.MainActivity
+import com.example.bilibili.data.BiliVideoItem
 
 object VideoPlaybackMediaBridge {
     const val EXTRA_OPEN_BVID = "open_bvid"
+    const val EXTRA_OPEN_CID = "open_cid"
+    const val EXTRA_OPEN_AID = "open_aid"
+    const val EXTRA_OPEN_EPID = "open_epid"
+    const val EXTRA_OPEN_TITLE = "open_title"
+    const val EXTRA_OPEN_ARTIST = "open_artist"
+    const val EXTRA_OPEN_COVER = "open_cover"
+    const val EXTRA_OPEN_AUTHOR_MID = "open_author_mid"
+    const val EXTRA_OPEN_DURATION = "open_duration"
 
     @Volatile
     private var appContext: Context? = null
@@ -96,10 +105,7 @@ object VideoPlaybackMediaBridge {
         val pendingIntent = PendingIntent.getActivity(
             context,
             playbackKey.hashCode(),
-            Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra(EXTRA_OPEN_BVID, metadata.bvid)
-            },
+            buildSessionActivityIntent(context, metadata),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         session = MediaSession.Builder(context, navigationPlayer)
@@ -122,7 +128,8 @@ object VideoPlaybackMediaBridge {
         metadata: VideoPlaybackMetadata,
     ) {
         if (sessionPlaybackKey != playbackKey) return
-        val signature = "${metadata.title}:${metadata.artworkUrl}:${metadata.bvid}"
+        val signature =
+            "${metadata.title}:${metadata.artworkUrl}:${metadata.bvid}:${metadata.cid}:${metadata.epid}"
         if (signature == publishedMetadataSignature) return
         publishedMetadataSignature = signature
         cachedPlaybackMetadata = metadata
@@ -133,10 +140,7 @@ object VideoPlaybackMediaBridge {
         val pendingIntent = PendingIntent.getActivity(
             context,
             playbackKey.hashCode(),
-            Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra(EXTRA_OPEN_BVID, metadata.bvid)
-            },
+            buildSessionActivityIntent(context, metadata),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         currentSession.setSessionActivity(pendingIntent)
@@ -331,5 +335,61 @@ object VideoPlaybackMediaBridge {
         runCatching {
             context.stopService(Intent(context, VideoPlaybackMediaService::class.java))
         }
+    }
+
+    private fun buildSessionActivityIntent(
+        context: Context,
+        metadata: VideoPlaybackMetadata,
+    ): Intent =
+        Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            putExtra(EXTRA_OPEN_BVID, metadata.bvid)
+            putExtra(EXTRA_OPEN_CID, metadata.cid)
+            putExtra(EXTRA_OPEN_AID, metadata.aid)
+            putExtra(EXTRA_OPEN_EPID, metadata.epid)
+            putExtra(EXTRA_OPEN_TITLE, metadata.title)
+            putExtra(EXTRA_OPEN_ARTIST, metadata.artist)
+            putExtra(EXTRA_OPEN_COVER, metadata.artworkUrl)
+            putExtra(EXTRA_OPEN_AUTHOR_MID, metadata.authorMid)
+            putExtra(EXTRA_OPEN_DURATION, metadata.durationSeconds)
+        }
+
+    /**
+     * Reads and clears media-notification open extras so configuration changes
+     * do not reopen the same video repeatedly.
+     */
+    fun consumeOpenVideoExtra(intent: Intent?): BiliVideoItem? {
+        if (intent == null) return null
+        val bvid = intent.getStringExtra(EXTRA_OPEN_BVID).orEmpty()
+        val epid = intent.getLongExtra(EXTRA_OPEN_EPID, 0L)
+        if (bvid.isBlank() && epid <= 0L) return null
+        val video = BiliVideoItem(
+            bvid = bvid.ifBlank { if (epid > 0L) "pgc:$epid" else "" },
+            aid = intent.getLongExtra(EXTRA_OPEN_AID, 0L),
+            title = intent.getStringExtra(EXTRA_OPEN_TITLE).orEmpty(),
+            coverUrl = intent.getStringExtra(EXTRA_OPEN_COVER).orEmpty(),
+            authorName = intent.getStringExtra(EXTRA_OPEN_ARTIST).orEmpty(),
+            authorMid = intent.getLongExtra(EXTRA_OPEN_AUTHOR_MID, 0L),
+            viewCount = 0L,
+            danmakuCount = 0L,
+            likeCount = 0L,
+            durationSeconds = intent.getIntExtra(EXTRA_OPEN_DURATION, 0),
+            cid = intent.getLongExtra(EXTRA_OPEN_CID, 0L),
+            epid = epid,
+        )
+        intent.removeExtra(EXTRA_OPEN_BVID)
+        intent.removeExtra(EXTRA_OPEN_CID)
+        intent.removeExtra(EXTRA_OPEN_AID)
+        intent.removeExtra(EXTRA_OPEN_EPID)
+        intent.removeExtra(EXTRA_OPEN_TITLE)
+        intent.removeExtra(EXTRA_OPEN_ARTIST)
+        intent.removeExtra(EXTRA_OPEN_COVER)
+        intent.removeExtra(EXTRA_OPEN_AUTHOR_MID)
+        intent.removeExtra(EXTRA_OPEN_DURATION)
+        return video
     }
 }

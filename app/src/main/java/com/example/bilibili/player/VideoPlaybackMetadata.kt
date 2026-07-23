@@ -9,6 +9,11 @@ data class VideoPlaybackMetadata(
     val artist: String,
     val artworkUrl: String,
     val bvid: String,
+    val cid: Long = 0L,
+    val aid: Long = 0L,
+    val epid: Long = 0L,
+    val authorMid: Long = 0L,
+    val durationSeconds: Int = 0,
 ) {
     fun toMediaMetadata(): MediaMetadata {
         val builder = MediaMetadata.Builder()
@@ -22,6 +27,22 @@ data class VideoPlaybackMetadata(
         return builder.build()
     }
 
+    fun toSeedVideo(): BiliVideoItem =
+        BiliVideoItem(
+            bvid = bvid,
+            aid = aid,
+            title = title,
+            coverUrl = artworkUrl,
+            authorName = artist,
+            authorMid = authorMid,
+            viewCount = 0L,
+            danmakuCount = 0L,
+            likeCount = 0L,
+            durationSeconds = durationSeconds,
+            cid = cid,
+            epid = epid,
+        )
+
     companion object {
         fun fromVideo(video: BiliVideoItem): VideoPlaybackMetadata =
             VideoPlaybackMetadata(
@@ -29,6 +50,11 @@ data class VideoPlaybackMetadata(
                 artist = video.authorName,
                 artworkUrl = normalizePlaybackArtworkUrl(video.coverUrl),
                 bvid = video.bvid,
+                cid = video.cid,
+                aid = video.aid,
+                epid = video.epid,
+                authorMid = video.authorMid,
+                durationSeconds = video.durationSeconds,
             )
     }
 }
