@@ -149,11 +149,13 @@ fun createExoPlayer(
         .build()
         .apply {
             volume = 1f
-            setMediaSource(buildVideoMediaSource(context, stream, playbackMetadata, referer = referer))
+            val startMs = startPositionMs.coerceAtLeast(0L)
+            setMediaSource(
+                buildVideoMediaSource(context, stream, playbackMetadata, referer = referer),
+                startMs,
+            )
             playWhenReady = true
             prepare()
-            if (startPositionMs > 0L) seekTo(startPositionMs)
-            playWhenReady = true
             play()
             addListener(
                 object : Player.Listener {

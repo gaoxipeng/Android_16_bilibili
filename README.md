@@ -2,7 +2,7 @@
 
 一个基于 Jetpack Compose 的 Android Bilibili 客户端实验项目，当前已实现首页、关注、直播、历史、搜索、用户主页、视频详情与番剧/合集播放等主要能力。
 
-**当前版本：20260721**（需 Android 16+）
+**当前版本：20260723**（需 Android 16+）
 
 ## 下载
 
@@ -107,6 +107,13 @@ app/build/outputs/apk/release/app-release.apk
 - 设置页「使用说明」可查看更完整的功能介绍
 
 ## 更新日志
+
+### 20260723
+
+- 版本号 `20260723`（versionCode 15）
+- 从视频卡片进入详情时强制刷新 playurl，按服务端 `last_play_time` / `last_play_cid` 续播（对齐 Mac）
+- 起播位置改为 `setMediaSource` 传入，避免续播 seek 失效
+- 设置页关于版本号同步为 20260723
 
 ### 20260721
 

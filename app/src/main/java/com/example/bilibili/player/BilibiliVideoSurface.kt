@@ -312,6 +312,17 @@ fun BilibiliVideoSurface(
             val samePlaybackContent = boundContentPlaybackKey == contentPlaybackKey ||
                 (boundCid > 0L && boundCid == stream.cid && stream.cid > 0L)
             if (samePlaybackContent && existingPlayer.playbackState != Player.STATE_IDLE) {
+                // Stream metadata may refresh with newer last_play_* after a force playurl fetch.
+                // If we are still near the start, seek to the server resume position.
+                val resumeMs = stream.resumePositionMs(
+                    targetCid = stream.cid,
+                    durationSeconds = historyVideo?.durationSeconds ?: 0,
+                )
+                val currentMs = existingPlayer.currentPosition.coerceAtLeast(0L)
+                if (resumeMs > 0L && currentMs < 1_500L && resumeMs > currentMs + 2_000L) {
+                    existingPlayer.seekTo(resumeMs)
+                    positionMs = resumeMs
+                }
                 boundStreamToken = streamToken
                 boundContentPlaybackKey = contentPlaybackKey
                 return@LaunchedEffect

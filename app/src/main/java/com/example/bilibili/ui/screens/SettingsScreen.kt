@@ -72,7 +72,7 @@ import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.theme.isAppLightTheme
 import kotlinx.coroutines.launch
 
-private const val AppVersionName = "20260721"
+private const val AppVersionName = "20260723"
 
 private val SettingsBottomBarInset = 96.dp
 private val SettingsAboutIconSize = 58.dp

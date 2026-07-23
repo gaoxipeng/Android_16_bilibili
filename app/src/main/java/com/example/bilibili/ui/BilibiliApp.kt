@@ -355,18 +355,23 @@ fun BilibiliApp() {
 
     fun credential() = activeAccount?.credential
 
-    suspend fun resolvePlayUrl(video: BiliVideoItem): BiliPlayStream? = runCatching {
+    suspend fun resolvePlayUrl(
+        video: BiliVideoItem,
+        forceNetwork: Boolean = false,
+    ): BiliPlayStream? = runCatching {
         val playbackId = video.playbackId()
         val targetCid = video.cid.takeIf { it > 0L }
-        playUrls[playbackId]?.let { cached ->
-            val cacheValid = if (video.isPgcPlayback()) {
-                cached.videoUrl.isNotBlank() &&
-                    (targetCid == null || targetCid == 0L || cached.cid == targetCid)
-            } else {
-                cached.aid > 0L && cached.cid > 0L &&
-                    (targetCid == null || cached.cid == targetCid)
+        if (!forceNetwork) {
+            playUrls[playbackId]?.let { cached ->
+                val cacheValid = if (video.isPgcPlayback()) {
+                    cached.videoUrl.isNotBlank() &&
+                        (targetCid == null || targetCid == 0L || cached.cid == targetCid)
+                } else {
+                    cached.aid > 0L && cached.cid > 0L &&
+                        (targetCid == null || cached.cid == targetCid)
+                }
+                if (cacheValid && !cached.isPlayStreamCacheStale()) return@runCatching cached
             }
-            if (cacheValid && !cached.isPlayStreamCacheStale()) return@runCatching cached
         }
         if (video.isPgcPlayback()) {
             val epid = video.pgcEpid()
@@ -480,7 +485,8 @@ fun BilibiliApp() {
             val cred = credential()
             val seededVideo = seedVideoPartPage(video, partPage)
             val resolvedVideo = api.resolveVideoForPlayback(seededVideo, cred)
-            val playStream = resolvePlayUrl(resolvedVideo)
+            // Match Mac: always refresh playurl on detail open so last_play_* is current.
+            val playStream = resolvePlayUrl(resolvedVideo, forceNetwork = true)
             playStream?.let { stream -> playUrls.cachePlayStream(resolvedVideo, stream) }
             val resolvedDetailKey = detailPlaybackKeyFor(resolvedVideo)
             if (navController.top is AppNavEntry.VideoDetail) {
@@ -511,10 +517,7 @@ fun BilibiliApp() {
         lastOpenedHistoryKid = item.kid.takeIf { it.isNotBlank() }
         scope.launch {
             val resolvedVideo = api.resolveHistoryVideo(item, credential())
-            if (resolvedVideo.cid > 0L && resolvedVideo.bvid.isNotBlank()) {
-                playUrls.remove(resolvedVideo.bvid)
-            }
-            val playStream = resolvePlayUrl(resolvedVideo)
+            val playStream = resolvePlayUrl(resolvedVideo, forceNetwork = true)
             playStream?.let { stream -> playUrls.cachePlayStream(resolvedVideo, stream) }
             val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
             if (!replacingVideoDetail) {
