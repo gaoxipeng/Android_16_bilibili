@@ -3,6 +3,11 @@
 一个基于 Jetpack Compose 的 Android Bilibili 客户端实验项目，当前已实现首页、关注、直播、历史、搜索、用户主页、视频详情与番剧/合集播放等主要能力。
 
 **当前版本：20260723**（需 Android 16+）
+<img width="1280" height="2772" alt="Screenshot_2026-07-23-11-37-12-774_com example b" src="https://github.com/user-attachments/assets/90050301-a8d4-4737-9438-c81cc0f89fff" />
+<img width="1280" height="2772" alt="Screenshot_2026-07-23-11-37-23-711_com example b" src="https://github.com/user-attachments/assets/5a7377ca-8bd3-4c0a-b980-168790b6f66f" />
+<img width="1280" height="2772" alt="Screenshot_2026-07-23-11-38-03-930_com example b" src="https://github.com/user-attachments/assets/1acd5bbe-110f-42df-ac7e-9b9a6d56e6ea" />
+<img width="1280" height="2772" alt="Screenshot_2026-07-23-11-38-32-881_com example b" src="https://github.com/user-attachments/assets/a17040c9-cbe1-4dcc-96bb-c0700e10b102" />
+<img width="1280" height="2772" alt="Screenshot_2026-07-23-11-38-49-988_com example b" src="https://github.com/user-attachments/assets/38897a06-5d4c-4966-932c-3a1dc51343e9" />
 
 ## 下载
 
