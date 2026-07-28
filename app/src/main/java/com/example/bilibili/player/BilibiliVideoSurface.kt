@@ -96,7 +96,7 @@ private val VideoControlBorderWidth = 0.5.dp
 private val VideoControlBorderColor = Color(0x80999999)
 /** 对齐 Mac VideoControlLabelStyle：白字在亮画面上靠软阴影保可读。 */
 private val VideoControlLabelShadowColor = Color.Black.copy(alpha = 0.72f)
-private const val StalledBufferRefreshDelayMs = 12_000L
+private const val StalledBufferRefreshDelayMs = 3_000L
 
 @Composable
 fun BilibiliVideoSurface(
