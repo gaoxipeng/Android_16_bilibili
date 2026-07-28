@@ -323,11 +323,9 @@ fun BilibiliApp() {
             webSession.applyCredential(credential)
             PlaybackCookieProvider.update(credential.toCookieHeader())
         }
-        playUrls.keys.toList().forEach { key ->
-            if (playUrls[key]?.isPlayStreamCacheStale() == true) {
-                playUrls.remove(key)
-            }
-        }
+        // Do not remove stale playUrls here. resolveStoredPlayStream / resolvePlayUrl already
+        // reject stale entries, and clearing the active detail stream tears down ExoPlayer
+        // before a replacement URL arrives (overnight lock-screen resume spin).
     }
 
     DisposableEffect(lifecycleOwner, backgroundPlaybackEnabled, activeAccount?.uid) {
@@ -427,12 +425,10 @@ fun BilibiliApp() {
     }.getOrNull()
 
     fun refreshPlayStream(video: BiliVideoItem) {
-        playUrls.remove(video.playbackId())
-        if (video.bvid.isNotBlank() && !video.bvid.startsWith("pgc") && video.cid <= 0L) {
-            playUrls.remove(video.bvid)
-        }
+        // Keep the current stream visible until the network refresh overwrites it. Removing
+        // first makes playStream null and disposes ExoPlayer, losing mid-playback position.
         coordinator.releaseHandoffPlayer()
-        scope.launch { resolvePlayUrl(video) }
+        scope.launch { resolvePlayUrl(video, forceNetwork = true) }
     }
 
     suspend fun seedVideoPartPage(video: BiliVideoItem, partPage: Int): BiliVideoItem {

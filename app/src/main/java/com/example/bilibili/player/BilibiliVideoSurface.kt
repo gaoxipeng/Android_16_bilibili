@@ -96,7 +96,7 @@ private val VideoControlBorderWidth = 0.5.dp
 private val VideoControlBorderColor = Color(0x80999999)
 /** 对齐 Mac VideoControlLabelStyle：白字在亮画面上靠软阴影保可读。 */
 private val VideoControlLabelShadowColor = Color.Black.copy(alpha = 0.72f)
-private const val StalledBufferRefreshDelayMs = 30_000L
+private const val StalledBufferRefreshDelayMs = 12_000L
 
 @Composable
 fun BilibiliVideoSurface(
@@ -133,6 +133,7 @@ fun BilibiliVideoSurface(
     val onStreamSourceErrorState = rememberUpdatedState(onStreamSourceError)
     val streamToken =
         "${stream.cid}:${stream.videoUrl}:${stream.audioUrl.orEmpty()}:${stream.lastPlayCid}:${stream.lastPlayTimeMs}"
+    val streamMediaIdentity = stream.mediaIdentity()
     val handoffLookupKey = remember(playbackKey, historyVideo?.bvid, historyVideo?.cid) {
         historyVideo?.let { coordinator.handoffPlaybackKeyForVideo(it) } ?: playbackKey
     }
@@ -141,6 +142,9 @@ fun BilibiliVideoSurface(
     }
     var boundStreamToken by remember(playbackKey) {
         mutableStateOf(if (initialHandoffPlayer != null) streamToken else null)
+    }
+    var boundMediaIdentity by remember(playbackKey) {
+        mutableStateOf(if (initialHandoffPlayer != null) streamMediaIdentity else null)
     }
     var boundContentPlaybackKey by remember(playbackKey) {
         mutableStateOf(if (initialHandoffPlayer != null) contentPlaybackKey else null)
@@ -294,6 +298,7 @@ fun BilibiliVideoSurface(
                 player = handedOff
                 playerHandedOff = false
                 boundStreamToken = streamToken
+                boundMediaIdentity = streamMediaIdentity
                 boundContentPlaybackKey = contentPlaybackKey
                 return@LaunchedEffect
             }
@@ -312,6 +317,38 @@ fun BilibiliVideoSurface(
             val samePlaybackContent = boundContentPlaybackKey == contentPlaybackKey ||
                 (boundCid > 0L && boundCid == stream.cid && stream.cid > 0L)
             if (samePlaybackContent && existingPlayer.playbackState != Player.STATE_IDLE) {
+                if (boundMediaIdentity != streamMediaIdentity) {
+                    // Playurl refresh (e.g. overnight CDN expiry): keep the player/session and
+                    // swap media sources at the current position instead of ignoring the new URLs.
+                    val startPositionMs = existingPlayer.currentPosition.coerceAtLeast(0L)
+                    existingPlayer.setMediaSource(
+                        buildVideoMediaSource(
+                            context = context,
+                            stream = stream,
+                            playbackMetadata = playbackMetadata,
+                            referer = shotRefererUrl,
+                        ),
+                        startPositionMs,
+                    )
+                    existingPlayer.prepare()
+                    existingPlayer.playWhenReady = playbackEnabled
+                    if (playbackEnabled) {
+                        existingPlayer.play()
+                    } else {
+                        existingPlayer.pause()
+                    }
+                    boundStreamToken = streamToken
+                    boundMediaIdentity = streamMediaIdentity
+                    boundContentPlaybackKey = contentPlaybackKey
+                    playerHandedOff = false
+                    positionMs = startPositionMs
+                    durationMs = 0L
+                    playbackState = existingPlayer.playbackState
+                    isPlaying = existingPlayer.isPlaying
+                    isBuffering = true
+                    sourceErrorReported = false
+                    return@LaunchedEffect
+                }
                 // Stream metadata may refresh with newer last_play_* after a force playurl fetch.
                 // If we are still near the start, seek to the server resume position.
                 val resumeMs = stream.resumePositionMs(
@@ -324,6 +361,7 @@ fun BilibiliVideoSurface(
                     positionMs = resumeMs
                 }
                 boundStreamToken = streamToken
+                boundMediaIdentity = streamMediaIdentity
                 boundContentPlaybackKey = contentPlaybackKey
                 return@LaunchedEffect
             }
@@ -360,6 +398,7 @@ fun BilibiliVideoSurface(
                 existingPlayer.pause()
             }
             boundStreamToken = streamToken
+            boundMediaIdentity = streamMediaIdentity
             boundContentPlaybackKey = contentPlaybackKey
             playerHandedOff = false
             positionMs = startPositionMs
@@ -372,6 +411,7 @@ fun BilibiliVideoSurface(
 
         playerHandedOff = false
         boundStreamToken = streamToken
+        boundMediaIdentity = streamMediaIdentity
         boundContentPlaybackKey = contentPlaybackKey
 
         fun bindHandoffPlayer(handedOff: ExoPlayer) {
