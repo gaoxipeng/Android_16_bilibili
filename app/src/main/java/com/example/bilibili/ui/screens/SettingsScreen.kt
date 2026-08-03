@@ -72,8 +72,6 @@ import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.example.bilibili.ui.theme.isAppLightTheme
 import kotlinx.coroutines.launch
 
-private const val AppVersionName = "20260728"
-
 private val SettingsBottomBarInset = 96.dp
 private val SettingsAboutIconSize = 58.dp
 private val SettingsAboutIconCornerRadius = 13.dp
@@ -187,6 +185,10 @@ fun SettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val appVersionName = remember(context) {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    }
     var feedLayoutExpanded by remember { mutableStateOf(false) }
     var appearanceExpanded by remember { mutableStateOf(false) }
     var accountExpanded by remember { mutableStateOf(false) }
@@ -254,7 +256,7 @@ fun SettingsScreen(
                     SettingsHelpEntryCard(onOpen = { showHelp = true })
                 }
                 item {
-                    SettingsAboutCard(versionName = AppVersionName)
+                    SettingsAboutCard(versionName = appVersionName)
                 }
             }
         }

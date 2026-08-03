@@ -276,6 +276,7 @@ fun VideoDetailScreen(
     episodeSwitchScope: CoroutineScope? = null,
     onOpenUgcEpisode: (BiliVideoItem) -> Unit = {},
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
+    onOpenCommentVideo: (BiliVideoItem, Int) -> Unit = onOpenDescriptionVideo,
     onSearchTagClick: (String) -> Unit = {},
     playbackActive: Boolean = true,
     onStreamSourceError: (BiliVideoItem) -> Unit = {},
@@ -880,7 +881,7 @@ fun VideoDetailScreen(
                 )
             }
             is BiliLinkTarget.Video -> {
-                onOpenDescriptionVideo(
+                onOpenCommentVideo(
                     BiliVideoItem(
                         bvid = target.bvid,
                         aid = target.aid,
@@ -2253,6 +2254,9 @@ private fun VideoCommentRow(
                     add("赞 ${formatBiliCount(comment.likeCount)}")
                 }.joinToString("  "),
                 style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Visible,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
             )
         }

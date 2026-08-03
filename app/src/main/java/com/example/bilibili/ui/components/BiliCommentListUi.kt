@@ -306,6 +306,9 @@ fun BiliCommentRow(
                     add("赞 ${formatBiliCount(comment.likeCount)}")
                 }.joinToString("  "),
                 style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Visible,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
             )
         }

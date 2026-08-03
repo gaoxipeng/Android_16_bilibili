@@ -1195,7 +1195,8 @@ private fun UserProfileHeader(
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Visible,
                                         textAlign = TextAlign.Center,
                                         modifier = Modifier
                                             .fillMaxWidth()

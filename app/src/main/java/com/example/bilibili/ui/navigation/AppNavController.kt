@@ -68,13 +68,14 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
     val top: AppNavEntry? get() = stack.lastOrNull()
     val hasOverlay: Boolean get() = stack.isNotEmpty() || exitingLayer != null
 
-    fun push(entry: AppNavEntry) {
+    fun push(entry: AppNavEntry, preserveCurrentVideoDetail: Boolean = false) {
         pendingEnterKey = entry.stableKey(stack.size)
         pendingExitKey = null
         stack = when (entry) {
             is AppNavEntry.Search -> stack.filterNot { it is AppNavEntry.Search } + entry
-            is AppNavEntry.VideoDetail -> when (stack.lastOrNull()) {
-                is AppNavEntry.VideoDetail -> stack.dropLast(1) + entry
+            is AppNavEntry.VideoDetail -> when {
+                preserveCurrentVideoDetail -> stack + entry
+                stack.lastOrNull() is AppNavEntry.VideoDetail -> stack.dropLast(1) + entry
                 else -> stack + entry
             }
             is AppNavEntry.UserProfile -> stack + entry

@@ -468,13 +468,18 @@ fun BilibiliApp() {
     fun openVideoDetail(
         video: BiliVideoItem,
         partPage: Int = 0,
+        keepParentForComment: Boolean = false,
     ) {
         val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
+        val shouldPush = !replacingVideoDetail || keepParentForComment
         val initialVideo = enrichVideoForDetailOpen(video, playUrls)
         val handoffKey = coordinator.handoffPlaybackKeyForVideo(initialVideo)
             ?: detailPlaybackKeyFor(initialVideo)
-        if (!replacingVideoDetail) {
-            navController.push(AppNavEntry.VideoDetail(initialVideo))
+        if (shouldPush) {
+            navController.push(
+                AppNavEntry.VideoDetail(initialVideo),
+                preserveCurrentVideoDetail = keepParentForComment,
+            )
             if (coordinator.hasHandoffPlayer(handoffKey)) {
                 coordinator.requestInlinePlayback(handoffKey)
             } else {
@@ -502,7 +507,7 @@ fun BilibiliApp() {
             } else {
                 navController.push(AppNavEntry.VideoDetail(resolvedVideo))
             }
-            if (replacingVideoDetail) {
+            if (replacingVideoDetail && !keepParentForComment) {
                 coordinator.releaseHandoffPlayer()
             }
             if (playStream != null || replacingVideoDetail) {
@@ -1378,6 +1383,9 @@ fun BilibiliApp() {
                 onOpenDescriptionVideo = { video, partPage ->
                     openVideoDetail(video, partPage = partPage)
                 },
+                onOpenCommentVideo = { video, partPage ->
+                    openVideoDetail(video, partPage = partPage, keepParentForComment = true)
+                },
                 onSearchTagClick = ::openSearch,
                 onSwitchVideoPart = ::switchVideoPart,
                 onUpdateVideoSeed = ::updateVideoDetailSeed,
@@ -1577,6 +1585,7 @@ private fun AppNavStackLayers(
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
+    onOpenCommentVideo: (BiliVideoItem, Int) -> Unit,
     onSearchTagClick: (String) -> Unit,
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?, Boolean) -> Unit,
     onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit,
@@ -1636,6 +1645,7 @@ private fun AppNavStackLayers(
                         onPopNav = onPopNav,
                         onOpenVideo = onOpenVideo,
                         onOpenDescriptionVideo = onOpenDescriptionVideo,
+                        onOpenCommentVideo = onOpenCommentVideo,
                         onSearchTagClick = onSearchTagClick,
                         onSwitchVideoPart = onSwitchVideoPart,
                         onUpdateVideoSeed = onUpdateVideoSeed,
@@ -1670,6 +1680,7 @@ private fun AppNavEntryContent(
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit,
+    onOpenCommentVideo: (BiliVideoItem, Int) -> Unit,
     onSearchTagClick: (String) -> Unit,
     onSwitchVideoPart: (BiliVideoItem, BiliVideoPage, BiliPlayStream?, Boolean) -> Unit,
     onUpdateVideoSeed: (BiliVideoItem, BiliPlayStream) -> Unit,
@@ -1722,6 +1733,7 @@ private fun AppNavEntryContent(
                     onOpenVideo(video, 0)
                 },
                 onOpenDescriptionVideo = onOpenDescriptionVideo,
+                onOpenCommentVideo = onOpenCommentVideo,
                 onSearchTagClick = onSearchTagClick,
                 playbackActive = isActive,
                 onStreamSourceError = onRefreshPlayStream,

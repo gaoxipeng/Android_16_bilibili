@@ -2,7 +2,7 @@
 
 一个基于 Jetpack Compose 的 Android Bilibili 客户端实验项目，当前已实现首页、关注、直播、历史、搜索、用户主页、视频详情与番剧/合集播放等主要能力。
 
-**当前版本：20260728**（需 Android 16+）
+**当前版本：20260803**（需 Android 16+）
 <table>
   <tr>
     <td><img src="https://github.com/user-attachments/assets/90050301-a8d4-4737-9438-c81cc0f89fff" width="250"/></td>
@@ -119,6 +119,14 @@ app/build/outputs/apk/release/app-release.apk
 - 设置页「使用说明」可查看更完整的功能介绍
 
 ## 更新日志
+
+### 20260803
+
+- 版本号 `20260803`（versionCode 17）
+- 系统关闭自动旋转时，全屏不再强制锁定横/竖屏
+- 评论里点开视频链接会保留当前详情页，返回可回到原评论上下文
+- 评论元信息与个人主页数字行单行展示，避免窄屏换行挤压
+- 设置页关于版本号改为读取安装包 versionName
 
 ### 20260728
 
