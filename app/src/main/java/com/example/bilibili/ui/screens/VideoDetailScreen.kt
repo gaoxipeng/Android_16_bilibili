@@ -1872,11 +1872,11 @@ fun VideoDetailScreen(
                                             videoAuthorMid = currentVideo.authorMid,
                                             onAuthorClick = onAuthorClick,
                                             onLinkClick = handleCommentLinkClick,
-                                            onCommentImageClick = { pictures, index, bounds ->
+                                            onCommentImageClick = { pictures, index, bounds, boundsByIndex ->
                                                 commentImageViewer = CommentImageViewerRequest(
                                                     images = pictures.map(BiliViewerImage::fromCommentPicture),
                                                     initialIndex = index,
-                                                    sourceBoundsByIndex = mapOf(index to bounds),
+                                                    sourceBoundsByIndex = boundsByIndex,
                                                 )
                                             },
                                         )
@@ -1888,11 +1888,11 @@ fun VideoDetailScreen(
                                             videoAuthorMid = currentVideo.authorMid,
                                             onAuthorClick = onAuthorClick,
                                             onLinkClick = handleCommentLinkClick,
-                                            onCommentImageClick = { pictures, index, bounds ->
+                                            onCommentImageClick = { pictures, index, bounds, boundsByIndex ->
                                                 commentImageViewer = CommentImageViewerRequest(
                                                     images = pictures.map(BiliViewerImage::fromCommentPicture),
                                                     initialIndex = index,
-                                                    sourceBoundsByIndex = mapOf(index to bounds),
+                                                    sourceBoundsByIndex = boundsByIndex,
                                                 )
                                             },
                                         )
@@ -2185,7 +2185,7 @@ private fun VideoCommentRow(
     depth: Int = 0,
     videoAuthorMid: Long = 0L,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
-    onCommentImageClick: (List<BiliCommentPicture>, Int, Rect) -> Unit = { _, _, _ -> },
+    onCommentImageClick: (List<BiliCommentPicture>, Int, Rect, Map<Int, Rect>) -> Unit = { _, _, _, _ -> },
     onLinkClick: ((BiliLinkTarget) -> Unit)? = null,
 ) {
     val rowStart = CommentRowOuterStart + (depth * 24).dp
@@ -2242,8 +2242,8 @@ private fun VideoCommentRow(
             if (comment.pictures.isNotEmpty()) {
                 BiliCommentImageStrip(
                     pictures = comment.pictures,
-                    onOpenViewer = { index, bounds ->
-                        onCommentImageClick(comment.pictures, index, bounds)
+                    onOpenViewer = { index, bounds, boundsByIndex ->
+                        onCommentImageClick(comment.pictures, index, bounds, boundsByIndex)
                     },
                 )
             }

@@ -465,11 +465,11 @@ fun DynamicDetailScreen(
                                 depth = 0,
                                 onAuthorClick = onAuthorClick,
                                 onLinkClick = handleCommentLinkClick,
-                                onCommentImageClick = { pictures, index, bounds ->
+                                onCommentImageClick = { pictures, index, bounds, boundsByIndex ->
                                     commentImageViewer = DynamicCommentImageViewerRequest(
                                         images = pictures.map(BiliViewerImage::fromCommentPicture),
                                         initialIndex = index,
-                                        sourceBoundsByIndex = mapOf(index to bounds),
+                                        sourceBoundsByIndex = boundsByIndex,
                                     )
                                 },
                             )
@@ -480,11 +480,11 @@ fun DynamicDetailScreen(
                                 depth = 1,
                                 onAuthorClick = onAuthorClick,
                                 onLinkClick = handleCommentLinkClick,
-                                onCommentImageClick = { pictures, index, bounds ->
+                                onCommentImageClick = { pictures, index, bounds, boundsByIndex ->
                                     commentImageViewer = DynamicCommentImageViewerRequest(
                                         images = pictures.map(BiliViewerImage::fromCommentPicture),
                                         initialIndex = index,
-                                        sourceBoundsByIndex = mapOf(index to bounds),
+                                        sourceBoundsByIndex = boundsByIndex,
                                     )
                                 },
                             )

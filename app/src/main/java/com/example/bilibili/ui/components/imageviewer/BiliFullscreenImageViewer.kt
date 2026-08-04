@@ -128,9 +128,11 @@ fun BiliFullscreenImageViewer(
 
     fun dismissViewer(startBounds: Rect? = null) {
         if (!transitionClosing) {
-            val closeBounds = sourceBoundsByIndex[pagerState.currentPage]
+            val currentSourceBounds = sourceBoundsByIndex[pagerState.currentPage]
+            val currentBoundsProvider = dismissBoundsProviders[pagerState.currentPage]
+            val closeBounds = currentSourceBounds ?: currentBoundsProvider?.invoke()
             if (closeBounds != null) {
-                closeStartBounds = startBounds ?: dismissBoundsProviders[pagerState.currentPage]?.invoke()
+                closeStartBounds = startBounds ?: currentBoundsProvider?.invoke() ?: currentSourceBounds
                 transitionClosing = true
                 onCloseStart?.invoke()
                 scope.launch {

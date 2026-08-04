@@ -42,7 +42,7 @@ private fun commentImageGridColumns(count: Int): Int = when (count) {
 fun BiliCommentImageStrip(
     pictures: List<BiliCommentPicture>,
     modifier: Modifier = Modifier,
-    onOpenViewer: ((index: Int, bounds: Rect) -> Unit)? = null,
+    onOpenViewer: ((index: Int, bounds: Rect, boundsByIndex: Map<Int, Rect>) -> Unit)? = null,
 ) {
     if (pictures.isEmpty()) return
     val boundsByIndex = remember(pictures) { mutableMapOf<Int, Rect>() }
@@ -89,7 +89,7 @@ private fun CommentImageCell(
     index: Int,
     cellSize: Dp,
     boundsByIndex: MutableMap<Int, Rect>,
-    onOpenViewer: ((index: Int, bounds: Rect) -> Unit)?,
+    onOpenViewer: ((index: Int, bounds: Rect, boundsByIndex: Map<Int, Rect>) -> Unit)?,
 ) {
     val viewerImage = remember(picture.url, picture.width, picture.height) {
         BiliViewerImage.fromCommentPicture(picture)
@@ -112,6 +112,7 @@ private fun CommentImageCell(
                             onOpenViewer(
                                 index,
                                 boundsByIndex[index] ?: Rect.Zero,
+                                boundsByIndex.toMap(),
                             )
                         },
                     )

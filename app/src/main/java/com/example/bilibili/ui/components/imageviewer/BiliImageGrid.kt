@@ -86,8 +86,13 @@ fun BiliImageGrid(
                                 },
                             )
                             .onGloballyPositioned { coordinates ->
+                                val bounds = coordinates.boundsInRoot()
                                 thumbnailBoundsByIndex =
-                                    thumbnailBoundsByIndex + (cellIndex to coordinates.boundsInRoot())
+                                    thumbnailBoundsByIndex + (cellIndex to bounds)
+                                if (viewerOpen) {
+                                    viewerSourceBoundsByIndex =
+                                        viewerSourceBoundsByIndex + (cellIndex to bounds)
+                                }
                             },
                     ) {
                         RemoteImage(

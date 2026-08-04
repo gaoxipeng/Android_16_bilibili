@@ -237,7 +237,7 @@ fun BiliCommentRow(
     depth: Int = 0,
     videoAuthorMid: Long = 0L,
     onAuthorClick: (BiliUserProfile) -> Unit = {},
-    onCommentImageClick: (List<BiliCommentPicture>, Int, Rect) -> Unit = { _, _, _ -> },
+    onCommentImageClick: (List<BiliCommentPicture>, Int, Rect, Map<Int, Rect>) -> Unit = { _, _, _, _ -> },
     onLinkClick: ((com.example.bilibili.util.BiliLinkTarget) -> Unit)? = null,
 ) {
     val rowStart = BiliCommentRowOuterStart + (depth * 24).dp
@@ -294,8 +294,8 @@ fun BiliCommentRow(
             if (comment.pictures.isNotEmpty()) {
                 BiliCommentImageStrip(
                     pictures = comment.pictures,
-                    onOpenViewer = { index, bounds ->
-                        onCommentImageClick(comment.pictures, index, bounds)
+                    onOpenViewer = { index, bounds, boundsByIndex ->
+                        onCommentImageClick(comment.pictures, index, bounds, boundsByIndex)
                     },
                 )
             }
