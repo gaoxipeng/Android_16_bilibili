@@ -3,7 +3,6 @@ package com.example.bilibili.player
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.os.Build
-import android.provider.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -123,14 +122,7 @@ fun FullscreenOrientationEffect(
     val context = LocalContext.current
     val activity = context as? Activity
     DisposableEffect(enabled, portraitVideo, activity) {
-        val autoRotateEnabled = activity?.let {
-            Settings.System.getInt(
-                it.contentResolver,
-                Settings.System.ACCELEROMETER_ROTATION,
-                1,
-            ) == 1
-        } ?: true
-        if (!enabled || activity == null || portraitVideo == null || !autoRotateEnabled) {
+        if (!enabled || activity == null || portraitVideo == null) {
             return@DisposableEffect onDispose {}
         }
         val previous = activity.requestedOrientation
