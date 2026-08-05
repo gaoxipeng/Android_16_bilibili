@@ -131,6 +131,7 @@ object BiliImageSaveHelper {
             val mime = if (isGif) "image/gif" else "image/jpeg"
             val file = File(context.cacheDir, "share_${sanitize(image.id)}_${System.currentTimeMillis()}.$ext")
             file.writeBytes(bytes)
+            BilibiliDiskCacheManager.maybeEnforce(context)
             withContext(Dispatchers.Main) {
                 val uri = FileProvider.getUriForFile(
                     context,

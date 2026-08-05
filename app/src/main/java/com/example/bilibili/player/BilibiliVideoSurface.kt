@@ -97,6 +97,7 @@ private val VideoControlBorderColor = Color(0x80999999)
 /** 对齐 Mac VideoControlLabelStyle：白字在亮画面上靠软阴影保可读。 */
 private val VideoControlLabelShadowColor = Color.Black.copy(alpha = 0.72f)
 private const val StalledBufferRefreshDelayMs = 3_000L
+private const val CompactVideoDurationThresholdMs = 60_000L
 private val VideoSpeedOptions = listOf(0.5f, 0.75f, 1f, 1.5f, 2f, 3f)
 
 @Composable
@@ -1260,7 +1261,18 @@ private fun VideoControls(
         else -> 4.dp
     }
     val rightControlExtra = if (isFullscreen) 6.dp else 0.dp
-    val speedToRemainingExtra = if (isFullscreen) rightControlExtra else 4.dp
+    val compactTimeControls = durationMs in 1 until CompactVideoDurationThresholdMs
+    val timeLabelMinWidth = if (compactTimeControls) 36.dp else 42.dp
+    val speedControlMinWidth = when {
+        isFullscreen -> 42.dp
+        compactTimeControls -> 30.dp
+        else -> 34.dp
+    }
+    val speedToRemainingExtra = when {
+        isFullscreen -> rightControlExtra
+        compactTimeControls -> 0.dp
+        else -> 4.dp
+    }
     val progress = if (durationMs > 0L) {
         (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -1291,7 +1303,7 @@ private fun VideoControls(
         ) {
             Text(
                 text = formatVideoTime(positionMs),
-                modifier = Modifier.widthIn(min = 42.dp),
+                modifier = Modifier.widthIn(min = timeLabelMinWidth),
                 color = Color.White,
                 style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
@@ -1375,7 +1387,7 @@ private fun VideoControls(
             Box(
                 modifier = Modifier
                     .zIndex(2f)
-                    .sizeIn(minWidth = if (isFullscreen) 42.dp else 34.dp, minHeight = 28.dp)
+                    .sizeIn(minWidth = speedControlMinWidth, minHeight = 28.dp)
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() },
@@ -1386,7 +1398,7 @@ private fun VideoControls(
                 Text(
                     text = speedLabel(speed),
                     color = Color.White,
-                    style = videoControlLabelTextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                    style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                     maxLines = 1,
                 )
             }
@@ -1395,7 +1407,7 @@ private fun VideoControls(
             }
             Text(
                 text = formatVideoTime((durationMs - positionMs).coerceAtLeast(0L)),
-                modifier = Modifier.widthIn(min = 42.dp),
+                modifier = Modifier.widthIn(min = timeLabelMinWidth),
                 color = Color.White,
                 style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1,
@@ -1445,8 +1457,8 @@ private fun VideoSpeedPopup(
                         text = speedLabel(option),
                         color = Color.White,
                         style = videoControlLabelTextStyle(
-                            fontSize = 12.sp,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
                         ),
                         maxLines = 1,
                     )

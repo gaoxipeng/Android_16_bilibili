@@ -59,6 +59,7 @@ import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliEndpoints
 import com.example.bilibili.data.BiliVideoPage
 import com.example.bilibili.data.BilibiliHomeFeedStore
+import com.example.bilibili.data.BilibiliDiskCacheManager
 import com.example.bilibili.data.CachedHomeFeed
 import com.example.bilibili.data.BilibiliPlayerPreferences
 import com.example.bilibili.data.FeedLayoutStore
@@ -128,7 +129,9 @@ import com.example.bilibili.ui.navigation.lastVideoDetail
 import com.example.bilibili.ui.theme.BilibiliTheme
 import com.example.bilibili.util.BiliArticleUrl
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private fun resolveStoredPlayStream(
     video: BiliVideoItem,
@@ -209,6 +212,9 @@ fun BilibiliApp() {
         )
     }
     LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            BilibiliDiskCacheManager.enforce(context)
+        }
         VideoPlaybackMediaBridge.initialize(context)
     }
     PlaybackKeepScreenOnWindowEffect(coordinator)

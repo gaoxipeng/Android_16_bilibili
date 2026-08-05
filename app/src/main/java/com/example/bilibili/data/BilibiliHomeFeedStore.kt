@@ -14,7 +14,8 @@ data class CachedHomeFeed(
 )
 
 class BilibiliHomeFeedStore(context: Context) {
-    private val file = File(context.filesDir, "home_feed_cache.json")
+    private val appContext = context.applicationContext
+    private val file = File(appContext.filesDir, "home_feed_cache.json")
 
     @Synchronized
     fun read(): CachedHomeFeed? {
@@ -41,6 +42,7 @@ class BilibiliHomeFeedStore(context: Context) {
             .put("videos", feed.videos.toJsonArray())
         file.parentFile?.mkdirs()
         file.writeText(root.toString(), Charsets.UTF_8)
+        BilibiliDiskCacheManager.maybeEnforce(appContext)
     }
 
     @Synchronized

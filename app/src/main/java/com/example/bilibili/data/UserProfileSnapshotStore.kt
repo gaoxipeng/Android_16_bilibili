@@ -5,7 +5,8 @@ import org.json.JSONObject
 import java.io.File
 
 class UserProfileSnapshotStore(context: Context) {
-    private val file = File(context.filesDir, "user_profile_snapshots.json")
+    private val appContext = context.applicationContext
+    private val file = File(appContext.filesDir, "user_profile_snapshots.json")
 
     @Synchronized
     fun read(mid: Long): BiliUserProfile? {
@@ -29,6 +30,7 @@ class UserProfileSnapshotStore(context: Context) {
         root.put(profile.mid.toString(), profile.toJson())
         file.parentFile?.mkdirs()
         file.writeText(root.toString(), Charsets.UTF_8)
+        BilibiliDiskCacheManager.maybeEnforce(appContext)
     }
 
     private fun hasMeaningfulProfile(profile: BiliUserProfile): Boolean =

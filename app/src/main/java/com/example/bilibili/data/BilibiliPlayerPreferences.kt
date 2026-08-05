@@ -3,7 +3,8 @@ package com.example.bilibili.data
 import android.content.Context
 
 class BilibiliPlayerPreferences(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun isDanmakuVisible(): Boolean = prefs.getBoolean(KEY_DANMAKU_VISIBLE, true)
 
@@ -67,6 +68,15 @@ class BilibiliPlayerPreferences(context: Context) {
                 putLong(key, positionMs)
             }
         }.apply()
+        BilibiliDiskCacheManager.maybeEnforce(appContext)
+    }
+
+    fun clearPlaybackPositions() {
+        val editor = prefs.edit()
+        prefs.all.keys
+            .filter { it.startsWith(KEY_PLAYBACK_POSITION_PREFIX) }
+            .forEach { key -> editor.remove(key) }
+        editor.commit()
     }
 
     private fun progressPrefsKey(playbackId: String) = "$KEY_PLAYBACK_POSITION_PREFIX$playbackId"
