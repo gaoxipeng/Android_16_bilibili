@@ -97,6 +97,7 @@ private val VideoControlBorderColor = Color(0x80999999)
 /** 对齐 Mac VideoControlLabelStyle：白字在亮画面上靠软阴影保可读。 */
 private val VideoControlLabelShadowColor = Color.Black.copy(alpha = 0.72f)
 private const val StalledBufferRefreshDelayMs = 3_000L
+private val VideoSpeedOptions = listOf(0.5f, 0.75f, 1f, 1.5f, 2f, 3f)
 
 @Composable
 fun BilibiliVideoSurface(
@@ -178,6 +179,7 @@ fun BilibiliVideoSurface(
     }
     var showDanmakuSettings by remember(playbackKey) { mutableStateOf(false) }
     var showEpisodePicker by remember(playbackKey) { mutableStateOf(false) }
+    var showSpeedMenu by remember(playbackKey) { mutableStateOf(false) }
     val showDanmakuFeature = danmakuEnabled && danmakuCid > 0L && loadDanmaku != null
     val danmakuVisible = coordinator.danmakuVisible
     val danmakuSettings = coordinator.danmakuSettings
@@ -812,15 +814,17 @@ fun BilibiliVideoSurface(
         }
     }
 
-    LaunchedEffect(activePlayer, playbackSpeedOverride, isFullscreen) {
+    LaunchedEffect(activePlayer, playbackSpeedOverride) {
         when {
             playbackSpeedOverride != null -> {
                 activePlayer.setPlaybackSpeed(playbackSpeedOverride)
                 selectedSpeed = playbackSpeedOverride
             }
-            isFullscreen -> {
-                activePlayer.setPlaybackSpeed(1f)
-                selectedSpeed = 1f
+            else -> {
+                val currentSpeed = activePlayer.playbackParameters.speed
+                selectedSpeed = VideoSpeedOptions.minByOrNull { option ->
+                    abs(option - currentSpeed)
+                } ?: 1f
             }
         }
     }
@@ -869,13 +873,21 @@ fun BilibiliVideoSurface(
         }
     }
 
-    LaunchedEffect(isPlaying, isBuffering, controlsHideSignal) {
-        if (!isPlaying || isBuffering) {
+    LaunchedEffect(isPlaying, isBuffering, controlsHideSignal, showSpeedMenu) {
+        if (!isPlaying || isBuffering || showSpeedMenu) {
             controlsVisible = true
             return@LaunchedEffect
         }
         delay(2_000)
-        controlsVisible = false
+        if (!showSpeedMenu) {
+            controlsVisible = false
+        }
+    }
+
+    LaunchedEffect(controlsVisible, showDanmakuSettings, showEpisodePicker) {
+        if (!controlsVisible || showDanmakuSettings || showEpisodePicker) {
+            showSpeedMenu = false
+        }
     }
 
     val onPlayPauseState = rememberUpdatedState<() -> Unit>({
@@ -997,7 +1009,12 @@ fun BilibiliVideoSurface(
                     .pointerInput(isFullscreen, controlsEnabled) {
                         detectTapGestures(
                             onTap = {
-                                controlsVisible = !controlsVisible
+                                if (controlsVisible || showSpeedMenu) {
+                                    showSpeedMenu = false
+                                    controlsVisible = false
+                                } else {
+                                    controlsVisible = true
+                                }
                                 controlsHideSignal++
                             },
                             onDoubleTap = { onPlayPauseState.value() },
@@ -1123,13 +1140,8 @@ fun BilibiliVideoSurface(
                 onScrubCommit = { onScrubCommitState.value(it) },
                 onPlayPause = { onPlayPauseState.value() },
                 onSpeedClick = {
-                    controlsHideSignal++
-                    selectedSpeed = when (selectedSpeed) {
-                        1f -> 1.5f
-                        1.5f -> 2f
-                        else -> 1f
-                    }
-                    activePlayer.setPlaybackSpeed(selectedSpeed)
+                    controlsVisible = true
+                    showSpeedMenu = !showSpeedMenu
                 },
                 showDanmakuToggle = showDanmakuFeature,
                 danmakuVisible = danmakuVisible,
@@ -1152,6 +1164,29 @@ fun BilibiliVideoSurface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(VideoControlBarHeight),
+            )
+        }
+
+        if (showSpeedMenu && controlsEnabled &&
+            !showDanmakuSettings && !showEpisodePicker
+        ) {
+            VideoSpeedPopup(
+                selectedSpeed = selectedSpeed,
+                onSpeedSelected = { speed ->
+                    selectedSpeed = speed
+                    activePlayer.setPlaybackSpeed(speed)
+                    controlsHideSignal++
+                    showSpeedMenu = false
+                    controlsVisible = true
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .zIndex(11f)
+                    .padding(
+                        end = if (isFullscreen) 48.dp else 42.dp,
+                        bottom = (if (isFullscreen) 40.dp else 8.dp) +
+                            VideoControlBarHeight + 8.dp,
+                    ),
             )
         }
 
@@ -1225,7 +1260,7 @@ private fun VideoControls(
         else -> 4.dp
     }
     val rightControlExtra = if (isFullscreen) 6.dp else 0.dp
-    val speedToRemainingExtra = if (isFullscreen) rightControlExtra else 8.dp
+    val speedToRemainingExtra = if (isFullscreen) rightControlExtra else 4.dp
     val progress = if (durationMs > 0L) {
         (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -1337,16 +1372,24 @@ private fun VideoControls(
             if (showEpisodePickerButton && rightControlExtra > 0.dp) {
                 Spacer(Modifier.width(rightControlExtra))
             }
-            Text(
-                text = speedLabel(speed),
-                color = Color.White,
-                style = videoControlLabelTextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold),
-                modifier = Modifier.clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() },
-                    onClick = onSpeedClick,
-                ),
-            )
+            Box(
+                modifier = Modifier
+                    .zIndex(2f)
+                    .sizeIn(minWidth = if (isFullscreen) 42.dp else 34.dp, minHeight = 28.dp)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = onSpeedClick,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = speedLabel(speed),
+                    color = Color.White,
+                    style = videoControlLabelTextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                    maxLines = 1,
+                )
+            }
             if (speedToRemainingExtra > 0.dp) {
                 Spacer(Modifier.width(speedToRemainingExtra))
             }
@@ -1358,6 +1401,57 @@ private fun VideoControls(
                 maxLines = 1,
                 textAlign = TextAlign.End,
             )
+        }
+    }
+}
+
+@Composable
+private fun VideoSpeedPopup(
+    selectedSpeed: Float,
+    onSpeedSelected: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .width(246.dp)
+            .height(42.dp)
+            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
+            .clip(VideoControlCapsuleShape)
+            .padding(horizontal = 5.dp, vertical = 5.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            VideoSpeedOptions.forEach { option ->
+                val selected = selectedSpeed == option
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(
+                            if (selected) BiliPink.copy(alpha = 0.88f) else Color.Transparent,
+                        )
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                            onClick = { onSpeedSelected(option) },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = speedLabel(option),
+                        color = Color.White,
+                        style = videoControlLabelTextStyle(
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        ),
+                        maxLines = 1,
+                    )
+                }
+            }
         }
     }
 }
