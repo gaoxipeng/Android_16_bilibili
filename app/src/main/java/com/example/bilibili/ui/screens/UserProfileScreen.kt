@@ -65,10 +65,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
@@ -1106,6 +1108,11 @@ private fun UserProfileHeader(
     onOpenRelationList: ((UserRelationTab) -> Unit)? = null,
 ) {
     val avatarExposeAboveCard = ProfileHeaderAvatarFrameSize / 3f
+    var avatarViewerOpen by remember(profile.face) { mutableStateOf(false) }
+    var avatarBounds by remember(profile.face) { mutableStateOf<Rect?>(null) }
+    val avatarImage = remember(profile.face) {
+        profile.face.takeIf { it.isNotBlank() }?.let(BiliViewerImage::fromUrl)
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         BoxWithConstraints(
@@ -1274,7 +1281,15 @@ private fun UserProfileHeader(
                         .background(MaterialTheme.colorScheme.surface)
                         .padding(ProfileHeaderAvatarInset)
                         .clip(CircleShape)
-                        .zIndex(2f),
+                        .zIndex(2f)
+                        .onGloballyPositioned { coordinates ->
+                            coordinates.boundsInRoot().takeIf { it.width > 0f && it.height > 0f }
+                                ?.let { avatarBounds = it }
+                        }
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                        ) { avatarViewerOpen = true },
                     contentScale = ContentScale.Crop,
                 )
             } else {
@@ -1293,6 +1308,16 @@ private fun UserProfileHeader(
             }
         }
     }
+
+    if (avatarViewerOpen && avatarImage != null) {
+        BiliFullscreenImageViewer(
+            images = listOf(avatarImage),
+            initialIndex = 0,
+            sourceBoundsByIndex = avatarBounds?.let { mapOf(0 to it) }.orEmpty(),
+            animateOpenFromSource = avatarBounds != null,
+            onDismiss = { avatarViewerOpen = false },
+        )
+    }
 }
 
 @Composable
@@ -1304,7 +1329,20 @@ private fun ProfileCoverBanner(
     val coverImages = remember(coverUrls) { BiliViewerImage.profileCoverImages(coverUrls) }
     var viewerOpen by remember { mutableStateOf(false) }
     var viewerIndex by remember { mutableStateOf(0) }
+    var coverBoundsByIndex by remember(coverImages) { mutableStateOf<Map<Int, Rect>>(emptyMap()) }
+    var viewerSourceBoundsByIndex by remember { mutableStateOf<Map<Int, Rect>>(emptyMap()) }
     val coverPagerState = rememberPagerState(pageCount = { coverImages.size.coerceAtLeast(1) })
+
+    fun openCoverViewer(index: Int) {
+        viewerIndex = index
+        val bounds = coverBoundsByIndex[index] ?: coverBoundsByIndex.values.firstOrNull()
+        viewerSourceBoundsByIndex = if (bounds == null) {
+            emptyMap()
+        } else {
+            coverImages.indices.associateWith { bounds }
+        }
+        viewerOpen = true
+    }
 
     Box(modifier = modifier) {
         if (coverImages.isNotEmpty()) {
@@ -1312,9 +1350,15 @@ private fun ProfileCoverBanner(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .onGloballyPositioned { coordinates ->
+                            val bounds = coordinates.boundsInRoot()
+                            if (bounds.width > 0f && bounds.height > 0f && coverBoundsByIndex[0] != bounds) {
+                                coverBoundsByIndex = coverBoundsByIndex + (0 to bounds)
+                                if (viewerOpen) viewerSourceBoundsByIndex = viewerSourceBoundsByIndex + (0 to bounds)
+                            }
+                        }
                         .clickable {
-                            viewerIndex = 0
-                            viewerOpen = true
+                            openCoverViewer(0)
                         },
                 ) {
                     val image = coverImages[0]
@@ -1335,9 +1379,17 @@ private fun ProfileCoverBanner(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .onGloballyPositioned { coordinates ->
+                                val bounds = coordinates.boundsInRoot()
+                                if (bounds.width > 0f && bounds.height > 0f && coverBoundsByIndex[page] != bounds) {
+                                    coverBoundsByIndex = coverBoundsByIndex + (page to bounds)
+                                    if (viewerOpen) {
+                                        viewerSourceBoundsByIndex = viewerSourceBoundsByIndex + (page to bounds)
+                                    }
+                                }
+                            }
                             .clickable {
-                                viewerIndex = page
-                                viewerOpen = true
+                                openCoverViewer(page)
                             },
                     ) {
                         RemoteImage(
@@ -1392,7 +1444,12 @@ private fun ProfileCoverBanner(
         BiliFullscreenImageViewer(
             images = coverImages,
             initialIndex = viewerIndex.coerceIn(0, coverImages.lastIndex),
-            onDismiss = { viewerOpen = false },
+            sourceBoundsByIndex = viewerSourceBoundsByIndex,
+            animateOpenFromSource = viewerSourceBoundsByIndex[viewerIndex] != null,
+            onDismiss = {
+                viewerOpen = false
+                viewerSourceBoundsByIndex = emptyMap()
+            },
         )
     }
 }

@@ -129,8 +129,11 @@ import com.example.bilibili.ui.navigation.lastVideoDetail
 import com.example.bilibili.ui.theme.BilibiliTheme
 import com.example.bilibili.util.BiliArticleUrl
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 
 private fun resolveStoredPlayStream(
@@ -258,6 +261,9 @@ fun BilibiliApp() {
 
     var homeLoading by remember { mutableStateOf(false) }
     var homeLoadingMore by remember { mutableStateOf(false) }
+    var homeRefreshJob by remember { mutableStateOf<Job?>(null) }
+    var homeRefreshGeneration by remember { mutableIntStateOf(0) }
+    var homeRefreshStartedAtMs by remember { mutableStateOf(0L) }
     var homeHasMore by remember { mutableStateOf(cachedHomeFeed?.hasMore ?: true) }
     var homeFreshIdx by remember { mutableIntStateOf(cachedHomeFeed?.freshIdx ?: 1) }
     var homeFetchRow by remember { mutableIntStateOf(cachedHomeFeed?.fetchRow ?: 1) }
@@ -802,14 +808,25 @@ fun BilibiliApp() {
         )
     }
 
-    fun refreshHome(showRefreshHint: Boolean = false) {
+    fun refreshHome(showRefreshHint: Boolean = false, force: Boolean = false) {
         if (activeAccount == null) {
+            homeRefreshJob?.cancel()
+            homeRefreshJob = null
+            homeLoading = false
             homeVideos = emptyList()
             homeError = null
             homeHasMore = false
             return
         }
-        scope.launch {
+        val now = System.currentTimeMillis()
+        if (!force && homeRefreshJob?.isActive == true &&
+            now - homeRefreshStartedAtMs < 60_000L
+        ) return
+        homeRefreshJob?.cancel()
+        homeRefreshStartedAtMs = now
+        homeRefreshGeneration += 1
+        val generation = homeRefreshGeneration
+        homeRefreshJob = scope.launch {
             val previousItems = homeVideos
             homeLoading = true
             homeError = null
@@ -817,8 +834,8 @@ fun BilibiliApp() {
             homeFetchRow = 1
             homeLastShowList = ""
             homeLoadMoreCount = 0
-            runCatching {
-                val page = api.getHomeRecommend(credential())
+            try {
+                val page = withTimeout(60_000L) { api.getHomeRecommend(credential()) }
                 homeVideos = page.videos
                 homeFreshIdx = page.nextFreshIdx
                 homeFetchRow = page.nextFetchRow
@@ -832,11 +849,17 @@ fun BilibiliApp() {
                         null
                     }
                 }
-            }.onFailure {
-                homeError = it.message
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                homeError = error.message ?: "首页加载失败，请下拉重试"
                 if (showRefreshHint) feedRefreshHint = null
+            } finally {
+                if (homeRefreshGeneration == generation) {
+                    homeLoading = false
+                    homeRefreshJob = null
+                }
             }
-            homeLoading = false
         }
     }
 
@@ -1042,7 +1065,7 @@ fun BilibiliApp() {
 
     LaunchedEffect(Unit) {
         if (activeAccount != null) {
-            if (cachedHomeFeed == null) {
+            if (cachedHomeFeed == null || cachedHomeFeed.videos.isEmpty()) {
                 refreshHome()
             }
             refreshFollow()

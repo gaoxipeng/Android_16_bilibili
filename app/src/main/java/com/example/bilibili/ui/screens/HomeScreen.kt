@@ -337,6 +337,8 @@ private fun HomeFeedContent(
                                             text = emptyHint ?: "暂无内容",
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
+                                    } else {
+                                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
                                     }
                                 }
                             }
@@ -408,6 +410,8 @@ private fun HomeFeedContent(
                                             text = emptyHint ?: "暂无内容",
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
+                                    } else {
+                                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
                                     }
                                 }
                             }
