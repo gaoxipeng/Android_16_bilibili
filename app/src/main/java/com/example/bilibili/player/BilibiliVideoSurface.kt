@@ -8,7 +8,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
@@ -67,6 +69,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -144,6 +147,7 @@ fun BilibiliVideoSurface(
     autoPlayWhenReady: Boolean = false,
 ) {
     val context = LocalContext.current
+    val hapticView = LocalView.current
     val audioManager = remember(context) {
         context.getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager
     }
@@ -187,6 +191,7 @@ fun BilibiliVideoSurface(
         mutableStateOf(initialHandoffPlayer?.playWhenReady ?: true)
     }
     var selectedSpeed by remember(playbackKey) { mutableStateOf(1f) }
+    var longPressSpeedBoost by remember(playbackKey) { mutableStateOf(false) }
     var controlsVisible by remember(playbackKey) { mutableStateOf(initialControlsVisible) }
     var controlsHideSignal by remember(playbackKey) { mutableIntStateOf(0) }
     var volumeOverlayProgress by remember(playbackKey) { mutableFloatStateOf(-1f) }
@@ -1025,6 +1030,7 @@ fun BilibiliVideoSurface(
                         detectVideoPlayerDrag(
                             positionState = { positionState },
                             durationState = { durationState },
+                            dragEnabled = { !longPressSpeedBoost },
                             readSideLevel = { isRightSide ->
                                 if (isRightSide) {
                                     val maxVolume = audioManager
@@ -1089,6 +1095,15 @@ fun BilibiliVideoSurface(
                     }
                     .pointerInput(isFullscreen, controlsEnabled) {
                         detectTapGestures(
+                            onPress = {
+                                val speedBeforePress = selectedSpeed
+                                tryAwaitRelease()
+                                if (longPressSpeedBoost) {
+                                    longPressSpeedBoost = false
+                                    selectedSpeed = speedBeforePress
+                                    activePlayerState.value?.setPlaybackSpeed(speedBeforePress)
+                                }
+                            },
                             onTap = {
                                 if (controlsVisible || showSpeedMenu) {
                                     showSpeedMenu = false
@@ -1099,9 +1114,74 @@ fun BilibiliVideoSurface(
                                 controlsHideSignal++
                             },
                             onDoubleTap = { onPlayPauseState.value() },
+                            onLongPress = {
+                                val heldPlayer = activePlayerState.value
+                                if (heldPlayer?.playWhenReady == true && !showSpeedMenu) {
+                                    longPressSpeedBoost = true
+                                    selectedSpeed = 2f
+                                    heldPlayer.setPlaybackSpeed(2f)
+                                    hapticView.performHapticFeedback(
+                                        android.view.HapticFeedbackConstants.LONG_PRESS,
+                                    )
+                                }
+                            },
                         )
                     },
             )
+        }
+
+        if (controlsEnabled) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = longPressSpeedBoost,
+                enter = androidx.compose.animation.fadeIn(tween(120)) +
+                    androidx.compose.animation.scaleIn(
+                        initialScale = 0.9f,
+                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                    ),
+                exit = androidx.compose.animation.fadeOut(tween(120)) +
+                    androidx.compose.animation.scaleOut(targetScale = 0.94f),
+                modifier = Modifier
+                    .then(
+                        if (fullscreenLandscape) {
+                            Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 8.dp)
+                        } else {
+                            Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = if (isFullscreen) 20.dp else 0.dp)
+                        },
+                    )
+                    .width(42.dp)
+                    .height(VideoControlBarHeight)
+                    .zIndex(13f),
+            ) {
+                val speedBadgeShape = VideoControlCapsuleShape
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { clip = false }
+                        .drawBackdrop(
+                            backdrop = layerBackdrop,
+                            shape = { speedBadgeShape },
+                            effects = { liquidLargeCapsuleGlassEffects() },
+                            highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+                            shadow = null,
+                            onDrawSurface = { drawRect(Color.White.copy(alpha = 0.12f)) },
+                        )
+                        .border(VideoControlBorderWidth, VideoControlBorderColor, speedBadgeShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "2×",
+                        color = Color.White,
+                        style = videoControlLabelTextStyle(
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
+                }
+            }
         }
 
         if (brightnessOverlayProgress >= 0f) {
@@ -1761,6 +1841,7 @@ fun rememberVideoControlBackdrop(): Backdrop = rememberLayerBackdrop()
 private suspend fun PointerInputScope.detectVideoPlayerDrag(
     positionState: () -> Long,
     durationState: () -> Long,
+    dragEnabled: () -> Boolean,
     readSideLevel: (isRightSide: Boolean) -> Float,
     onSideLevelChange: (isRightSide: Boolean, level: Float) -> Unit,
     onSeekStart: () -> Unit,
@@ -1790,7 +1871,7 @@ private suspend fun PointerInputScope.detectVideoPlayerDrag(
             val dx = abs(deltaX)
             val dy = abs(deltaY)
             val duration = durationState()
-            if (gestureMode == 0) {
+            if (gestureMode == 0 && dragEnabled()) {
                 when {
                     dx > slop && dx > dy * 1.2f && duration > 0L -> {
                         gestureMode = 1
