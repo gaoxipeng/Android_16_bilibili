@@ -214,6 +214,8 @@ fun UserProfileScreen(
     onSwitchAccount: (String) -> Unit = {},
     onDeleteAccount: (String) -> Unit = {},
     onAddAccount: () -> Unit = {},
+    autoHideBarsOnScroll: Boolean = true,
+    onAutoHideBarsOnScrollChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -603,6 +605,8 @@ fun UserProfileScreen(
             onSwitchAccount = onSwitchAccount,
             onDeleteAccount = onDeleteAccount,
             onAddAccount = onAddAccount,
+            autoHideBarsOnScroll = autoHideBarsOnScroll,
+            onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
             onBack = { showSettings = false },
             modifier = Modifier.fillMaxSize(),
         )

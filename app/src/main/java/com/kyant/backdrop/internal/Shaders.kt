@@ -39,12 +39,18 @@ float sdRoundedRect(float2 coord, float2 halfSize, float radius) {
 
 float2 gradSdRoundedRect(float2 coord, float2 halfSize, float radius) {
     float2 cornerCoord = abs(coord) - (halfSize - float2(radius));
+    float2 direction = sign(coord);
+    if (abs(coord.x) < 0.0001) direction.x = 1.0;
+    if (abs(coord.y) < 0.0001) direction.y = 1.0;
     if (cornerCoord.x >= 0.0 || cornerCoord.y >= 0.0) {
-        return sign(coord) * normalize(max(cornerCoord, 0.0));
-    } else {
-        float gradX = step(cornerCoord.y, cornerCoord.x);
-        return sign(coord) * float2(gradX, 1.0 - gradX);
+        float2 outsideGradient = max(cornerCoord, 0.0);
+        float outsideLength = length(outsideGradient);
+        if (outsideLength > 0.0001) {
+            return direction * (outsideGradient / outsideLength);
+        }
     }
+    float gradX = step(cornerCoord.y, cornerCoord.x);
+    return direction * float2(gradX, 1.0 - gradX);
 }"""
 
 @Language("AGSL")

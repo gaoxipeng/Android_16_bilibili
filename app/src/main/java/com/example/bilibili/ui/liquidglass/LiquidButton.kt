@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.isSpecified
@@ -45,6 +46,7 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.Shadow
 import dev.chrisbanes.haze.HazeState
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -61,11 +63,28 @@ internal val LiquidMenuBorderWidth = 0.5.dp
 internal fun liquidMenuBorderColor(isLightTheme: Boolean): Color =
     if (isLightTheme) Color(0x24000000) else Color(0x33FFFFFF)
 
+internal fun liquidLargeCapsuleEdgeBorder(
+    shape: Shape,
+    isLightTheme: Boolean,
+    width: Dp = LiquidMenuBorderWidth,
+): Modifier = Modifier.border(width, liquidMenuBorderColor(isLightTheme), shape)
+
 internal fun BackdropEffectScope.liquidMenuGlassEffects() {
     vibrancy()
     blur(LiquidMenuGlassBlurRadius.toPx())
     lens(12f.dp.toPx(), 24f.dp.toPx())
 }
+
+internal fun BackdropEffectScope.liquidLargeCapsuleGlassEffects() {
+    vibrancy()
+    // Keep the top and bottom refraction bands from overlapping in short capsules;
+    // overlap makes their opposing sample offsets meet as a visible seam at center.
+    val nonOverlappingEdgeHeight = (size.minDimension / 2f - 1f.dp.toPx()).coerceAtLeast(0f)
+    lens(24f.dp.toPx().coerceAtMost(nonOverlappingEdgeHeight), 40f.dp.toPx())
+}
+
+internal fun liquidLargeCapsuleSurfaceColor(isLightTheme: Boolean): Color =
+    Color.Transparent
 
 @Composable
 fun TintedLiquidCapsule(
@@ -254,6 +273,7 @@ fun SurfaceLiquidCapsule(
     pill: Boolean = false,
     cornerRadius: Dp = 22.dp,
     useMenuGlassStyle: Boolean = false,
+    useLargeCapsuleEffect: Boolean = false,
     tint: Color = Color.Unspecified,
     borderWidth: Dp = 0.dp,
     borderColor: Color = Color.Unspecified,
@@ -261,7 +281,11 @@ fun SurfaceLiquidCapsule(
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
     val isLightTheme = isAppLightTheme()
-    val surfaceColor = liquidMenuSurfaceColor(isLightTheme)
+    val surfaceColor = if (useLargeCapsuleEffect) {
+        liquidLargeCapsuleSurfaceColor(isLightTheme)
+    } else {
+        liquidMenuSurfaceColor(isLightTheme)
+    }
     val menuBorderColor = liquidMenuBorderColor(isLightTheme)
     val shape = if (pill) RoundedCornerShape(percent = 50) else RoundedCornerShape(cornerRadius)
     val borderModifier = when {
@@ -270,6 +294,9 @@ fun SurfaceLiquidCapsule(
         }
         useMenuGlassStyle -> {
             Modifier.border(LiquidMenuBorderWidth, menuBorderColor, shape)
+        }
+        useLargeCapsuleEffect -> {
+            liquidLargeCapsuleEdgeBorder(shape, isLightTheme)
         }
         else -> Modifier
     }
@@ -286,14 +313,22 @@ fun SurfaceLiquidCapsule(
                         effects = {
                             if (useMenuGlassStyle) {
                                 liquidMenuGlassEffects()
+                            } else if (useLargeCapsuleEffect) {
+                                liquidLargeCapsuleGlassEffects()
                             } else {
                                 vibrancy()
                                 blur(2f.dp.toPx())
                                 lens(12f.dp.toPx(), 24f.dp.toPx())
                             }
                         },
-                        highlight = if (useMenuGlassStyle) null else ({ Highlight.Default }),
-                        shadow = null,
+                        highlight = if (useLargeCapsuleEffect) {
+                            { Highlight.Default }
+                        } else if (useMenuGlassStyle) {
+                            null
+                        } else {
+                            { Highlight.Default }
+                        },
+                        shadow = if (useLargeCapsuleEffect) ({ Shadow.Default }) else null,
                         onDrawSurface = {
                             if (tint.isSpecified) {
                                 drawRect(tint, blendMode = BlendMode.Hue)
@@ -328,6 +363,7 @@ fun SurfaceLiquidMenuCard(
     blurRadius: Dp = LiquidMenuGlassBlurRadius,
     surfaceColor: Color? = null,
     useMenuGlassStyle: Boolean = false,
+    useLargeCapsuleEffect: Boolean = false,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -350,13 +386,19 @@ fun SurfaceLiquidMenuCard(
                     effects = {
                         if (useMenuGlassStyle) {
                             liquidMenuGlassEffects()
+                        } else if (useLargeCapsuleEffect) {
+                            liquidLargeCapsuleGlassEffects()
                         } else {
                             vibrancy()
                             lens(12f.dp.toPx(), 24f.dp.toPx())
                             blur(blurRadius.toPx(), TileMode.Decal)
                         }
                     },
-                    highlight = null,
+                        highlight = if (useLargeCapsuleEffect) {
+                            { Highlight.Default }
+                        } else {
+                            null
+                        },
                     shadow = null,
                     onDrawSurface = { drawRect(resolvedSurfaceColor) },
                 )

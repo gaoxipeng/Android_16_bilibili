@@ -57,6 +57,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import com.example.bilibili.ui.theme.isAppLightTheme
+import com.example.bilibili.ui.liquidglass.liquidMenuBorderColor
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,7 +84,6 @@ internal val HomeSearchBarHeight = 40.dp
 internal val HomeSearchBarTopGap = 8.dp
 internal val HomeSearchBarHorizontalInset = 12.dp
 internal val HomeSearchBarBorderWidth = 0.5.dp
-private val HomeSearchBarBorderColorLight = Color(0x80999999)
 private val HomeSearchBarBorderColorOnSurfaceLight = Color(0xFFBBBBBB)
 internal val HomeSearchBarReservedHeight =
     HomeSearchBarTopGap + HomeSearchBarHeight + HomeSearchBarBottomGap
@@ -95,7 +95,7 @@ internal val HomeFeedSingleColumnSpacing = 12.dp
 
 @Composable
 internal fun homeSearchBarBorderColor(): Color =
-    if (isAppLightTheme()) HomeSearchBarBorderColorLight else MaterialTheme.colorScheme.outline
+    liquidMenuBorderColor(isAppLightTheme())
 
 @Composable
 internal fun homeSearchBarBorderColorOnSurface(): Color =
@@ -467,7 +467,7 @@ fun HomeSearchCapsule(
     ) {
         SurfaceLiquidCapsule(
             pill = true,
-            useMenuGlassStyle = true,
+            useLargeCapsuleEffect = true,
             borderWidth = HomeSearchBarBorderWidth,
             borderColor = homeSearchBarBorderColor(),
             modifier = Modifier

@@ -49,6 +49,7 @@ import androidx.compose.ui.zIndex
 import androidx.core.util.Consumer
 import com.example.bilibili.data.AppearanceMode
 import com.example.bilibili.data.AppearanceSettingsStore
+import com.example.bilibili.data.BottomBarDisplaySettingsStore
 import com.example.bilibili.data.BiliHistoryItem
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BilibiliCredential
@@ -108,7 +109,6 @@ import com.example.bilibili.ui.screens.DynamicDetailScreen
 import com.example.bilibili.ui.screens.VideoDetailScreen
 import com.example.bilibili.ui.screens.MineScreen
 import com.example.bilibili.ui.liquidglass.LocalLiquidMenuBackdrop
-import com.example.bilibili.ui.liquidglass.BottomBarBackdropSampleExtension
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -195,6 +195,10 @@ fun BilibiliApp() {
     val accountStore = remember { BilibiliAccountStore(context) }
     val appearanceSettingsStore = remember { AppearanceSettingsStore(context) }
     var appearanceMode by remember { mutableStateOf(appearanceSettingsStore.readAppearanceMode()) }
+    val bottomBarDisplaySettingsStore = remember { BottomBarDisplaySettingsStore(context) }
+    var autoHideBarsOnScroll by remember {
+        mutableStateOf(bottomBarDisplaySettingsStore.readAutoHideOnScroll())
+    }
     val homeFeedStore = remember { BilibiliHomeFeedStore(context) }
     val cachedHomeFeed = remember { homeFeedStore.read() }
     val playerPreferences = remember { BilibiliPlayerPreferences(context) }
@@ -228,9 +232,14 @@ fun BilibiliApp() {
     var bottomBarExpanded by remember { mutableStateOf(true) }
     var bottomBarVisible by remember { mutableStateOf(true) }
     var bottomBarScrollDistance by remember { mutableFloatStateOf(0f) }
-    val bottomBarScrollConnection = remember {
+    val bottomBarScrollConnection = remember(selectedTab, autoHideBarsOnScroll) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (!autoHideBarsOnScroll) {
+                    bottomBarVisible = true
+                    bottomBarScrollDistance = 0f
+                    return Offset.Zero
+                }
                 val delta = available.y
                 if (delta == 0f) return Offset.Zero
                 if (bottomBarScrollDistance != 0f &&
@@ -721,6 +730,7 @@ fun BilibiliApp() {
         when (val removed = pendingPopSideEffect) {
             is AppNavEntry.VideoDetail -> {
                 coordinator.pauseAll()
+                coordinator.restorePlaybackWindowBrightness()
                 coordinator.activeKey = null
                 coordinator.fullscreenKey = null
                 coordinator.fullscreenPortraitVideo = null
@@ -860,6 +870,15 @@ fun BilibiliApp() {
                     homeRefreshJob = null
                 }
             }
+        }
+    }
+
+    fun updateAutoHideBarsOnScroll(enabled: Boolean) {
+        autoHideBarsOnScroll = enabled
+        bottomBarDisplaySettingsStore.writeAutoHideOnScroll(enabled)
+        if (!enabled) {
+            bottomBarVisible = true
+            bottomBarScrollDistance = 0f
         }
     }
 
@@ -1214,13 +1233,6 @@ fun BilibiliApp() {
                         .matchParentSize()
                         .background(MaterialTheme.colorScheme.background),
                 )
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(BottomBarFeedOverlapReserve + BottomBarBackdropSampleExtension)
-                        .background(MaterialTheme.colorScheme.background),
-                )
                 KeepAliveTabLayer(visible = selectedTab == MainTab.Home) {
                     FeedTabReselectScope(MainTab.Home, feedTabReselectController) {
                         HomeScreen(
@@ -1378,6 +1390,8 @@ fun BilibiliApp() {
                         onSwitchAccount = ::switchStoredAccount,
                         onDeleteAccount = ::deleteStoredAccount,
                         onAddAccount = ::prepareAddAccount,
+                        autoHideBarsOnScroll = autoHideBarsOnScroll,
+                        onAutoHideBarsOnScrollChange = ::updateAutoHideBarsOnScroll,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -1402,6 +1416,8 @@ fun BilibiliApp() {
                 playUrls = playUrls,
                 coordinator = coordinator,
                 feedColumnCount = feedColumnCount,
+                autoHideBarsOnScroll = autoHideBarsOnScroll,
+                onAutoHideBarsOnScrollChange = ::updateAutoHideBarsOnScroll,
                 onFeedColumnCountChange = { count ->
                     feedColumnCount = count
                     feedLayoutStore.writeColumnCount(count)
@@ -1527,6 +1543,7 @@ fun BilibiliApp() {
                 FeedRefreshHintOverlay(
                     message = feedRefreshHint,
                     onDismiss = { feedRefreshHint = null },
+                    backdrop = bottomBarBackdrop,
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
             }
@@ -1610,6 +1627,8 @@ private fun AppNavStackLayers(
     coordinator: VideoPlaybackCoordinator,
     feedColumnCount: Int,
     onFeedColumnCountChange: (Int) -> Unit,
+    autoHideBarsOnScroll: Boolean,
+    onAutoHideBarsOnScrollChange: (Boolean) -> Unit,
     contentPadding: PaddingValues,
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
@@ -1651,6 +1670,7 @@ private fun AppNavStackLayers(
                 stackTop = isTop || isExitingLayer,
                 layerBaseZIndex = 90f + layer.index,
                 visible = isTop,
+                stackAnimated = layer.entry !is AppNavEntry.Search,
                 animationKey = layer.key,
                 layerKey = layer.key,
                 pendingEnterKey = pendingEnterKey,
@@ -1670,6 +1690,8 @@ private fun AppNavStackLayers(
                         coordinator = coordinator,
                         feedColumnCount = feedColumnCount,
                         onFeedColumnCountChange = onFeedColumnCountChange,
+                        autoHideBarsOnScroll = autoHideBarsOnScroll,
+                        onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
                         contentPadding = contentPadding,
                         onPopNav = onPopNav,
                         onOpenVideo = onOpenVideo,
@@ -1705,6 +1727,8 @@ private fun AppNavEntryContent(
     coordinator: VideoPlaybackCoordinator,
     feedColumnCount: Int,
     onFeedColumnCountChange: (Int) -> Unit,
+    autoHideBarsOnScroll: Boolean,
+    onAutoHideBarsOnScrollChange: (Boolean) -> Unit,
     contentPadding: PaddingValues,
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
@@ -1793,6 +1817,8 @@ private fun AppNavEntryContent(
                 enableSettings = myMid != null && myMid == entry.mid,
                 feedColumnCount = feedColumnCount,
                 onFeedColumnCountChange = onFeedColumnCountChange,
+                autoHideBarsOnScroll = autoHideBarsOnScroll,
+                onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
                 modifier = Modifier.fillMaxSize(),
             )
         }

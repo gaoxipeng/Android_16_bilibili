@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,18 +28,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.ui.liquidglass.LiquidBottomTab
 import com.example.bilibili.ui.liquidglass.LiquidBottomTabs
-import com.example.bilibili.ui.liquidglass.LiquidGlassConfig
-import com.example.bilibili.ui.liquidglass.LocalLiquidBottomTabBackdropRow
+import com.example.bilibili.ui.liquidglass.LocalLiquidBottomTabCoverage
+import com.example.bilibili.ui.liquidglass.LocalLiquidBottomTabPressProgress
 import com.example.bilibili.ui.liquidglass.SurfaceLiquidIconButton
 import com.example.bilibili.ui.theme.TabAccentDark
 import com.example.bilibili.ui.theme.TabAccentLight
@@ -59,11 +60,6 @@ internal fun BilibiliLiquidBottomBar(
 ) {
     val isLightTheme = isAppLightTheme()
     val accentColor = if (isLightTheme) TabAccentLight else TabAccentDark
-    val unselectedColor = if (isLightTheme) {
-        Color(0xFF1F1F1F)
-    } else {
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
-    }
     val collapsedSize = 64.dp
     val barHeight = 64.dp
     val animationOverflow = 12.dp
@@ -132,27 +128,19 @@ internal fun BilibiliLiquidBottomBar(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             tabs.forEachIndexed { index, tab ->
-                                val isBackdropRow = LocalLiquidBottomTabBackdropRow.current
-                                val isSelected = index == selectedIndex
-                                val tabColor = when {
-                                    isBackdropRow -> accentColor
-                                    isSelected -> accentColor
-                                    else -> unselectedColor
-                                }
-                                val tabAlpha = if (
-                                    !isBackdropRow &&
-                                    isSelected &&
-                                    LiquidGlassConfig.enableLensEffects
-                                ) {
-                                    0f
-                                } else {
-                                    1f
-                                }
+                                val coverage = LocalLiquidBottomTabCoverage.current(index)
+                                val pressProgress = LocalLiquidBottomTabPressProgress.current
+                                val tabColor = lerp(Color.Black, accentColor, coverage)
                                 LiquidBottomTab(onClick = { onTabClick(tab) }) {
                                     Box(
                                         modifier = Modifier
                                             .size(28.dp)
-                                            .graphicsLayer { alpha = tabAlpha },
+                                            .graphicsLayer {
+                                                val iconScale = 1f + 0.2f * pressProgress * coverage
+                                                transformOrigin = TransformOrigin.Center
+                                                scaleX = iconScale
+                                                scaleY = iconScale
+                                            },
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         BilibiliTabIcon(tab = tab, color = tabColor)
@@ -163,7 +151,7 @@ internal fun BilibiliLiquidBottomBar(
                                         color = tabColor,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.graphicsLayer { alpha = tabAlpha },
+                                        fontWeight = if (coverage > 0.5f) FontWeight.SemiBold else FontWeight.Normal,
                                     )
                                 }
                             }

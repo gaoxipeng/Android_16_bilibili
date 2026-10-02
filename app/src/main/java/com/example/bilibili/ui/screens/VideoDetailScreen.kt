@@ -141,7 +141,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-private val VideoDetailPlayerTopPadding = 8.dp
+private val VideoDetailPlayerTopPadding = 0.dp
 private const val CommentPageSize = 20
 
 private val CommentRowOuterStart = 18.dp

@@ -1,7 +1,12 @@
 package com.example.bilibili.player
 
+import android.media.AudioManager
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.graphics.Color as AndroidColor
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -10,6 +15,7 @@ import androidx.compose.animation.AnimatedVisibility
 import com.example.bilibili.ui.components.OverlayFadeTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -43,6 +49,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
@@ -80,20 +88,25 @@ import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BiliVideoShot
 import com.example.bilibili.ui.theme.BiliPink
+import com.example.bilibili.ui.liquidglass.liquidLargeCapsuleGlassEffects
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val VideoProgressLineWidth = 3.dp
 
 private val VideoControlBarHeight = 34.dp
+private val LandscapeFullscreenControlBarHeight = 42.dp
 private val VideoControlBarBottomGap = 6.dp
 private val VideoControlBorderWidth = 0.5.dp
-private val VideoControlBorderColor = Color(0x80999999)
+private val VideoControlBorderColor = Color.White.copy(alpha = 0.38f)
 /** 对齐 Mac VideoControlLabelStyle：白字在亮画面上靠软阴影保可读。 */
 private val VideoControlLabelShadowColor = Color.Black.copy(alpha = 0.72f)
 private const val StalledBufferRefreshDelayMs = 3_000L
@@ -131,6 +144,10 @@ fun BilibiliVideoSurface(
     autoPlayWhenReady: Boolean = false,
 ) {
     val context = LocalContext.current
+    val audioManager = remember(context) {
+        context.getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager
+    }
+    val playerWindow = remember(context) { context.findActivity()?.window }
     val layerBackdrop = backdrop as? LayerBackdrop ?: rememberLayerBackdrop()
     val onStreamSourceErrorState = rememberUpdatedState(onStreamSourceError)
     val streamToken =
@@ -172,6 +189,9 @@ fun BilibiliVideoSurface(
     var selectedSpeed by remember(playbackKey) { mutableStateOf(1f) }
     var controlsVisible by remember(playbackKey) { mutableStateOf(initialControlsVisible) }
     var controlsHideSignal by remember(playbackKey) { mutableIntStateOf(0) }
+    var volumeOverlayProgress by remember(playbackKey) { mutableFloatStateOf(-1f) }
+    var brightnessOverlayProgress by remember(playbackKey) { mutableFloatStateOf(-1f) }
+    var adjustmentOverlaySignal by remember(playbackKey) { mutableIntStateOf(0) }
     var isScrubbing by remember(playbackKey) { mutableStateOf(false) }
     var resumePlaybackAfterScrub by remember(playbackKey) { mutableStateOf(false) }
     var danmakuItems by remember(playbackKey) { mutableStateOf<List<BiliDanmakuItem>>(emptyList()) }
@@ -200,6 +220,12 @@ fun BilibiliVideoSurface(
     var playerHandedOff by remember(playbackKey) { mutableStateOf(false) }
     var sourceErrorReported by remember(playbackKey, streamToken) { mutableStateOf(false) }
     var isPortraitPlayback by remember(playbackKey) { mutableStateOf(portraitVideo) }
+    val fullscreenLandscape = isFullscreen && !isPortraitPlayback
+    val controlBarHeight = if (fullscreenLandscape) {
+        LandscapeFullscreenControlBarHeight
+    } else {
+        VideoControlBarHeight
+    }
     var playerSizeKnown by remember(playbackKey) { mutableStateOf(false) }
     val currentContentPlaybackKey = rememberUpdatedState(contentPlaybackKey)
 
@@ -891,6 +917,13 @@ fun BilibiliVideoSurface(
         }
     }
 
+    LaunchedEffect(adjustmentOverlaySignal) {
+        if (adjustmentOverlaySignal == 0) return@LaunchedEffect
+        delay(900)
+        volumeOverlayProgress = -1f
+        brightnessOverlayProgress = -1f
+    }
+
     val onPlayPauseState = rememberUpdatedState<() -> Unit>({
         controlsHideSignal++
         if (activePlayer.isPlaying) {
@@ -959,7 +992,7 @@ fun BilibiliVideoSurface(
         }
 
         if (showDanmakuFeature && fullscreenDanmakuMountAllowed) {
-            val danmakuBottomReserve = VideoControlBarHeight +
+            val danmakuBottomReserve = controlBarHeight +
                 VideoControlBarBottomGap +
                 if (isFullscreen) 40.dp else 8.dp
             DanmakuOverlay(
@@ -988,11 +1021,58 @@ fun BilibiliVideoSurface(
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(5f)
-                    .pointerInput(Unit) {
-                        detectHorizontalVideoScrub(
+                    .pointerInput(audioManager, context, durationState) {
+                        detectVideoPlayerDrag(
                             positionState = { positionState },
                             durationState = { durationState },
-                            onDragStart = {
+                            readSideLevel = { isRightSide ->
+                                if (isRightSide) {
+                                    val maxVolume = audioManager
+                                        .getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                        .coerceAtLeast(1)
+                                    audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() /
+                                        maxVolume
+                                } else {
+                                    val systemBrightness = runCatching {
+                                        Settings.System.getInt(
+                                            context.contentResolver,
+                                            Settings.System.SCREEN_BRIGHTNESS,
+                                            128,
+                                        )
+                                    }.getOrDefault(128).coerceIn(1, 255) / 255f
+                                    playerWindow?.let { window ->
+                                        coordinator.getPlaybackWindowBrightness(
+                                            playbackKey = playbackKey,
+                                            window = window,
+                                            fallback = systemBrightness,
+                                        )
+                                    } ?: systemBrightness
+                                }
+                            },
+                            onSideLevelChange = { isRightSide, level ->
+                                if (isRightSide) {
+                                    val maxVolume = audioManager
+                                        .getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                        .coerceAtLeast(1)
+                                    val volume = (level * maxVolume).roundToInt().coerceIn(0, maxVolume)
+                                    if (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) != volume) {
+                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
+                                    }
+                                    volumeOverlayProgress = volume.toFloat() / maxVolume
+                                    brightnessOverlayProgress = -1f
+                                } else if (playerWindow != null) {
+                                    val brightness = level.coerceIn(0.01f, 1f)
+                                    coordinator.setPlaybackWindowBrightness(
+                                        playbackKey = playbackKey,
+                                        window = playerWindow,
+                                        brightness = brightness,
+                                    )
+                                    brightnessOverlayProgress = brightness
+                                    volumeOverlayProgress = -1f
+                                }
+                                adjustmentOverlaySignal++
+                            },
+                            onSeekStart = {
                                 resumePlaybackAfterScrub = activePlayer.isPlaying
                                 if (activePlayer.isPlaying) {
                                     activePlayer.playWhenReady = false
@@ -1024,6 +1104,27 @@ fun BilibiliVideoSurface(
             )
         }
 
+        if (brightnessOverlayProgress >= 0f) {
+            SideAdjustmentIndicator(
+                progress = brightnessOverlayProgress,
+                backdrop = layerBackdrop,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .zIndex(12f)
+                    .padding(start = 24.dp),
+            )
+        }
+        if (volumeOverlayProgress >= 0f) {
+            SideAdjustmentIndicator(
+                progress = volumeOverlayProgress,
+                backdrop = layerBackdrop,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .zIndex(12f)
+                    .padding(end = 24.dp),
+            )
+        }
+
         if (isBuffering && showLoadingIndicator) {
             VideoPlayerLoadingIndicator(
                 modifier = Modifier.align(Alignment.Center),
@@ -1043,19 +1144,21 @@ fun BilibiliVideoSurface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(
-                            start = if (isPortraitPlayback) 16.dp else 60.dp,
-                            top = 20.dp,
+                            start = if (isPortraitPlayback) 16.dp else 32.dp,
+                            top = if (fullscreenLandscape) 8.dp else 20.dp,
                             end = 12.dp,
                             bottom = 12.dp,
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    VideoOverlayTextButton(
-                        text = "关闭",
+                    VideoOverlayIconButton(
+                        expanded = false,
+                        contentDescription = "退出全屏",
                         onClick = onCloseFullscreen,
+                        backdrop = layerBackdrop,
                         modifier = Modifier
-                            .widthIn(min = 54.dp)
+                            .width(42.dp)
                             .height(VideoControlBarHeight),
                     )
                     Column(
@@ -1065,10 +1168,17 @@ fun BilibiliVideoSurface(
                         Text(
                             text = resolvedPlaybackMetadata.title,
                             color = Color.White,
-                            style = TextStyle(
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Medium,
-                            ),
+                            style = if (isPortraitPlayback) {
+                                videoControlLabelTextStyle(
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            } else {
+                                TextStyle(
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -1077,10 +1187,17 @@ fun BilibiliVideoSurface(
                             Text(
                                 text = "@$authorName",
                                 color = Color.White.copy(alpha = 0.72f),
-                                style = TextStyle(
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Normal,
-                                ),
+                                style = if (isPortraitPlayback) {
+                                    videoControlLabelTextStyle(
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Normal,
+                                    )
+                                } else {
+                                    TextStyle(
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Normal,
+                                    )
+                                },
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -1097,12 +1214,19 @@ fun BilibiliVideoSurface(
                     .align(Alignment.TopEnd)
                     .zIndex(10f),
             ) {
-                VideoOverlayTextButton(
-                    text = "全屏",
+                VideoOverlayIconButton(
+                    expanded = true,
+                    contentDescription = "全屏",
                     onClick = onFullscreen,
+                    backdrop = layerBackdrop,
                     modifier = Modifier
-                        .padding(8.dp)
-                        .widthIn(min = 54.dp)
+                        .padding(
+                            start = 8.dp,
+                            top = 0.dp,
+                            end = 4.dp,
+                            bottom = 8.dp,
+                        )
+                        .width(42.dp)
                         .height(VideoControlBarHeight),
                 )
             }
@@ -1119,6 +1243,7 @@ fun BilibiliVideoSurface(
                 .fillMaxWidth(),
         ) {
             VideoControls(
+                backdrop = layerBackdrop,
                 isPlaying = isPlaying,
                 positionMs = positionMs,
                 durationMs = durationMs,
@@ -1164,7 +1289,7 @@ fun BilibiliVideoSurface(
                 isFullscreen = isFullscreen,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(VideoControlBarHeight),
+                    .height(controlBarHeight),
             )
         }
 
@@ -1173,6 +1298,7 @@ fun BilibiliVideoSurface(
         ) {
             VideoSpeedPopup(
                 selectedSpeed = selectedSpeed,
+                backdrop = layerBackdrop,
                 onSpeedSelected = { speed ->
                     selectedSpeed = speed
                     activePlayer.setPlaybackSpeed(speed)
@@ -1186,7 +1312,7 @@ fun BilibiliVideoSurface(
                     .padding(
                         end = if (isFullscreen) 48.dp else 42.dp,
                         bottom = (if (isFullscreen) 40.dp else 8.dp) +
-                            VideoControlBarHeight + 8.dp,
+                            controlBarHeight + 8.dp,
                     ),
             )
         }
@@ -1208,7 +1334,7 @@ fun BilibiliVideoSurface(
                 .align(Alignment.BottomCenter)
                 .zIndex(20f)
                 .padding(horizontal = 6.dp)
-                .padding(bottom = (if (isFullscreen) 40.dp else 8.dp) + VideoControlBarHeight + 10.dp),
+                .padding(bottom = (if (isFullscreen) 40.dp else 8.dp) + controlBarHeight + 10.dp),
         )
 
         DanmakuSettingsOverlay(
@@ -1236,6 +1362,7 @@ fun BilibiliVideoSurface(
 
 @Composable
 private fun VideoControls(
+    backdrop: Backdrop,
     isPlaying: Boolean,
     positionMs: Long,
     durationMs: Long,
@@ -1286,8 +1413,16 @@ private fun VideoControls(
 
     Box(
         modifier = modifier
-            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
-            .clip(VideoControlCapsuleShape),
+            .graphicsLayer { clip = false }
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { VideoControlCapsuleShape },
+                effects = { liquidLargeCapsuleGlassEffects() },
+                highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+                shadow = null,
+                onDrawSurface = {},
+            )
+            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape),
     ) {
         VideoControlCapsuleProgressBackground(
             progress = progress,
@@ -1420,6 +1555,7 @@ private fun VideoControls(
 @Composable
 private fun VideoSpeedPopup(
     selectedSpeed: Float,
+    backdrop: Backdrop,
     onSpeedSelected: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1427,6 +1563,15 @@ private fun VideoSpeedPopup(
         modifier = modifier
             .width(246.dp)
             .height(42.dp)
+            .graphicsLayer { clip = false }
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { VideoControlCapsuleShape },
+                effects = { liquidLargeCapsuleGlassEffects() },
+                highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+                shadow = null,
+                onDrawSurface = {},
+            )
             .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
             .clip(VideoControlCapsuleShape)
             .padding(horizontal = 5.dp, vertical = 5.dp),
@@ -1517,13 +1662,24 @@ private fun VideoControlIcon(
 }
 
 @Composable
-private fun VideoOverlayTextButton(
-    text: String,
+private fun VideoOverlayIconButton(
+    expanded: Boolean,
+    contentDescription: String,
     onClick: () -> Unit,
+    backdrop: Backdrop,
     modifier: Modifier = Modifier,
 ) {
     Box(
         modifier = modifier
+            .graphicsLayer { clip = false }
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { VideoControlCapsuleShape },
+                effects = { liquidLargeCapsuleGlassEffects() },
+                highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+                shadow = null,
+                onDrawSurface = {},
+            )
             .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
             .clip(VideoControlCapsuleShape)
             .clickable(
@@ -1531,15 +1687,37 @@ private fun VideoOverlayTextButton(
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = onClick,
             )
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            color = Color.White,
-            style = videoControlLabelTextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold),
-            textAlign = TextAlign.Center,
-        )
+        Canvas(Modifier.size(24.dp)) {
+            val edge = 3.dp.toPx()
+            val farEdge = size.width - edge
+            val cornerLength = 6.dp.toPx()
+            val expandedInset = if (expanded) 2.dp.toPx() else 0f
+            val outerEdge = edge + expandedInset
+            val outerFarEdge = farEdge - expandedInset
+            val outerCornerEnd = outerEdge + cornerLength
+            val outerFarCornerStart = outerFarEdge - cornerLength
+            val innerCorner = size.width / 2f - 3.dp.toPx()
+            val innerFarCorner = size.width / 2f + 3.dp.toPx()
+            val stroke = 2.dp.toPx()
+            val lineColor = Color.White
+            val cap = StrokeCap.Square
+            if (expanded) {
+                // Two separated outward-facing right-angle arrow corners.
+                drawLine(lineColor, Offset(outerEdge, outerEdge), Offset(outerCornerEnd, outerEdge), stroke, cap)
+                drawLine(lineColor, Offset(outerEdge, outerEdge), Offset(outerEdge, outerCornerEnd), stroke, cap)
+                drawLine(lineColor, Offset(outerFarEdge, outerFarEdge), Offset(outerFarCornerStart, outerFarEdge), stroke, cap)
+                drawLine(lineColor, Offset(outerFarEdge, outerFarEdge), Offset(outerFarEdge, outerFarCornerStart), stroke, cap)
+            } else {
+                // The same two corners point inward to indicate leaving fullscreen.
+                drawLine(lineColor, Offset(innerCorner, innerCorner), Offset(innerCorner, edge), stroke, cap)
+                drawLine(lineColor, Offset(innerCorner, innerCorner), Offset(edge, innerCorner), stroke, cap)
+                drawLine(lineColor, Offset(innerFarCorner, innerFarCorner), Offset(farEdge, innerFarCorner), stroke, cap)
+                drawLine(lineColor, Offset(innerFarCorner, innerFarCorner), Offset(innerFarCorner, farEdge), stroke, cap)
+            }
+        }
     }
 }
 
@@ -1560,7 +1738,7 @@ private fun VideoControlCapsuleProgressBackground(
         label = "video-control-progress",
     )
     BoxWithConstraints(
-        modifier = modifier.clip(VideoControlCapsuleShape),
+        modifier = modifier,
     ) {
         if (displayedProgress > 0f) {
             val lineOffset = (maxWidth * displayedProgress - VideoProgressLineWidth)
@@ -1580,10 +1758,12 @@ private fun VideoControlCapsuleProgressBackground(
 @Composable
 fun rememberVideoControlBackdrop(): Backdrop = rememberLayerBackdrop()
 
-private suspend fun PointerInputScope.detectHorizontalVideoScrub(
+private suspend fun PointerInputScope.detectVideoPlayerDrag(
     positionState: () -> Long,
     durationState: () -> Long,
-    onDragStart: () -> Unit,
+    readSideLevel: (isRightSide: Boolean) -> Float,
+    onSideLevelChange: (isRightSide: Boolean, level: Float) -> Unit,
+    onSeekStart: () -> Unit,
     onScrubbingChange: (Boolean) -> Unit,
     onScrubPreview: (Long) -> Unit,
     onScrubCommit: (Long) -> Unit,
@@ -1595,17 +1775,104 @@ private suspend fun PointerInputScope.detectHorizontalVideoScrub(
         val startY = down.position.y
         val anchorPosition = positionState()
         val width = size.width.toFloat()
-        var dragging = false
+        val height = size.height.toFloat()
+        if (width <= 0f || height <= 0f) return@awaitEachGesture
+        val isRightSide = anchorX >= width * 0.5f
+        var gestureMode = 0 // 0 = undecided, 1 = horizontal seek, 2 = side level adjustment
+        var startLevel = 0f
         var lastSeekPosition = anchorPosition
         while (true) {
             val event = awaitPointerEvent()
             val change = event.changes.firstOrNull { it.id == down.id }
-                ?: event.changes.firstOrNull()
                 ?: break
+            val deltaX = change.position.x - anchorX
+            val deltaY = change.position.y - startY
+            val dx = abs(deltaX)
+            val dy = abs(deltaY)
+            val duration = durationState()
+            if (gestureMode == 0) {
+                when {
+                    dx > slop && dx > dy * 1.2f && duration > 0L -> {
+                        gestureMode = 1
+                        onSeekStart()
+                        onScrubbingChange(true)
+                    }
+                    dy > slop && dy > dx * 1.2f -> {
+                        gestureMode = 2
+                        startLevel = readSideLevel(isRightSide).coerceIn(0f, 1f)
+                    }
+                }
+            }
+            if (change.pressed) {
+                when (gestureMode) {
+                    1 -> {
+                        change.consume()
+                        val deltaMs = (deltaX / width * duration).toLong()
+                        val newPosition = (anchorPosition + deltaMs).coerceIn(0L, duration)
+                        if (newPosition != lastSeekPosition) {
+                            lastSeekPosition = newPosition
+                            onScrubPreview(newPosition)
+                        }
+                    }
+                    2 -> {
+                        change.consume()
+                        val deltaY = change.position.y - startY
+                        val level = when {
+                            deltaY < 0f -> {
+                                val distanceToTop = startY.coerceAtLeast(1f)
+                                startLevel + (-deltaY / distanceToTop) * (1f - startLevel)
+                            }
+                            deltaY > 0f -> {
+                                val distanceToBottom = (height - startY).coerceAtLeast(1f)
+                                startLevel - (deltaY / distanceToBottom) * startLevel
+                            }
+                            else -> startLevel
+                        }.coerceIn(0f, 1f)
+                        onSideLevelChange(isRightSide, level)
+                    }
+                }
+            }
+            if (event.changes.all { it.changedToUpIgnoreConsumed() }) break
+        }
+        if (gestureMode == 1) {
+            onScrubCommit(lastSeekPosition)
+            onScrubbingChange(false)
+        }
+    }
+}
+
+private fun Context.findActivity(): Activity? {
+    var current: Context = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return current as? Activity
+}
+
+private suspend fun PointerInputScope.detectHorizontalVideoScrub(
+    positionState: () -> Long,
+    durationState: () -> Long,
+    onDragStart: () -> Unit,
+    onScrubbingChange: (Boolean) -> Unit,
+    onScrubPreview: (Long) -> Unit,
+    onScrubCommit: (Long) -> Unit,
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val anchorX = down.position.x
+        val startY = down.position.y
+        val anchorPosition = positionState()
+        val width = size.width.toFloat()
+        var dragging = false
+        var lastSeekPosition = anchorPosition
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
             val dx = abs(change.position.x - anchorX)
             val dy = abs(change.position.y - startY)
             val duration = durationState()
-            if (!dragging && dx > slop && dx > dy && duration > 0L && width > 0f) {
+            if (!dragging && dx > viewConfiguration.touchSlop && dx > dy && duration > 0L) {
                 dragging = true
                 onDragStart()
                 onScrubbingChange(true)
@@ -1624,6 +1891,53 @@ private suspend fun PointerInputScope.detectHorizontalVideoScrub(
         if (dragging) {
             onScrubCommit(lastSeekPosition)
             onScrubbingChange(false)
+        }
+    }
+}
+
+@Composable
+private fun SideAdjustmentIndicator(
+    progress: Float,
+    backdrop: Backdrop,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .width(34.dp)
+            .height(148.dp)
+            .graphicsLayer { clip = false }
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { VideoControlCapsuleShape },
+                effects = { liquidLargeCapsuleGlassEffects() },
+                highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+                shadow = null,
+                onDrawSurface = { drawRect(Color.White.copy(alpha = 0.06f)) },
+            )
+            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
+            .clip(VideoControlCapsuleShape)
+            .padding(vertical = 15.dp),
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val centerX = size.width / 2f
+            val bottom = size.height
+            val filledHeight = bottom * progress.coerceIn(0f, 1f)
+            drawLine(
+                color = Color.White.copy(alpha = 0.34f),
+                start = Offset(centerX, bottom),
+                end = Offset(centerX, 0f),
+                strokeWidth = 4.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            if (filledHeight > 0f) {
+                drawLine(
+                    color = Color.White,
+                    start = Offset(centerX, bottom),
+                    end = Offset(centerX, bottom - filledHeight),
+                    strokeWidth = 6.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+            }
         }
     }
 }

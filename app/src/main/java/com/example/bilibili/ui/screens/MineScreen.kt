@@ -51,6 +51,8 @@ fun MineScreen(
     onSwitchAccount: (String) -> Unit = {},
     onDeleteAccount: (String) -> Unit = {},
     onAddAccount: () -> Unit = {},
+    autoHideBarsOnScroll: Boolean = true,
+    onAutoHideBarsOnScrollChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (!loggedIn) {
@@ -100,6 +102,8 @@ fun MineScreen(
         onSwitchAccount = onSwitchAccount,
         onDeleteAccount = onDeleteAccount,
         onAddAccount = onAddAccount,
+        autoHideBarsOnScroll = autoHideBarsOnScroll,
+        onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
         modifier = modifier,
     )
 }

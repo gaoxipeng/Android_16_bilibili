@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.exoplayer.ExoPlayer
+import android.view.Window
 import com.example.bilibili.data.BiliDanmakuItem
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
@@ -20,6 +21,11 @@ class VideoPlaybackCoordinator(
     private val readPersistedPosition: (String) -> Long = { 0L },
     private val writePersistedPosition: (String, Long) -> Unit = { _, _ -> },
 ) {
+    private var playbackBrightnessWindow: Window? = null
+    private var playbackBrightnessOriginal: Float? = null
+    private var playbackBrightnessCurrent: Float? = null
+    private var playbackBrightnessKey: String? = null
+
     var activeKey by mutableStateOf<String?>(null)
     var fullscreenKey by mutableStateOf<String?>(null)
     var fullscreenPortraitVideo by mutableStateOf<Boolean?>(null)
@@ -181,6 +187,9 @@ class VideoPlaybackCoordinator(
     }
 
     fun requestInlinePlayback(key: String) {
+        if (activeKey != null && activeKey != key) {
+            restorePlaybackWindowBrightness()
+        }
         if (fullscreenKey == key) {
             activeKey = key
             return
@@ -201,6 +210,9 @@ class VideoPlaybackCoordinator(
         video: BiliVideoItem? = null,
         stream: BiliPlayStream? = null,
     ) {
+        if (activeKey != null && activeKey != key) {
+            restorePlaybackWindowBrightness()
+        }
         activeKey = key
         fullscreenKey = key
         fullscreenPortraitVideo = portraitVideo
@@ -267,6 +279,7 @@ class VideoPlaybackCoordinator(
     }
 
     fun stopPlayback() {
+        restorePlaybackWindowBrightness()
         playbackStopping = true
         keepScreenOnOwners.clear()
         keepScreenOnRequested = false
@@ -310,6 +323,52 @@ class VideoPlaybackCoordinator(
         fullscreenVideo = null
         fullscreenStream = null
         fullscreenOrientationLocked = true
+    }
+
+    fun setPlaybackWindowBrightness(
+        playbackKey: String,
+        window: Window,
+        brightness: Float,
+    ) {
+        if (playbackBrightnessKey != playbackKey || playbackBrightnessWindow !== window) {
+            restorePlaybackWindowBrightness()
+            playbackBrightnessKey = playbackKey
+            playbackBrightnessWindow = window
+            playbackBrightnessOriginal = window.attributes.screenBrightness
+        }
+        val clampedBrightness = brightness.coerceIn(0.01f, 1f)
+        window.attributes = window.attributes.apply {
+            screenBrightness = clampedBrightness
+        }
+        playbackBrightnessCurrent = clampedBrightness
+    }
+
+    fun getPlaybackWindowBrightness(
+        playbackKey: String,
+        window: Window,
+        fallback: Float,
+    ): Float {
+        if (playbackBrightnessKey == playbackKey && playbackBrightnessWindow === window) {
+            return playbackBrightnessCurrent
+                ?: window.attributes.screenBrightness.takeIf { it >= 0f }
+                ?: fallback
+        }
+        return window.attributes.screenBrightness.takeIf { it >= 0f } ?: fallback
+    }
+
+    fun restorePlaybackWindowBrightness(playbackKey: String? = null) {
+        if (playbackKey != null && playbackBrightnessKey != playbackKey) return
+        val window = playbackBrightnessWindow
+        val original = playbackBrightnessOriginal
+        if (window != null && original != null) {
+            runCatching {
+                window.attributes = window.attributes.apply { screenBrightness = original }
+            }
+        }
+        playbackBrightnessWindow = null
+        playbackBrightnessOriginal = null
+        playbackBrightnessCurrent = null
+        playbackBrightnessKey = null
     }
 
     fun updateFullscreenPortrait(portraitVideo: Boolean) {

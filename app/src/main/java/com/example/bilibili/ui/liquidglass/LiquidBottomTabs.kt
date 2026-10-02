@@ -3,8 +3,8 @@ package com.example.bilibili.ui.liquidglass
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import com.example.bilibili.ui.theme.isAppLightTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -21,42 +21,36 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceIn
-import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
 import com.example.bilibili.ui.theme.TabAccentDark
 import com.example.bilibili.ui.theme.TabAccentLight
 import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.sign
 
@@ -74,9 +68,7 @@ fun LiquidBottomTabs(
 ) {
     val isLightTheme = isAppLightTheme()
     val accentColor = if (isLightTheme) TabAccentLight else TabAccentDark
-    val surfaceColor = liquidSurfaceColor(isLightTheme)
-
-    val tabsBackdrop = rememberLayerBackdrop()
+    val capsuleSurfaceColor = liquidLargeCapsuleSurfaceColor(isLightTheme)
 
     BoxWithConstraints(
         modifier.graphicsLayer { clip = false },
@@ -97,21 +89,22 @@ fun LiquidBottomTabs(
             }
         }
 
-    val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
-    val animationScope = rememberCoroutineScope()
-    val selectedIndex = selectedTabIndex().fastCoerceIn(0, tabsCount - 1)
-    var currentIndex by remember { mutableIntStateOf(selectedIndex) }
-    var gestureTargetIndex by remember { mutableIntStateOf(selectedIndex) }
+        val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
+        val animationScope = rememberCoroutineScope()
+        val selectedIndex = selectedTabIndex().fastCoerceIn(0, tabsCount - 1)
+        val currentSelectedIndex = rememberUpdatedState(selectedIndex)
+        val currentOnTabSelected = rememberUpdatedState(onTabSelected)
+        val currentOnTabLongPress = rememberUpdatedState(onTabLongPress)
+        val horizontalInsetPx = with(density) { 4.dp.toPx() }
         var isUserGesturing by remember { mutableStateOf(false) }
         var lastGesturePosition by remember { mutableStateOf(Offset.Zero) }
         val barWidthPx = constraints.maxWidth.toFloat()
 
         fun nearestTabIndex(position: Offset): Int {
-            val slotWidth = barWidthPx / tabsCount
             var bestIndex = 0
             var bestDistance = Float.MAX_VALUE
             for (i in 0 until tabsCount) {
-                val centerX = slotWidth * (i + 0.5f)
+                val centerX = horizontalInsetPx + tabWidth * (i + 0.5f)
                 val distance = abs(position.x - centerX)
                 if (distance < bestDistance) {
                     bestDistance = distance
@@ -121,10 +114,14 @@ fun LiquidBottomTabs(
             return if (isLtr) bestIndex else tabsCount - 1 - bestIndex
         }
 
-        fun valueAt(position: Offset): Float = nearestTabIndex(position).toFloat()
+        fun valueAt(position: Offset): Float {
+            val visualValue = ((position.x - horizontalInsetPx) / tabWidth - 0.5f)
+                .fastCoerceIn(0f, (tabsCount - 1).toFloat())
+            return if (isLtr) visualValue else (tabsCount - 1).toFloat() - visualValue
+        }
 
         fun commitTabSelection(index: Int) {
-            onTabSelected(index)
+            currentOnTabSelected.value(index)
         }
 
         val dampedDragAnimation = remember(animationScope, tabsCount) {
@@ -135,33 +132,9 @@ fun LiquidBottomTabs(
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
                 pressedScale = 78f / 56f,
-                onDragStarted = { position ->
-                    isUserGesturing = true
-                    lastGesturePosition = position
-                    gestureTargetIndex = nearestTabIndex(position)
-                },
-                onDragStopped = {
-                    val clampedIndex = nearestTabIndex(lastGesturePosition)
-                        .fastCoerceIn(0, tabsCount - 1)
-                    currentIndex = clampedIndex
-                    gestureTargetIndex = clampedIndex
-                    updateValue(clampedIndex.toFloat())
-                    commitTabSelection(clampedIndex)
-                    isUserGesturing = false
-                    animationScope.launch {
-                        offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
-                    }
-                },
-                onDrag = { _, dragAmount, position ->
-                    lastGesturePosition = position
-                    val newValue = (targetValue + dragAmount.x / tabWidth * if (isLtr) 1f else -1f)
-                        .fastCoerceIn(0f, (tabsCount - 1).toFloat())
-                    gestureTargetIndex = newValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
-                    updateValue(newValue)
-                    animationScope.launch {
-                        offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
-                    }
-                }
+                onDragStarted = {},
+                onDragStopped = {},
+                onDrag = { _, _, _ -> },
             )
         }
 
@@ -171,8 +144,6 @@ fun LiquidBottomTabs(
 
         LaunchedEffect(selectedIndex, isUserGesturing) {
             if (isUserGesturing) return@LaunchedEffect
-            currentIndex = selectedIndex
-            gestureTargetIndex = selectedIndex
             dampedDragAnimation.updateValue(selectedIndex.toFloat())
         }
 
@@ -181,8 +152,8 @@ fun LiquidBottomTabs(
                 override fun begin(position: Offset) {
                     isUserGesturing = true
                     lastGesturePosition = position
-                    gestureTargetIndex = nearestTabIndex(position)
                     dampedDragAnimation.press()
+                    dampedDragAnimation.updateValue(valueAt(position))
                 }
 
                 override fun drag(position: Offset, dragAmount: Offset) {
@@ -193,7 +164,6 @@ fun LiquidBottomTabs(
                     } else {
                         valueAt(position)
                     }
-                    gestureTargetIndex = newValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
                     dampedDragAnimation.updateValue(newValue)
                     animationScope.launch {
                         offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
@@ -203,8 +173,6 @@ fun LiquidBottomTabs(
                 override fun end() {
                     val clampedIndex = nearestTabIndex(lastGesturePosition)
                         .fastCoerceIn(0, tabsCount - 1)
-                    currentIndex = clampedIndex
-                    gestureTargetIndex = clampedIndex
                     dampedDragAnimation.updateValue(clampedIndex.toFloat())
                     commitTabSelection(clampedIndex)
                     dampedDragAnimation.release()
@@ -216,7 +184,7 @@ fun LiquidBottomTabs(
 
                 override fun cancel() {
                     isUserGesturing = false
-                    dampedDragAnimation.release()
+                    dampedDragAnimation.animateToValue(currentSelectedIndex.value.toFloat())
                     animationScope.launch {
                         offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
                     }
@@ -265,112 +233,49 @@ fun LiquidBottomTabs(
         }
 
         val barShape = RoundedCornerShape(percent = 50)
-        val barBorderColor = liquidMenuBorderColor(isLightTheme)
-
-        CompositionLocalProvider(LocalLiquidBottomTabBackdropRow provides false) {
-            Row(
-                Modifier
-                    .graphicsLayer {
-                        clip = false
-                        translationX = panelOffset
-                    }
-                    .drawBackdrop(
-                        backdrop = backdrop,
-                        shape = { barShape },
-                        effects = { liquidMenuGlassEffects() },
-                        highlight = null,
-                        shadow = null,
-                        layerBlock = {
-                            val progress = indicatorPressProgress
-                            val scale = lerp(1f, 1f + 16f.dp.toPx() / size.width, progress)
-                            scaleX = scale
-                            scaleY = scale
-                        },
-                        onDrawSurface = { drawRect(surfaceColor) },
-                    )
-                    .border(LiquidMenuBorderWidth, barBorderColor, barShape)
-                    .then(interactiveHighlight.modifier)
-                    .height(64f.dp)
-                    .fillMaxWidth()
-                    .padding(4f.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                content = content,
-            )
-        }
-
-        CompositionLocalProvider(
-            LocalLiquidBottomTabScale provides {
-                lerp(1f, 1.2f, indicatorPressProgress)
-            },
-            LocalLiquidBottomTabBackdropRow provides true,
-        ) {
-            Row(
-                Modifier
-                    .clearAndSetSemantics {}
-                    .alpha(0f)
-                    .layerBackdrop(tabsBackdrop)
-                    .graphicsLayer {
-                        translationX = panelOffset
-                    }
-                    .drawBackdrop(
-                        backdrop = backdrop,
-                        shape = { RoundedCornerShape(percent = 50) },
-                        effects = {
-                            val progress = indicatorPressProgress
-                            vibrancy()
-                            blur(BottomBarCapsuleBlurRadius.toPx())
-                            lens(
-                                BottomBarCapsuleLensRefraction.toPx() * progress.coerceAtLeast(0.01f),
-                                BottomBarCapsuleBlurRadius.toPx() * progress.coerceAtLeast(0.01f),
-                            )
-                        },
-                        highlight = {
-                            Highlight.Default.copy(alpha = indicatorPressProgress)
-                        },
-                        onDrawSurface = { drawRect(surfaceColor) }
-                    )
-                    .then(interactiveHighlight.modifier)
-                    .height(56f.dp)
-                    .fillMaxWidth()
-                    .padding(horizontal = 4f.dp)
-                    .graphicsLayer(colorFilter = ColorFilter.tint(accentColor)),
-                verticalAlignment = Alignment.CenterVertically,
-                content = content,
-            )
-        }
+        Box(
+            Modifier
+                .graphicsLayer {
+                    clip = false
+                    translationX = panelOffset
+                    val scale = lerp(1f, 1f + 16f.dp.toPx() / size.width, indicatorPressProgress)
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { barShape },
+                    effects = { liquidLargeCapsuleGlassEffects() },
+                    highlight = { Highlight.Default },
+                    shadow = { Shadow.Default },
+                    onDrawSurface = { drawRect(capsuleSurfaceColor) },
+                )
+                .then(liquidLargeCapsuleEdgeBorder(barShape, isLightTheme))
+                .height(64.dp)
+                .fillMaxWidth(),
+        )
 
         Box(
             Modifier
                 .padding(horizontal = 4f.dp)
                 .graphicsLayer {
                     clip = false
-                    translationX =
-                        if (isLtr) indicatorValue * tabWidth + panelOffset
-                        else size.width - (indicatorValue + 1f) * tabWidth + panelOffset
+                    transformOrigin = TransformOrigin.Center
+                    val visualIndex = if (isLtr) indicatorValue else tabsCount - 1f - indicatorValue
+                    translationX = visualIndex * tabWidth + panelOffset
                 }
                 .drawBackdrop(
-                    backdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop),
+                    backdrop = backdrop,
                     shape = { RoundedCornerShape(percent = 50) },
                     effects = {
                         val progress = indicatorPressProgress
-                        lens(
-                            10f.dp.toPx() * progress,
-                            14f.dp.toPx() * progress,
-                            chromaticAberration = true,
-                        )
+                        blur(8f.dp.toPx() * (1f - progress), TileMode.Decal)
+                        lens(10f.dp.toPx() * progress, 14f.dp.toPx() * progress, chromaticAberration = true)
                     },
                     highlight = {
-                        Highlight.Default.copy(alpha = indicatorPressProgress)
+                        Highlight.Default.copy(alpha = 0.2f + 0.6f * indicatorPressProgress)
                     },
-                    shadow = {
-                        Shadow(alpha = indicatorPressProgress)
-                    },
-                    innerShadow = {
-                        InnerShadow(
-                            radius = 8f.dp * indicatorPressProgress,
-                            alpha = indicatorPressProgress,
-                        )
-                    },
+                    shadow = null,
                     layerBlock = {
                         scaleX = indicatorScaleX
                         scaleY = indicatorScaleY
@@ -379,53 +284,130 @@ fun LiquidBottomTabs(
                         scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
                     },
                     onDrawSurface = {
-                        val progress = indicatorPressProgress
+                        // Match Weibo's indicator tint so the small glass capsule
+                        // remains visible against bright and white page backgrounds.
                         drawRect(
-                            if (isLightTheme) Color.Black.copy(0.1f)
-                            else Color.White.copy(0.1f),
-                            alpha = 1f - progress,
+                            (if (isLightTheme) Color(0xFFB9BDC3) else Color(0xFF92979E)).copy(
+                                alpha = if (isLightTheme) lerp(0.32f, 0.015f, indicatorPressProgress)
+                                else lerp(0.22f, 0.01f, indicatorPressProgress),
+                            ),
                         )
-                        drawRect(Color.Black.copy(alpha = 0.03f * progress))
-                    }
+                    },
                 )
                 .height(56f.dp)
                 .fillMaxWidth(1f / tabsCount)
         )
 
+        CompositionLocalProvider(
+            LocalLiquidBottomTabPressProgress provides indicatorPressProgress,
+            LocalLiquidBottomTabCoverage provides { index: Int ->
+                val iconHalfWidth = with(density) { 11.dp.toPx() }
+                val capsuleHalfWidth = tabWidth * indicatorScaleX / 2f
+                val centerDistance = abs(index - indicatorValue) * tabWidth
+                ((capsuleHalfWidth + iconHalfWidth - centerDistance) / (2f * iconHalfWidth))
+                    .coerceIn(0f, 1f)
+            },
+        ) {
+            Row(
+                Modifier
+                    .graphicsLayer {
+                        clip = false
+                        translationX = panelOffset
+                    }
+                    .then(interactiveHighlight.modifier)
+                    .height(64.dp)
+                    .fillMaxWidth()
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = content,
+            )
+        }
+
         Box(
             Modifier
                 .matchParentSize()
-                .pointerInput(tabsCount, barWidthPx, isLtr) {
-                    detectTapGestures { offset ->
-                        val index = nearestTabIndex(offset).fastCoerceIn(0, tabsCount - 1)
-                        currentIndex = index
-                        gestureTargetIndex = index
-                        dampedDragAnimation.updateValue(index.toFloat())
-                        commitTabSelection(index)
-                    }
-                }
-                .pointerInput(feedTabIndex, barWidthPx, tabsCount, isLtr) {
-                    detectTapGestures(
-                        onLongPress = { offset ->
-                            val slotWidth = barWidthPx / tabsCount
-                            var bestIndex = 0
-                            var bestDistance = Float.MAX_VALUE
-                            for (i in 0 until tabsCount) {
-                                val centerX = slotWidth * (i + 0.5f)
-                                val distance = kotlin.math.abs(offset.x - centerX)
-                                if (distance < bestDistance) {
-                                    bestDistance = distance
-                                    bestIndex = i
+                .pointerInput(tabsCount, feedTabIndex, barWidthPx, isLtr) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        dampedDragAnimation.press()
+                        var latestPosition = down.position
+                        var releasedBeforeLongPress = false
+                        var movedBeforeLongPress = false
+                        val completedBeforeTimeout = withTimeoutOrNull(
+                            viewConfiguration.longPressTimeoutMillis,
+                        ) {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                    ?: event.changes.firstOrNull()
+                                    ?: return@withTimeoutOrNull true
+                                latestPosition = change.position
+                                if (!change.pressed) {
+                                    releasedBeforeLongPress = true
+                                    change.consume()
+                                    return@withTimeoutOrNull true
                                 }
+                                if ((change.position - down.position).getDistance() >
+                                    viewConfiguration.touchSlop
+                                ) {
+                                    movedBeforeLongPress = true
+                                    return@withTimeoutOrNull true
+                                }
+                                change.consume()
                             }
-                            val index = if (isLtr) bestIndex else tabsCount - 1 - bestIndex
-                            if (index == feedTabIndex) {
-                                onTabLongPress(index)
+                            @Suppress("UNREACHABLE_CODE")
+                            true
+                        } != null
+
+                        if (completedBeforeTimeout && releasedBeforeLongPress) {
+                            val index = nearestTabIndex(down.position)
+                            dampedDragAnimation.animateToValue(index.toFloat())
+                            commitTabSelection(index)
+                            isUserGesturing = false
+                            animationScope.launch {
+                                offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
                             }
-                        },
-                    )
-                }
-                .then(dampedDragAnimation.modifier),
+                            return@awaitEachGesture
+                        }
+
+                        isUserGesturing = true
+                        lastGesturePosition = latestPosition
+                        dampedDragAnimation.updateValue(valueAt(latestPosition))
+                        if (!completedBeforeTimeout && !movedBeforeLongPress &&
+                            nearestTabIndex(down.position) == feedTabIndex
+                        ) {
+                            currentOnTabLongPress.value(feedTabIndex)
+                        }
+
+                        var previousPosition = latestPosition
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                                ?: event.changes.firstOrNull()
+                                ?: break
+                            latestPosition = change.position
+                            change.consume()
+                            if (!change.pressed) break
+
+                            val dragAmount = latestPosition - previousPosition
+                            previousPosition = latestPosition
+                            lastGesturePosition = latestPosition
+                            dampedDragAnimation.updateValue(valueAt(latestPosition))
+                            animationScope.launch {
+                                offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
+                            }
+                        }
+
+                        val targetIndex = nearestTabIndex(latestPosition)
+                        dampedDragAnimation.animateToValue(targetIndex.toFloat())
+                        if (targetIndex != currentSelectedIndex.value) commitTabSelection(targetIndex)
+                        isUserGesturing = false
+                        animationScope.launch {
+                            offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
+                        }
+                    }
+                },
         )
     }
 }

@@ -11,16 +11,15 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
 
-internal val LocalLiquidBottomTabScale =
-    staticCompositionLocalOf { { 1f } }
+internal val LocalLiquidBottomTabCoverage =
+    staticCompositionLocalOf<(Int) -> Float> { { 0f } }
 
-internal val LocalLiquidBottomTabBackdropRow =
-    staticCompositionLocalOf { false }
+internal val LocalLiquidBottomTabPressProgress =
+    staticCompositionLocalOf { 0f }
 
 @Composable
 fun RowScope.LiquidBottomTab(
@@ -28,7 +27,6 @@ fun RowScope.LiquidBottomTab(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val scale = LocalLiquidBottomTabScale.current
     Column(
         modifier
             .clip(RoundedCornerShape(percent = 50))
@@ -39,12 +37,7 @@ fun RowScope.LiquidBottomTab(
                 onClick = onClick
             )
             .fillMaxHeight()
-            .weight(1f)
-            .graphicsLayer {
-                val scale = scale()
-                scaleX = scale
-                scaleY = scale
-            },
+            .weight(1f),
         verticalArrangement = Arrangement.spacedBy(0.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
         content = content

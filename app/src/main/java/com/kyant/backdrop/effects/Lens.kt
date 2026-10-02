@@ -12,11 +12,14 @@ import com.kyant.backdrop.internal.RoundedRectRefractionWithDispersionShaderStri
 import com.kyant.backdrop.internal.RuntimeShaderEffect
 import com.kyant.backdrop.isRuntimeShaderSupported
 
+private const val LiquidGlassRefractionScale = 0.62f
+
 fun BackdropEffectScope.lens(
     @FloatRange(from = 0.0) refractionHeight: Float,
     @FloatRange(from = 0.0) refractionAmount: Float,
     depthEffect: Boolean = false,
-    chromaticAberration: Boolean = false
+    chromaticAberration: Boolean = false,
+    @FloatRange(from = 0.0, to = 1.0) chromaticAberrationAmount: Float = 1f,
 ) {
     if (!com.example.bilibili.ui.liquidglass.LiquidGlassConfig.enableLensEffects) return
     if (!isRuntimeShaderSupported()) return
@@ -46,10 +49,13 @@ fun BackdropEffectScope.lens(
                 setFloatUniform("offset", -padding, -padding)
                 setFloatUniform("cornerRadii", cornerRadii)
                 setFloatUniform("refractionHeight", refractionHeight)
-                setFloatUniform("refractionAmount", -refractionAmount)
+                setFloatUniform("refractionAmount", -refractionAmount * LiquidGlassRefractionScale)
                 setFloatUniform("depthEffect", if (depthEffect) 1f else 0f)
                 if (chromaticAberration) {
-                    setFloatUniform("chromaticAberration", 1f)
+                    setFloatUniform(
+                        "chromaticAberration",
+                        chromaticAberrationAmount.coerceIn(0f, 1f) * LiquidGlassRefractionScale,
+                    )
                 }
             }
             RuntimeShaderEffect(shader, "content")

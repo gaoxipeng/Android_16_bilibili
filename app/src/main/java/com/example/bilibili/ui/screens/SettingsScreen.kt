@@ -182,6 +182,8 @@ fun SettingsScreen(
     onSwitchAccount: (String) -> Unit = {},
     onDeleteAccount: (String) -> Unit = {},
     onAddAccount: () -> Unit = {},
+    autoHideBarsOnScroll: Boolean = true,
+    onAutoHideBarsOnScrollChange: (Boolean) -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -247,6 +249,12 @@ fun SettingsScreen(
                     )
                 }
                 item {
+                    SettingsAutoHideBarsCard(
+                        enabled = autoHideBarsOnScroll,
+                        onEnabledChange = onAutoHideBarsOnScrollChange,
+                    )
+                }
+                item {
                     SettingsPlaybackCard(
                         backgroundPlaybackEnabled = backgroundPlaybackEnabled,
                         onBackgroundPlaybackChange = onBackgroundPlaybackChange,
@@ -259,6 +267,46 @@ fun SettingsScreen(
                     SettingsAboutCard(versionName = appVersionName)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsAutoHideBarsCard(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    SettingsPlainCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = "自动隐藏底栏和搜索框",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = if (enabled) {
+                        "滚动时，底栏和首页搜索框自动隐藏"
+                    } else {
+                        "滚动时，底栏和首页搜索框保持显示"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = onEnabledChange,
+            )
         }
     }
 }

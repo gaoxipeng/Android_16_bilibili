@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -12,19 +11,19 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliVideoItem
+import com.example.bilibili.ui.liquidglass.SurfaceLiquidCapsule
+import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.delay
 
 private val HintCapsuleProgressBg = Color(0xFF00AEEC)
@@ -43,6 +42,7 @@ fun feedRefreshHintMessage(
 fun FeedRefreshHintOverlay(
     message: String?,
     onDismiss: () -> Unit,
+    backdrop: Backdrop,
     modifier: Modifier = Modifier,
     zIndex: Float = 95f,
 ) {
@@ -59,6 +59,7 @@ fun FeedRefreshHintOverlay(
             FeedRefreshCapsuleHint(
                 message = it,
                 onDismiss = onDismiss,
+                backdrop = backdrop,
             )
         }
     }
@@ -68,6 +69,7 @@ fun FeedRefreshHintOverlay(
 private fun FeedRefreshCapsuleHint(
     message: String,
     onDismiss: () -> Unit,
+    backdrop: Backdrop,
     modifier: Modifier = Modifier,
     autoDismissMillis: Long = 2200L,
 ) {
@@ -76,7 +78,7 @@ private fun FeedRefreshCapsuleHint(
         onDismiss()
     }
 
-    BlueHintCapsule(modifier = modifier) {
+    BlueHintCapsule(modifier = modifier, backdrop = backdrop) {
         Column(
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -94,19 +96,21 @@ private fun FeedRefreshCapsuleHint(
 @Composable
 private fun BlueHintCapsule(
     modifier: Modifier = Modifier,
+    backdrop: Backdrop,
     content: @Composable () -> Unit,
 ) {
-    val shape = RoundedCornerShape(22.dp)
-    Box(
-        modifier = modifier
-            .clip(shape)
-            .background(HintCapsuleProgressBg, shape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier.wrapContentSize(),
-            contentAlignment = Alignment.Center,
-            content = { content() },
-        )
-    }
+    SurfaceLiquidCapsule(
+        modifier = modifier,
+        backdrop = backdrop,
+        pill = true,
+        useMenuGlassStyle = true,
+        tint = HintCapsuleProgressBg,
+        content = {
+            Box(
+                modifier = Modifier.wrapContentSize(),
+                contentAlignment = Alignment.Center,
+                content = { content() },
+            )
+        },
+    )
 }

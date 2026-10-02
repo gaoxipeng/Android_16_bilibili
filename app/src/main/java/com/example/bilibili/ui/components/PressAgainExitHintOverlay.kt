@@ -68,7 +68,7 @@ fun PressAgainExitHintOverlay(
             ActionFrostedCard(
                 modifier = Modifier.fillMaxSize(),
                 backdrop = backdrop,
-                effectContainerColor = ActionMenuDestructiveColor,
+                effectContainerColor = ActionMenuDestructiveColor.copy(alpha = 0.66f),
             ) {
                 ActionMenuRow(
                     label = ExitHintLabel,
