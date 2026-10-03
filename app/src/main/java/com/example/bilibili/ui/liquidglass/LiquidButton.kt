@@ -149,6 +149,7 @@ fun LiquidButton(
     borderWidth: Dp = 0.dp,
     borderColor: Color = Color.Unspecified,
     onDoubleClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(percent = 50)
@@ -163,11 +164,12 @@ fun LiquidButton(
         InteractiveHighlight(animationScope = animationScope)
     }
     val interactionModifier =
-        if (onDoubleClick != null) {
-            Modifier.pointerInput(onClick, onDoubleClick) {
+        if (onDoubleClick != null || onLongClick != null) {
+            Modifier.pointerInput(onClick, onDoubleClick, onLongClick) {
                 detectTapGestures(
                     onTap = { onClick() },
-                    onDoubleTap = { onDoubleClick() },
+                    onDoubleTap = { onDoubleClick?.invoke() },
+                    onLongPress = { onLongClick?.invoke() },
                 )
             }
         } else {
@@ -426,6 +428,7 @@ fun SurfaceLiquidIconButton(
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
     onDoubleClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     isInteractive: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
@@ -434,6 +437,7 @@ fun SurfaceLiquidIconButton(
         backdrop = backdrop,
         modifier = modifier,
         onDoubleClick = onDoubleClick,
+        onLongClick = onLongClick,
         isInteractive = isInteractive,
         surfaceColor = liquidSurfaceColor(isAppLightTheme()),
         content = content,

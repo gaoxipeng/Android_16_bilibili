@@ -278,6 +278,7 @@ fun VideoDetailScreen(
     onOpenDescriptionVideo: (BiliVideoItem, Int) -> Unit = { video, _ -> onOpenUgcEpisode(video) },
     onOpenCommentVideo: (BiliVideoItem, Int) -> Unit = onOpenDescriptionVideo,
     onSearchTagClick: (String) -> Unit = {},
+    onBack: () -> Unit = {},
     playbackActive: Boolean = true,
     onStreamSourceError: (BiliVideoItem) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -1379,6 +1380,7 @@ fun VideoDetailScreen(
                             isFullscreen = false,
                             coordinator = coordinator,
                             backdrop = controlBackdrop,
+                            onBack = onBack,
                             onFullscreen = {
                                 autoFullscreenByRotation = false
                                 closeAutoFullscreenAfterPortrait = false

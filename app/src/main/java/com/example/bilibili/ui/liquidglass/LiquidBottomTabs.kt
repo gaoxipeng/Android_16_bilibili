@@ -62,8 +62,6 @@ fun LiquidBottomTabs(
     tabsCount: Int,
     modifier: Modifier = Modifier,
     gestureController: LiquidBottomTabsGestureController = rememberLiquidBottomTabsGestureController(),
-    feedTabIndex: Int = 0,
-    onTabLongPress: (index: Int) -> Unit = {},
     content: @Composable RowScope.() -> Unit
 ) {
     val isLightTheme = isAppLightTheme()
@@ -94,11 +92,9 @@ fun LiquidBottomTabs(
         val selectedIndex = selectedTabIndex().fastCoerceIn(0, tabsCount - 1)
         val currentSelectedIndex = rememberUpdatedState(selectedIndex)
         val currentOnTabSelected = rememberUpdatedState(onTabSelected)
-        val currentOnTabLongPress = rememberUpdatedState(onTabLongPress)
         val horizontalInsetPx = with(density) { 4.dp.toPx() }
         var isUserGesturing by remember { mutableStateOf(false) }
         var lastGesturePosition by remember { mutableStateOf(Offset.Zero) }
-        val barWidthPx = constraints.maxWidth.toFloat()
 
         fun nearestTabIndex(position: Offset): Int {
             var bestIndex = 0
@@ -326,14 +322,13 @@ fun LiquidBottomTabs(
         Box(
             Modifier
                 .matchParentSize()
-                .pointerInput(tabsCount, feedTabIndex, barWidthPx, isLtr) {
+                .pointerInput(tabsCount, isLtr) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         down.consume()
                         dampedDragAnimation.press()
                         var latestPosition = down.position
                         var releasedBeforeLongPress = false
-                        var movedBeforeLongPress = false
                         val completedBeforeTimeout = withTimeoutOrNull(
                             viewConfiguration.longPressTimeoutMillis,
                         ) {
@@ -351,7 +346,6 @@ fun LiquidBottomTabs(
                                 if ((change.position - down.position).getDistance() >
                                     viewConfiguration.touchSlop
                                 ) {
-                                    movedBeforeLongPress = true
                                     return@withTimeoutOrNull true
                                 }
                                 change.consume()
@@ -374,12 +368,6 @@ fun LiquidBottomTabs(
                         isUserGesturing = true
                         lastGesturePosition = latestPosition
                         dampedDragAnimation.updateValue(valueAt(latestPosition))
-                        if (!completedBeforeTimeout && !movedBeforeLongPress &&
-                            nearestTabIndex(down.position) == feedTabIndex
-                        ) {
-                            currentOnTabLongPress.value(feedTabIndex)
-                        }
-
                         var previousPosition = latestPosition
                         while (true) {
                             val event = awaitPointerEvent()

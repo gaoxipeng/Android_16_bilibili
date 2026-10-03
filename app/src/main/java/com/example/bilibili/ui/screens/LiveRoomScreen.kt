@@ -74,6 +74,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -119,11 +121,15 @@ import com.example.bilibili.player.buildLiveMediaSource
 import com.example.bilibili.ui.format.formatBiliCount
 import com.example.bilibili.ui.theme.BiliPink
 import com.example.bilibili.ui.components.BiliCommentText
-import com.example.bilibili.ui.components.BilibiliFollowButton
 import com.example.bilibili.ui.components.RemoteImage
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.highlight.Highlight
+import com.example.bilibili.ui.liquidglass.LocalLiquidMenuBackdrop
+import com.example.bilibili.ui.liquidglass.liquidLargeCapsuleGlassEffects
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -602,6 +608,7 @@ fun LiveRoomScreen(
                                 onDanmakuInputChange = { danmakuInput = it },
                                 onSendDanmaku = ::sendDanmaku,
                                 onFocusChange = { danmakuInputFocused = it },
+                                backdrop = livePlayerBackdrop,
                                 modifier = Modifier.weight(1f),
                             )
                             LiveRoomPlayerControls(
@@ -615,6 +622,7 @@ fun LiveRoomScreen(
                                     showDanmakuSettings = true
                                 },
                                 isFullscreen = true,
+                                backdrop = livePlayerBackdrop,
                                 onFullscreenToggle = {
                                     onLivePlayerControlInteraction()
                                     isFullscreen = false
@@ -634,6 +642,7 @@ fun LiveRoomScreen(
                     LiveRoomFullscreenTopBar(
                         title = liveRoomTitle,
                         immersive = true,
+                        backdrop = livePlayerBackdrop,
                         onClose = {
                             onLivePlayerControlInteraction()
                             isFullscreen = false
@@ -714,6 +723,7 @@ fun LiveRoomScreen(
                                 followState = liveHeaderFollowState,
                                 onAnchorClick = onAnchorProfileClick,
                                 overlayStyle = true,
+                                backdrop = livePlayerBackdrop,
                                 refreshLoading = loading,
                                 overlayControlsVisible = showLivePlayerControls,
                                 onRefresh = {
@@ -739,6 +749,7 @@ fun LiveRoomScreen(
                                 onSendDanmaku = ::sendDanmaku,
                                 onDanmakuInputFocusChange = { danmakuInputFocused = it },
                                 maxListHeight = maxChatListHeight,
+                                backdrop = livePlayerBackdrop,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -769,6 +780,7 @@ fun LiveRoomScreen(
                     topRankUsers = rankUsers,
                     followState = liveHeaderFollowState,
                     onAnchorClick = onAnchorProfileClick,
+                    backdrop = livePlayerBackdrop,
                 )
                 Box(
                     modifier = Modifier
@@ -828,6 +840,7 @@ fun LiveRoomScreen(
                                 onDanmakuInputChange = { danmakuInput = it },
                                 onSendDanmaku = ::sendDanmaku,
                                 onFocusChange = { danmakuInputFocused = it },
+                                backdrop = livePlayerBackdrop,
                             )
                         }
                     } else {
@@ -854,6 +867,7 @@ private fun LiveRoomHeaderSlot(
     refreshLoading: Boolean = false,
     overlayControlsVisible: Boolean = true,
     onRefresh: (() -> Unit)? = null,
+    backdrop: Backdrop? = null,
 ) {
     AnimatedVisibility(
         visible = visible,
@@ -872,6 +886,7 @@ private fun LiveRoomHeaderSlot(
             refreshLoading = refreshLoading,
             overlayControlsVisible = overlayControlsVisible,
             onRefresh = onRefresh,
+            backdrop = backdrop,
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding(),
@@ -1078,6 +1093,7 @@ private fun BoxScope.LiveRoomPlayerContent(
                 LiveRefreshCapsule(
                     loading = loading,
                     onRefresh = onRefresh,
+                    backdrop = backdrop,
                 )
             }
         }
@@ -1098,6 +1114,7 @@ private fun BoxScope.LiveRoomPlayerContent(
                     onDanmakuLongPress = onDanmakuLongPress,
                     isFullscreen = isFullscreen,
                     onFullscreenToggle = onFullscreenToggle,
+                    backdrop = backdrop,
                 )
             }
         }
@@ -1228,8 +1245,10 @@ private fun LiveRoomHeader(
     refreshLoading: Boolean = false,
     overlayControlsVisible: Boolean = true,
     onRefresh: (() -> Unit)? = null,
+    backdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
+    val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
     val authorName = detail?.userName?.ifBlank { room.userName } ?: room.userName
     val title = detail?.title?.ifBlank { room.title } ?: room.title
     val face = detail?.userFace?.ifBlank { room.userFace } ?: room.userFace
@@ -1300,13 +1319,9 @@ private fun LiveRoomHeader(
             }
             followState?.let { follow ->
                 Spacer(Modifier.width(8.dp))
-                BilibiliFollowButton(
-                    following = follow.relation.following,
-                    followerMe = follow.relation.followerMe,
-                    loading = follow.loading,
-                    onClick = follow.onClick,
-                    compact = true,
-                    transparent = true,
+                LiveRoomFollowCapsule(
+                    follow = follow,
+                    backdrop = resolvedBackdrop,
                 )
             }
         }
@@ -1351,6 +1366,7 @@ private fun LiveRoomHeader(
                         LiveRefreshCapsule(
                             loading = refreshLoading,
                             onRefresh = onRefresh,
+                            backdrop = resolvedBackdrop,
                         )
                     }
                 }
@@ -1363,10 +1379,12 @@ private fun LiveRoomHeader(
 private fun LiveRefreshCapsule(
     loading: Boolean,
     onRefresh: () -> Unit,
+    backdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
     LiveControlCapsule(
         onClick = if (loading) null else onRefresh,
+        backdrop = backdrop,
         modifier = modifier,
     ) {
         if (loading) {
@@ -1395,6 +1413,7 @@ private fun LiveRoomPlayerControls(
     onDanmakuLongPress: () -> Unit,
     isFullscreen: Boolean,
     onFullscreenToggle: () -> Unit,
+    backdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -1403,6 +1422,7 @@ private fun LiveRoomPlayerControls(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LiveControlCapsule(
+            backdrop = backdrop,
             modifier = Modifier.pointerInput(onDanmakuToggle, onDanmakuLongPress) {
                 detectTapGestures(
                     onTap = { onDanmakuToggle() },
@@ -1419,6 +1439,7 @@ private fun LiveRoomPlayerControls(
         }
         LiveControlCapsule(
             onClick = onFullscreenToggle,
+            backdrop = backdrop,
         ) {
             Icon(
                 imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
@@ -1431,20 +1452,74 @@ private fun LiveRoomPlayerControls(
 }
 
 private val LiveControlCapsuleShape = RoundedCornerShape(percent = 50)
-private val LiveControlCapsuleBorderColor = Color(0x80999999)
+private val LiveControlCapsuleBorderColor = Color.White.copy(alpha = 0.38f)
+
+private fun Modifier.liveLiquidGlassSurface(backdrop: Backdrop?, shape: Shape): Modifier {
+    val glassModifier = if (backdrop != null) {
+        Modifier
+            .graphicsLayer { clip = false }
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { shape },
+                effects = { liquidLargeCapsuleGlassEffects() },
+                highlight = { Highlight.Default },
+                shadow = null,
+                onDrawSurface = {},
+            )
+    } else {
+        Modifier.background(Color.Black.copy(alpha = 0.35f), shape)
+    }
+    return then(glassModifier)
+        .border(0.5.dp, LiveControlCapsuleBorderColor, shape)
+        .clip(shape)
+}
+
+@Composable
+private fun LiveRoomFollowCapsule(
+    follow: LiveRoomHeaderFollowState,
+    backdrop: Backdrop?,
+) {
+    val relation = follow.relation
+    val label = when {
+        !relation.following -> "+关注"
+        relation.followerMe -> "互相关注"
+        else -> "已关注"
+    }
+    LiveControlCapsule(
+        onClick = if (follow.loading) null else follow.onClick,
+        backdrop = backdrop,
+        modifier = Modifier.height(28.dp),
+    ) {
+        if (follow.loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                color = Color.White,
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Text(
+                text = label,
+                color = if (relation.following) Color.White.copy(alpha = 0.9f) else BiliPink,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        }
+    }
+}
 
 @Composable
 private fun LiveControlCapsule(
     onClick: (() -> Unit)? = null,
+    backdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit,
 ) {
+    val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
     Row(
         modifier = modifier
             .height(32.dp)
-            .border(0.5.dp, LiveControlCapsuleBorderColor, LiveControlCapsuleShape)
-            .clip(LiveControlCapsuleShape)
-            .background(Color.Black.copy(alpha = 0.35f))
+            .liveLiquidGlassSurface(resolvedBackdrop, LiveControlCapsuleShape)
             .then(
                 if (onClick != null) {
                     Modifier.clickable(
@@ -1472,6 +1547,7 @@ private fun LiveDanmakuInputBar(
     onDanmakuInputChange: (String) -> Unit,
     onSendDanmaku: (String) -> Unit,
     onFocusChange: (Boolean) -> Unit = {},
+    backdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -1503,8 +1579,7 @@ private fun LiveDanmakuInputBar(
                 .defaultMinSize(minHeight = 36.dp)
                 .height(36.dp)
                 .onFocusChanged { onFocusChange(it.isFocused) }
-                .border(0.5.dp, LiveControlCapsuleBorderColor, capsuleShape)
-                .clip(capsuleShape)
+                .liveLiquidGlassSurface(backdrop ?: LocalLiquidMenuBackdrop.current, capsuleShape)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             textStyle = inputTextStyle,
             singleLine = true,
@@ -1530,12 +1605,16 @@ private fun LiveDanmakuInputBar(
             enter = expandHorizontally(expandFrom = Alignment.End),
             exit = shrinkHorizontally(shrinkTowards = Alignment.End),
         ) {
-            TextButton(
-                enabled = danmakuInput.isNotBlank(),
-                onClick = { sendMessage() },
+            LiveControlCapsule(
+                onClick = if (danmakuInput.isNotBlank()) ({ sendMessage() }) else null,
+                backdrop = backdrop,
                 modifier = Modifier.padding(start = 8.dp),
             ) {
-                Text("发送", color = BiliPink, fontSize = 14.sp)
+                Text(
+                    "发送",
+                    color = if (danmakuInput.isNotBlank()) BiliPink else Color.White.copy(alpha = 0.45f),
+                    fontSize = 14.sp,
+                )
             }
         }
     }
@@ -1637,6 +1716,7 @@ private fun LiveRoomFullscreenTopBar(
     title: String,
     onClose: () -> Unit,
     immersive: Boolean = false,
+    backdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -1647,7 +1727,7 @@ private fun LiveRoomFullscreenTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        LiveControlCapsule(onClick = onClose) {
+        LiveControlCapsule(onClick = onClose, backdrop = backdrop) {
             Text(
                 text = "关闭",
                 color = Color.White,
@@ -1685,6 +1765,7 @@ private fun LiveRoomChatBottomBar(
     maxListHeight: Dp,
     onDanmakuInputFocusChange: (Boolean) -> Unit = {},
     reserveNavigationBar: Boolean = true,
+    backdrop: Backdrop? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1713,6 +1794,7 @@ private fun LiveRoomChatBottomBar(
             onDanmakuInputChange = onDanmakuInputChange,
             onSendDanmaku = onSendDanmaku,
             onFocusChange = onDanmakuInputFocusChange,
+            backdrop = backdrop,
         )
     }
 }

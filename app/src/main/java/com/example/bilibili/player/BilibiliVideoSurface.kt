@@ -23,6 +23,8 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +37,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -70,6 +73,8 @@ import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -109,6 +114,12 @@ private val VideoControlBarHeight = 34.dp
 private val LandscapeFullscreenControlBarHeight = 42.dp
 private val VideoControlBarBottomGap = 6.dp
 private val VideoControlBorderWidth = 0.5.dp
+private val VideoCornerButtonSize = 40.dp
+private val VideoCornerButtonIconSize = 22.dp
+private val VideoCornerButtonInset = 16.dp
+private val VideoCornerButtonTopInset = 10.dp
+private val VideoLandscapeBackStartInset = 40.dp
+private val VideoLandscapeBackTopInset = 16.dp
 private val VideoControlBorderColor = Color.White.copy(alpha = 0.38f)
 /** 对齐 Mac VideoControlLabelStyle：白字在亮画面上靠软阴影保可读。 */
 private val VideoControlLabelShadowColor = Color.Black.copy(alpha = 0.72f)
@@ -126,6 +137,7 @@ fun BilibiliVideoSurface(
     backdrop: Backdrop,
     onFullscreen: () -> Unit,
     onCloseFullscreen: () -> Unit,
+    onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     controlsEnabled: Boolean = true,
     initialControlsVisible: Boolean = true,
@@ -1215,34 +1227,25 @@ fun BilibiliVideoSurface(
 
         if (isFullscreen) {
             AnimatedVisibility(
-                visible = controlsVisible,
+                visible = controlsVisible && !sideAdjustmentVisible,
                 enter = OverlayFadeTransition.enter,
                 exit = OverlayFadeTransition.exit,
                 modifier = Modifier
-                    .align(Alignment.TopStart)
+                    .align(if (fullscreenLandscape) Alignment.TopStart else Alignment.TopEnd)
                     .zIndex(10f),
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(
-                            start = if (isPortraitPlayback) 16.dp else 32.dp,
-                            top = if (fullscreenLandscape) 8.dp else 20.dp,
-                            end = 12.dp,
+                            start = if (fullscreenLandscape) VideoLandscapeBackStartInset + VideoCornerButtonSize + 8.dp else VideoCornerButtonInset,
+                            top = if (fullscreenLandscape) VideoLandscapeBackTopInset else VideoCornerButtonTopInset,
+                            end = VideoCornerButtonInset,
                             bottom = 12.dp,
                         ),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    VideoOverlayIconButton(
-                        expanded = false,
-                        contentDescription = "退出全屏",
-                        onClick = onCloseFullscreen,
-                        backdrop = layerBackdrop,
-                        modifier = Modifier
-                            .width(42.dp)
-                            .height(VideoControlBarHeight),
-                    )
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1271,11 +1274,76 @@ fun BilibiliVideoSurface(
                             )
                         }
                     }
+                    if (!fullscreenLandscape) {
+                        VideoOverlayIconButton(
+                            expanded = false,
+                            contentDescription = "退出全屏",
+                            onClick = onCloseFullscreen,
+                            backdrop = layerBackdrop,
+                            modifier = Modifier.size(VideoCornerButtonSize),
+                        )
+                    }
+                }
+            }
+            if (!fullscreenLandscape) {
+                AnimatedVisibility(
+                    visible = controlsVisible && !sideAdjustmentVisible,
+                    enter = OverlayFadeTransition.enter,
+                    exit = OverlayFadeTransition.exit,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .zIndex(10f),
+                ) {
+                    VideoOverlayBackButton(
+                        contentDescription = "返回",
+                        onClick = onCloseFullscreen,
+                        backdrop = layerBackdrop,
+                        modifier = Modifier
+                            .padding(start = VideoCornerButtonInset, top = VideoCornerButtonTopInset)
+                            .size(VideoCornerButtonSize),
+                    )
+                }
+            } else {
+                AnimatedVisibility(
+                    visible = controlsVisible && !sideAdjustmentVisible,
+                    enter = OverlayFadeTransition.enter,
+                    exit = OverlayFadeTransition.exit,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .zIndex(11f),
+                ) {
+                    VideoOverlayBackButton(
+                        contentDescription = "退出全屏",
+                        onClick = onCloseFullscreen,
+                        backdrop = layerBackdrop,
+                        modifier = Modifier
+                            .padding(start = VideoLandscapeBackStartInset, top = VideoLandscapeBackTopInset)
+                            .size(VideoCornerButtonSize),
+                    )
                 }
             }
         } else if (showFullscreenButton) {
+            if (onBack != null) {
+                AnimatedVisibility(
+                    visible = controlsVisible && !sideAdjustmentVisible,
+                    enter = OverlayFadeTransition.enter,
+                    exit = OverlayFadeTransition.exit,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .zIndex(10f),
+                ) {
+                    VideoOverlayBackButton(
+                        contentDescription = "返回",
+                        onClick = onBack,
+                        backdrop = layerBackdrop,
+                        modifier = Modifier
+                            .padding(start = VideoCornerButtonInset, top = VideoCornerButtonTopInset)
+                            .size(VideoCornerButtonSize),
+                    )
+                }
+            }
             AnimatedVisibility(
-                visible = controlsVisible,
+                visible = controlsVisible && !sideAdjustmentVisible,
                 enter = OverlayFadeTransition.enter,
                 exit = OverlayFadeTransition.exit,
                 modifier = Modifier
@@ -1289,13 +1357,12 @@ fun BilibiliVideoSurface(
                     backdrop = layerBackdrop,
                     modifier = Modifier
                         .padding(
-                            start = 8.dp,
-                            top = 0.dp,
-                            end = 4.dp,
+                            start = VideoCornerButtonInset,
+                            top = VideoCornerButtonTopInset,
+                            end = VideoCornerButtonInset,
                             bottom = 8.dp,
                         )
-                        .width(42.dp)
-                        .height(VideoControlBarHeight),
+                        .size(VideoCornerButtonSize),
                 )
             }
         }
@@ -1683,6 +1750,7 @@ private fun VideoSpeedPopup(
 }
 
 private val VideoControlCapsuleShape = RoundedCornerShape(percent = 50)
+private val VideoFullscreenButtonShape = CircleShape
 
 @Composable
 private fun videoControlLabelTextStyle(
@@ -1738,22 +1806,33 @@ private fun VideoOverlayIconButton(
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 1.12f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = 0.62f),
+        label = "videoFullscreenButtonPressScale",
+    )
     Box(
         modifier = modifier
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .graphicsLayer { clip = false }
             .drawBackdrop(
                 backdrop = backdrop,
-                shape = { VideoControlCapsuleShape },
+                shape = { VideoFullscreenButtonShape },
                 effects = { liquidLargeCapsuleGlassEffects() },
                 highlight = { com.kyant.backdrop.highlight.Highlight.Default },
                 shadow = null,
                 onDrawSurface = {},
             )
-            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
-            .clip(VideoControlCapsuleShape)
+            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoFullscreenButtonShape)
+            .clip(VideoFullscreenButtonShape)
             .clickable(
                 indication = null,
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interactionSource,
                 onClick = onClick,
             )
             .padding(horizontal = 8.dp),
@@ -1761,16 +1840,78 @@ private fun VideoOverlayIconButton(
     ) {
         Canvas(
             Modifier
-                .size(24.dp)
+                .size(VideoCornerButtonIconSize)
                 .offset(y = 1.dp)
                 .blur(2.5.dp),
         ) {
             drawVideoFullscreenArrows(expanded, VideoControlLabelShadowColor)
         }
-        Canvas(Modifier.size(24.dp)) {
+        Canvas(Modifier.size(VideoCornerButtonIconSize)) {
             drawVideoFullscreenArrows(expanded, Color.White)
         }
     }
+}
+
+@Composable
+private fun VideoOverlayBackButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    backdrop: Backdrop,
+    modifier: Modifier = Modifier,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 1.12f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = 0.62f),
+        label = "videoBackButtonPressScale",
+    )
+    Box(
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .graphicsLayer { clip = false }
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { VideoFullscreenButtonShape },
+                effects = { liquidLargeCapsuleGlassEffects() },
+                highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+                shadow = null,
+                onDrawSurface = {},
+            )
+            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoFullscreenButtonShape)
+            .clip(VideoFullscreenButtonShape)
+            .clickable(
+                indication = null,
+                interactionSource = interactionSource,
+                onClick = onClick,
+            )
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(
+            Modifier
+                .size(VideoCornerButtonIconSize)
+                .offset(y = 1.dp)
+                .blur(2.5.dp),
+        ) {
+            drawVideoBackArrow(VideoControlLabelShadowColor)
+        }
+        Canvas(Modifier.size(VideoCornerButtonIconSize)) {
+            drawVideoBackArrow(Color.White)
+        }
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVideoBackArrow(color: Color) {
+    val stroke = 2.dp.toPx()
+    val tip = Offset(size.width * 0.28f, size.height * 0.5f)
+    val upperEnd = Offset(size.width * 0.64f, size.height * 0.2f)
+    val lowerEnd = Offset(size.width * 0.64f, size.height * 0.8f)
+    drawLine(color, upperEnd, tip, stroke, StrokeCap.Round)
+    drawLine(color, tip, lowerEnd, stroke, StrokeCap.Round)
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVideoFullscreenArrows(

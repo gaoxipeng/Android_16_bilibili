@@ -38,14 +38,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.core.util.Consumer
 import com.example.bilibili.data.AppearanceMode
 import com.example.bilibili.data.AppearanceSettingsStore
@@ -873,6 +877,10 @@ fun BilibiliApp() {
         }
     }
 
+    fun refreshDisplayedHome(showRefreshHint: Boolean = false, force: Boolean = false) {
+        refreshHome(showRefreshHint, force)
+    }
+
     fun updateAutoHideBarsOnScroll(enabled: Boolean) {
         autoHideBarsOnScroll = enabled
         bottomBarDisplaySettingsStore.writeAutoHideOnScroll(enabled)
@@ -1242,10 +1250,11 @@ fun BilibiliApp() {
                             playUrls = playUrls,
                             loading = homeLoading,
                             loadingMore = homeLoadingMore,
-                            hasMore = homeHasMore && homeLoadMoreCount < HOME_LOAD_MORE_MAX_COUNT,
+                            hasMore = homeHasMore &&
+                                homeLoadMoreCount < HOME_LOAD_MORE_MAX_COUNT,
                             error = homeError,
-                            onRefresh = ::refreshHome,
-                            onPullRefresh = { refreshHome(showRefreshHint = true) },
+                            onRefresh = { refreshDisplayedHome() },
+                            onPullRefresh = { refreshDisplayedHome(showRefreshHint = true, force = true) },
                             onLoadMore = ::loadMoreHome,
                             onVideoClick = { video -> openVideoDetail(video) },
                             onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
@@ -1572,6 +1581,7 @@ fun BilibiliApp() {
                 ) {
                     BilibiliLiquidBottomBar(
                         selectedTab = selectedTab,
+                        selectedHomeLabel = MainTab.Home.label,
                         onTabClick = ::handleBottomTabClick,
                         expanded = bottomBarExpanded,
                         backdrop = bottomBarBackdrop,
@@ -1587,6 +1597,7 @@ fun BilibiliApp() {
                     )
                 }
             }
+
         }
     }
 
@@ -1788,6 +1799,7 @@ private fun AppNavEntryContent(
                 onOpenDescriptionVideo = onOpenDescriptionVideo,
                 onOpenCommentVideo = onOpenCommentVideo,
                 onSearchTagClick = onSearchTagClick,
+                onBack = onPopNav,
                 playbackActive = isActive,
                 onStreamSourceError = onRefreshPlayStream,
                 episodeSwitchScope = episodeSwitchScope,

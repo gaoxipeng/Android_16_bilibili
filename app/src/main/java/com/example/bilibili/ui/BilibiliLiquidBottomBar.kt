@@ -51,6 +51,7 @@ import kotlin.math.abs
 @Composable
 internal fun BilibiliLiquidBottomBar(
     selectedTab: MainTab,
+    selectedHomeLabel: String,
     onTabClick: (MainTab) -> Unit,
     expanded: Boolean,
     backdrop: Backdrop,
@@ -146,7 +147,7 @@ internal fun BilibiliLiquidBottomBar(
                                         BilibiliTabIcon(tab = tab, color = tabColor)
                                     }
                                     Text(
-                                        text = tab.label,
+                                        text = if (tab == MainTab.Home) selectedHomeLabel else tab.label,
                                         fontSize = 12.sp,
                                         color = tabColor,
                                         maxLines = 1,
