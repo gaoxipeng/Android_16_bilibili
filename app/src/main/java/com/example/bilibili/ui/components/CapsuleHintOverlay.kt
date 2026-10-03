@@ -8,11 +8,13 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +32,8 @@ import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.ui.liquidglass.LiquidMenuBorderWidth
 import com.example.bilibili.ui.liquidglass.liquidMenuBorderColor
+import com.example.bilibili.ui.screens.HomeSearchBarHeight
+import com.example.bilibili.ui.screens.HomeSearchBarTopGap
 import com.example.bilibili.ui.theme.isAppLightTheme
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.drawBackdrop
@@ -63,14 +67,23 @@ fun FeedRefreshHintOverlay(
         exit = fadeOut(tween(180)) + slideOutVertically(tween(180)) { fullHeight -> -fullHeight / 2 },
         modifier = modifier
             .zIndex(zIndex)
-            .padding(top = topInset + 10.dp),
+            .fillMaxWidth()
+            .padding(top = topInset + HomeSearchBarTopGap),
     ) {
         message?.let {
-            FeedRefreshCapsuleHint(
-                message = it,
-                onDismiss = onDismiss,
-                backdrop = backdrop,
-            )
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                FeedRefreshCapsuleHint(
+                    message = it,
+                    onDismiss = onDismiss,
+                    backdrop = backdrop,
+                    modifier = Modifier
+                        .wrapContentWidth()
+                        .height(HomeSearchBarHeight),
+                )
+            }
         }
     }
 }
@@ -89,9 +102,11 @@ private fun FeedRefreshCapsuleHint(
     }
 
     BlueHintCapsule(modifier = modifier, backdrop = backdrop) {
-        Column(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        Box(
+            modifier = Modifier
+                .height(HomeSearchBarHeight)
+                .padding(horizontal = 18.dp),
+            contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = message,

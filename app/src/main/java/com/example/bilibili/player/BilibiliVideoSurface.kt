@@ -196,6 +196,7 @@ fun BilibiliVideoSurface(
     var controlsHideSignal by remember(playbackKey) { mutableIntStateOf(0) }
     var volumeOverlayProgress by remember(playbackKey) { mutableFloatStateOf(-1f) }
     var brightnessOverlayProgress by remember(playbackKey) { mutableFloatStateOf(-1f) }
+    val sideAdjustmentVisible = volumeOverlayProgress >= 0f || brightnessOverlayProgress >= 0f
     var adjustmentOverlaySignal by remember(playbackKey) { mutableIntStateOf(0) }
     var isScrubbing by remember(playbackKey) { mutableStateOf(false) }
     var resumePlaybackAfterScrub by remember(playbackKey) { mutableStateOf(false) }
@@ -1056,6 +1057,7 @@ fun BilibiliVideoSurface(
                                 }
                             },
                             onSideLevelChange = { isRightSide, level ->
+                                showSpeedMenu = false
                                 if (isRightSide) {
                                     val maxVolume = audioManager
                                         .getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -1248,17 +1250,10 @@ fun BilibiliVideoSurface(
                         Text(
                             text = resolvedPlaybackMetadata.title,
                             color = Color.White,
-                            style = if (isPortraitPlayback) {
-                                videoControlLabelTextStyle(
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            } else {
-                                TextStyle(
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            },
+                            style = videoControlLabelTextStyle(
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Medium,
+                            ),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -1267,17 +1262,10 @@ fun BilibiliVideoSurface(
                             Text(
                                 text = "@$authorName",
                                 color = Color.White.copy(alpha = 0.72f),
-                                style = if (isPortraitPlayback) {
-                                    videoControlLabelTextStyle(
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Normal,
-                                    )
-                                } else {
-                                    TextStyle(
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Normal,
-                                    )
-                                },
+                                style = videoControlLabelTextStyle(
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Normal,
+                                ),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -1313,7 +1301,8 @@ fun BilibiliVideoSurface(
         }
 
         AnimatedVisibility(
-            visible = controlsEnabled && controlsVisible && !showDanmakuSettings && !showEpisodePicker,
+            visible = controlsEnabled && controlsVisible && !showDanmakuSettings &&
+                !showEpisodePicker && !sideAdjustmentVisible,
             enter = OverlayFadeTransition.enter,
             exit = OverlayFadeTransition.exit,
             modifier = Modifier
@@ -1770,34 +1759,46 @@ private fun VideoOverlayIconButton(
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(24.dp)) {
-            val edge = 3.dp.toPx()
-            val farEdge = size.width - edge
-            val cornerLength = 6.dp.toPx()
-            val expandedInset = if (expanded) 2.dp.toPx() else 0f
-            val outerEdge = edge + expandedInset
-            val outerFarEdge = farEdge - expandedInset
-            val outerCornerEnd = outerEdge + cornerLength
-            val outerFarCornerStart = outerFarEdge - cornerLength
-            val innerCorner = size.width / 2f - 3.dp.toPx()
-            val innerFarCorner = size.width / 2f + 3.dp.toPx()
-            val stroke = 2.dp.toPx()
-            val lineColor = Color.White
-            val cap = StrokeCap.Square
-            if (expanded) {
-                // Two separated outward-facing right-angle arrow corners.
-                drawLine(lineColor, Offset(outerEdge, outerEdge), Offset(outerCornerEnd, outerEdge), stroke, cap)
-                drawLine(lineColor, Offset(outerEdge, outerEdge), Offset(outerEdge, outerCornerEnd), stroke, cap)
-                drawLine(lineColor, Offset(outerFarEdge, outerFarEdge), Offset(outerFarCornerStart, outerFarEdge), stroke, cap)
-                drawLine(lineColor, Offset(outerFarEdge, outerFarEdge), Offset(outerFarEdge, outerFarCornerStart), stroke, cap)
-            } else {
-                // The same two corners point inward to indicate leaving fullscreen.
-                drawLine(lineColor, Offset(innerCorner, innerCorner), Offset(innerCorner, edge), stroke, cap)
-                drawLine(lineColor, Offset(innerCorner, innerCorner), Offset(edge, innerCorner), stroke, cap)
-                drawLine(lineColor, Offset(innerFarCorner, innerFarCorner), Offset(farEdge, innerFarCorner), stroke, cap)
-                drawLine(lineColor, Offset(innerFarCorner, innerFarCorner), Offset(innerFarCorner, farEdge), stroke, cap)
-            }
+        Canvas(
+            Modifier
+                .size(24.dp)
+                .offset(y = 1.dp)
+                .blur(2.5.dp),
+        ) {
+            drawVideoFullscreenArrows(expanded, VideoControlLabelShadowColor)
         }
+        Canvas(Modifier.size(24.dp)) {
+            drawVideoFullscreenArrows(expanded, Color.White)
+        }
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVideoFullscreenArrows(
+    expanded: Boolean,
+    color: Color,
+) {
+    val edge = 3.dp.toPx()
+    val farEdge = size.width - edge
+    val cornerLength = 6.dp.toPx()
+    val expandedInset = if (expanded) 2.dp.toPx() else 0f
+    val outerEdge = edge + expandedInset
+    val outerFarEdge = farEdge - expandedInset
+    val outerCornerEnd = outerEdge + cornerLength
+    val outerFarCornerStart = outerFarEdge - cornerLength
+    val innerCorner = size.width / 2f - 3.dp.toPx()
+    val innerFarCorner = size.width / 2f + 3.dp.toPx()
+    val stroke = 2.dp.toPx()
+    val cap = StrokeCap.Square
+    if (expanded) {
+        drawLine(color, Offset(outerEdge, outerEdge), Offset(outerCornerEnd, outerEdge), stroke, cap)
+        drawLine(color, Offset(outerEdge, outerEdge), Offset(outerEdge, outerCornerEnd), stroke, cap)
+        drawLine(color, Offset(outerFarEdge, outerFarEdge), Offset(outerFarCornerStart, outerFarEdge), stroke, cap)
+        drawLine(color, Offset(outerFarEdge, outerFarEdge), Offset(outerFarEdge, outerFarCornerStart), stroke, cap)
+    } else {
+        drawLine(color, Offset(innerCorner, innerCorner), Offset(innerCorner, edge), stroke, cap)
+        drawLine(color, Offset(innerCorner, innerCorner), Offset(edge, innerCorner), stroke, cap)
+        drawLine(color, Offset(innerFarCorner, innerFarCorner), Offset(farEdge, innerFarCorner), stroke, cap)
+        drawLine(color, Offset(innerFarCorner, innerFarCorner), Offset(innerFarCorner, farEdge), stroke, cap)
     }
 }
 
