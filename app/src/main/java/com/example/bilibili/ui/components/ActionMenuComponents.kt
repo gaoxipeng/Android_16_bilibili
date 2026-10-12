@@ -47,11 +47,13 @@ import com.example.bilibili.ui.theme.isAppLightTheme
 import com.kyant.backdrop.Backdrop
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 
 internal val ActionMenuDestructiveColor = Color(0xFFE54848)
 
 @Composable
+@OptIn(ExperimentalHazeMaterialsApi::class)
 internal fun ActionFrostedCard(
     modifier: Modifier = Modifier,
     backdrop: Backdrop? = null,

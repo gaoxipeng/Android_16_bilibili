@@ -33,6 +33,14 @@ private const val NavOverlayTopZIndex = 590f
 private const val NavOverlayExitZIndex = 595f
 const val NavFullscreenZIndex = 600f
 
+private fun <T> isExitOverlayFinished(
+    target: T?,
+    transitionState: MutableTransitionState<Boolean>,
+): Boolean = target == null &&
+    transitionState.isIdle &&
+    !transitionState.currentState &&
+    !transitionState.targetState
+
 fun navStackEnterTransition(): EnterTransition =
     slideInHorizontally(
         animationSpec = tween(NavTransitionDurationMs, easing = FastOutSlowInEasing),
@@ -169,7 +177,7 @@ fun <T> NavAnimatedOverlay(
             if (effectiveExitHoldMillis > 0L) {
                 delay(effectiveExitHoldMillis)
             }
-            if (!transitionState.targetState && transitionState.isIdle && target == null) {
+            if (isExitOverlayFinished(target, transitionState)) {
                 displayed = null
                 if (layerKey != null && pendingExitKey == layerKey) {
                     onClearPendingExit()

@@ -50,6 +50,7 @@ internal class VideoPlaybackMediaSessionCallback(
 
 
 
+    @Deprecated("Deprecated by Media3; retained for the media session callback contract.")
     override fun onPlayerCommandRequest(
 
         session: MediaSession,

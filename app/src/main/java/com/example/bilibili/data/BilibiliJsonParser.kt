@@ -857,8 +857,8 @@ object BilibiliJsonParser {
             val videoUrl = dash.pickStreamUrl("video") ?: return null
             val audioUrl = dash.pickStreamUrl("audio")
             return BiliPlayStream(
-                videoUrl = videoUrl,
-                audioUrl = audioUrl,
+                videoUrl = normalizeHttpsUrl(videoUrl),
+                audioUrl = audioUrl?.let(::normalizeHttpsUrl),
                 lastPlayTimeMs = lastPlayTimeMs,
                 lastPlayCid = lastPlayCid,
             )
@@ -866,7 +866,7 @@ object BilibiliJsonParser {
         val durl = data.optJSONArray("durl")?.optJSONObject(0)?.optString("url")
         return durl?.takeIf { it.isNotBlank() }?.let {
             BiliPlayStream(
-                videoUrl = it,
+                videoUrl = normalizeHttpsUrl(it),
                 lastPlayTimeMs = lastPlayTimeMs,
                 lastPlayCid = lastPlayCid,
             )
@@ -899,7 +899,7 @@ object BilibiliJsonParser {
         for (stream in ordered) {
             val url = stream.optJSONArray("backup_url")?.optString(0)?.takeIf { it.isNotBlank() }
                 ?: stream.optString("baseUrl").takeIf { it.isNotBlank() }
-            if (!url.isNullOrBlank()) return url
+            if (!url.isNullOrBlank()) return normalizeHttpsUrl(url)
         }
         return null
     }
@@ -1225,7 +1225,7 @@ object BilibiliJsonParser {
                 }
                 emoticons.putAll(fallback.emoticons)
                 if (imageUrls.isEmpty()) imageUrls = fallback.imageUrls
-                if (link == null) link = fallback.link
+                link = fallback.link
             }
         }
 
@@ -1922,7 +1922,7 @@ object BilibiliJsonParser {
                                     codecPriority = codecPriority,
                                     protocolPriority = protocolPriority,
                                     formatPriority = formatPriority,
-                                    url = url,
+                                    url = normalizeHttpsUrl(url),
                                 ),
                             )
                         }
@@ -2993,10 +2993,13 @@ object BilibiliJsonParser {
         return normalizeImageUrl(trimmed)
     }
 
-    private fun normalizeImageUrl(url: String): String =
+    private fun normalizeImageUrl(url: String): String = normalizeHttpsUrl(url)
+
+    private fun normalizeHttpsUrl(url: String): String =
         when {
             url.startsWith("//") -> "https:$url"
-            url.startsWith("http://") -> "https://${url.removePrefix("http://")}"
+            url.startsWith("http://", ignoreCase = true) ->
+                "https://${url.substringAfter("://")}"
             else -> url
         }
 
