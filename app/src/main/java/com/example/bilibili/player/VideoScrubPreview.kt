@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bilibili.data.BiliVideoShot
+import com.example.bilibili.ui.liquidglass.liquidLargeCapsuleGlassEffects
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.drawBackdrop
 import kotlin.math.roundToInt
 
 data class VideoShotTile(
@@ -112,6 +115,7 @@ fun VideoScrubPreviewOverlay(
     durationMs: Long,
     progressFraction: Float,
     videoShot: BiliVideoShot?,
+    backdrop: Backdrop,
     modifier: Modifier = Modifier,
     previewAspectRatio: Float? = null,
     refererUrl: String = com.example.bilibili.data.BilibiliEndpoints.HOME,
@@ -151,8 +155,16 @@ fun VideoScrubPreviewOverlay(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
-                    .padding(top = 6.dp)
-                    .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(999.dp))
+                    .padding(top = 8.dp)
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { RoundedCornerShape(percent = 50) },
+                        effects = { liquidLargeCapsuleGlassEffects() },
+                        highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+                        shadow = null,
+                        onDrawSurface = {},
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.34f), RoundedCornerShape(percent = 50))
                     .padding(horizontal = 10.dp, vertical = 4.dp),
             )
         }

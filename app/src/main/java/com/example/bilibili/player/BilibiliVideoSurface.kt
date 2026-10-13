@@ -116,6 +116,7 @@ private val VideoControlBarBottomGap = 6.dp
 private val VideoControlBorderWidth = 0.5.dp
 private val VideoCornerButtonSize = 40.dp
 private val VideoCornerButtonIconSize = 22.dp
+private val VideoFullscreenArrowIconSize = 26.dp
 private val VideoCornerButtonInset = 16.dp
 private val VideoCornerButtonTopInset = 10.dp
 private val VideoLandscapeBackStartInset = 40.dp
@@ -1464,13 +1465,14 @@ fun BilibiliVideoSurface(
             durationMs = durationMs,
             progressFraction = scrubProgressFraction,
             videoShot = resolvedVideoShot,
+            backdrop = layerBackdrop,
             previewAspectRatio = resolvedScrubPreviewAspectRatio,
             refererUrl = shotRefererUrl,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(20f)
                 .padding(horizontal = 6.dp)
-                .padding(bottom = (if (isFullscreen) 40.dp else 8.dp) + controlBarHeight + 10.dp),
+                .padding(bottom = (if (isFullscreen) 40.dp else 8.dp) + controlBarHeight + 8.dp),
         )
 
         DanmakuSettingsOverlay(
@@ -1840,13 +1842,12 @@ private fun VideoOverlayIconButton(
     ) {
         Canvas(
             Modifier
-                .size(VideoCornerButtonIconSize)
-                .offset(y = 1.dp)
+                .size(VideoFullscreenArrowIconSize)
                 .blur(2.5.dp),
         ) {
             drawVideoFullscreenArrows(expanded, VideoControlLabelShadowColor)
         }
-        Canvas(Modifier.size(VideoCornerButtonIconSize)) {
+        Canvas(Modifier.size(VideoFullscreenArrowIconSize)) {
             drawVideoFullscreenArrows(expanded, Color.White)
         }
     }
@@ -1908,8 +1909,8 @@ private fun VideoOverlayBackButton(
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVideoBackArrow(color: Color) {
     val stroke = 2.dp.toPx()
     val tip = Offset(size.width * 0.28f, size.height * 0.5f)
-    val upperEnd = Offset(size.width * 0.64f, size.height * 0.2f)
-    val lowerEnd = Offset(size.width * 0.64f, size.height * 0.8f)
+    val upperEnd = Offset(size.width * 0.64f, size.height * 0.15f)
+    val lowerEnd = Offset(size.width * 0.64f, size.height * 0.85f)
     drawLine(color, upperEnd, tip, stroke, StrokeCap.Round)
     drawLine(color, tip, lowerEnd, stroke, StrokeCap.Round)
 }
@@ -1920,27 +1921,96 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVideoFullscreen
 ) {
     val edge = 3.dp.toPx()
     val farEdge = size.width - edge
-    val cornerLength = 6.dp.toPx()
+    val cornerLength = 7.dp.toPx()
     val expandedInset = if (expanded) 2.dp.toPx() else 0f
     val outerEdge = edge + expandedInset
     val outerFarEdge = farEdge - expandedInset
     val outerCornerEnd = outerEdge + cornerLength
     val outerFarCornerStart = outerFarEdge - cornerLength
-    val innerCorner = size.width / 2f - 3.dp.toPx()
-    val innerFarCorner = size.width / 2f + 3.dp.toPx()
+    val innerCorner = size.width / 2f - 2.5.dp.toPx()
+    val innerFarCorner = size.width / 2f + 2.5.dp.toPx()
     val stroke = 2.dp.toPx()
-    val cap = StrokeCap.Square
     if (expanded) {
-        drawLine(color, Offset(outerEdge, outerEdge), Offset(outerCornerEnd, outerEdge), stroke, cap)
-        drawLine(color, Offset(outerEdge, outerEdge), Offset(outerEdge, outerCornerEnd), stroke, cap)
-        drawLine(color, Offset(outerFarEdge, outerFarEdge), Offset(outerFarCornerStart, outerFarEdge), stroke, cap)
-        drawLine(color, Offset(outerFarEdge, outerFarEdge), Offset(outerFarEdge, outerFarCornerStart), stroke, cap)
+        drawRoundedFullscreenCorner(
+            color,
+            Offset(outerCornerEnd, outerEdge),
+            Offset(outerEdge, outerEdge),
+            Offset(outerEdge, outerCornerEnd),
+            stroke,
+        )
+        drawRoundedFullscreenCorner(
+            color,
+            Offset(outerFarCornerStart, outerFarEdge),
+            Offset(outerFarEdge, outerFarEdge),
+            Offset(outerFarEdge, outerFarCornerStart),
+            stroke,
+        )
     } else {
-        drawLine(color, Offset(innerCorner, innerCorner), Offset(innerCorner, edge), stroke, cap)
-        drawLine(color, Offset(innerCorner, innerCorner), Offset(edge, innerCorner), stroke, cap)
-        drawLine(color, Offset(innerFarCorner, innerFarCorner), Offset(farEdge, innerFarCorner), stroke, cap)
-        drawLine(color, Offset(innerFarCorner, innerFarCorner), Offset(innerFarCorner, farEdge), stroke, cap)
+        drawRoundedFullscreenCorner(
+            color,
+            Offset(edge, innerCorner),
+            Offset(innerCorner, innerCorner),
+            Offset(innerCorner, edge),
+            stroke,
+        )
+        drawRoundedFullscreenCorner(
+            color,
+            Offset(farEdge, innerFarCorner),
+            Offset(innerFarCorner, innerFarCorner),
+            Offset(innerFarCorner, farEdge),
+            stroke,
+        )
     }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRoundedFullscreenCorner(
+    color: Color,
+    start: Offset,
+    corner: Offset,
+    end: Offset,
+    strokeWidth: Float,
+) {
+    val radius = 1.5.dp.toPx()
+    val startX = when {
+        start.x < corner.x -> -1f
+        start.x > corner.x -> 1f
+        else -> 0f
+    }
+    val startY = when {
+        start.y < corner.y -> -1f
+        start.y > corner.y -> 1f
+        else -> 0f
+    }
+    val endX = when {
+        end.x < corner.x -> -1f
+        end.x > corner.x -> 1f
+        else -> 0f
+    }
+    val endY = when {
+        end.y < corner.y -> -1f
+        end.y > corner.y -> 1f
+        else -> 0f
+    }
+    val path = androidx.compose.ui.graphics.Path().apply {
+        moveTo(start.x, start.y)
+        lineTo(corner.x + startX * radius, corner.y + startY * radius)
+        quadraticTo(
+            corner.x,
+            corner.y,
+            corner.x + endX * radius,
+            corner.y + endY * radius,
+        )
+        lineTo(end.x, end.y)
+    }
+    drawPath(
+        path = path,
+        color = color,
+        style = androidx.compose.ui.graphics.drawscope.Stroke(
+            width = strokeWidth,
+            cap = StrokeCap.Round,
+            join = androidx.compose.ui.graphics.StrokeJoin.Round,
+        ),
+    )
 }
 
 @Composable
