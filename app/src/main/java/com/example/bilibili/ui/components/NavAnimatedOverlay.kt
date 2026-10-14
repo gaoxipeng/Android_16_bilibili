@@ -72,6 +72,9 @@ fun <T> NavAnimatedOverlay(
     exit: ExitTransition = navStackExitTransition(),
     exitHoldMillis: Long = NavTransitionDurationMs.toLong(),
     onHidden: () -> Unit = {},
+    coverOrigin: androidx.compose.ui.geometry.Rect? = null,
+    coverSnapshot: androidx.compose.ui.graphics.ImageBitmap? = null,
+    onSwipeBack: (() -> Unit)? = null,
     content: @Composable (T) -> Unit,
 ) {
     val navTransitions = LocalNavTransitionCoordinator.current
@@ -156,18 +159,22 @@ fun <T> NavAnimatedOverlay(
     AnimatedVisibility(
         visibleState = transitionState,
         modifier = modifier.zIndex(zIndex),
-        enter = effectiveEnter,
-        exit = effectiveExit,
+        enter = if (coverOrigin != null) EnterTransition.None else effectiveEnter,
+        exit = if (coverOrigin != null) ExitTransition.None else effectiveExit,
         label = "nav-stack-overlay",
     ) {
         displayed?.let { item ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
+                    .background(if (coverOrigin != null) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.background)
                     .consumeTouchEvents(),
             ) {
-                content(item)
+                if (coverOrigin != null) {
+                    this@AnimatedVisibility.VideoCoverMotion(coverOrigin, coverSnapshot, onSwipeBack) { content(item) }
+                } else {
+                    content(item)
+                }
             }
         }
     }

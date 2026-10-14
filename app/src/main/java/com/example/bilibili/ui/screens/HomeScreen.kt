@@ -133,7 +133,22 @@ fun HomeScreen(
     staggeredGridState: LazyStaggeredGridState = rememberLazyStaggeredGridState(),
     bindFeedTabReselect: Boolean = true,
     enablePullToRefresh: Boolean = true,
+    onPreloadVideos: suspend (List<BiliVideoItem>) -> Unit = {},
+    preloadEnabled: Boolean = true,
 ) {
+    LaunchedEffect(loggedIn, preloadEnabled, videos, feedColumnCount) {
+        if (!loggedIn || !preloadEnabled) return@LaunchedEffect
+        snapshotFlow {
+            if (feedColumnCount == FeedLayoutStore.COLUMN_COUNT_ONE) {
+                listState.layoutInfo.visibleItemsInfo.map { it.key.toString() }
+            } else {
+                staggeredGridState.layoutInfo.visibleItemsInfo.map { it.key.toString() }
+            }
+        }.distinctUntilChanged().collectLatest { visibleKeys ->
+            kotlinx.coroutines.delay(180)
+            onPreloadVideos(videos.filter { it.bvid in visibleKeys })
+        }
+    }
     if (!loggedIn) {
         Box(
             modifier = modifier

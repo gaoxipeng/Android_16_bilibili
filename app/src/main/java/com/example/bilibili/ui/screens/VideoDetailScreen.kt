@@ -1254,6 +1254,14 @@ fun VideoDetailScreen(
     val showPlayerLoadingOverlay = !isVideoFullscreen &&
         !hasHandoffPlayer &&
         (!playerStreamReady || playerSurfaceLoading)
+    var showDelayedPlayerSpinner by remember(playbackKey) { mutableStateOf(false) }
+    LaunchedEffect(showPlayerLoadingOverlay, playbackKey) {
+        showDelayedPlayerSpinner = false
+        if (showPlayerLoadingOverlay) {
+            kotlinx.coroutines.delay(1000)
+            showDelayedPlayerSpinner = true
+        }
+    }
     val configuration = LocalConfiguration.current
     val hazeState = rememberHazeState()
     val collectionMenuBackdrop = rememberLayerBackdrop()
@@ -1442,7 +1450,12 @@ fun VideoDetailScreen(
                                 .background(Color.Black),
                             contentAlignment = Alignment.Center,
                         ) {
-                            VideoPlayerLoadingIndicator()
+                            com.example.bilibili.ui.components.RemoteImage(
+                                url = currentVideo.coverUrl,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            )
+                            if (showDelayedPlayerSpinner) VideoPlayerLoadingIndicator()
                         }
                     }
                 }

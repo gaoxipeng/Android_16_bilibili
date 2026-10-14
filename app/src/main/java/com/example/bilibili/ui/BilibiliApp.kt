@@ -137,6 +137,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 
@@ -502,10 +503,14 @@ fun BilibiliApp() {
             ?: detailPlaybackKeyFor(initialVideo)
         if (shouldPush) {
             navController.push(
-                AppNavEntry.VideoDetail(initialVideo),
+                AppNavEntry.VideoDetail(initialVideo,
+                    com.example.bilibili.ui.components.VideoCoverOrigins.get(video.playbackId()),
+                    com.example.bilibili.ui.components.VideoCoverOrigins.takeSnapshot(video.playbackId())),
                 preserveCurrentVideoDetail = keepParentForComment,
             )
             if (coordinator.hasHandoffPlayer(handoffKey)) {
+                coordinator.requestInlinePlayback(handoffKey)
+            } else if (resolveStoredPlayStream(initialVideo, playUrls) != null) {
                 coordinator.requestInlinePlayback(handoffKey)
             } else {
                 coordinator.stopPlayback()
@@ -515,9 +520,20 @@ fun BilibiliApp() {
             val cred = credential()
             val seededVideo = seedVideoPartPage(video, partPage)
             val resolvedVideo = api.resolveVideoForPlayback(seededVideo, cred)
+            if (navController.top !is AppNavEntry.VideoDetail) return@launch
+            if (shouldPush && (navController.top as AppNavEntry.VideoDetail).video.bvid != initialVideo.bvid) return@launch
             // Match Mac: always refresh playurl on detail open so last_play_* is current.
-            val playStream = resolvePlayUrl(resolvedVideo, forceNetwork = true)
+            val warmedStream = resolveStoredPlayStream(resolvedVideo, playUrls)
+            val freshStream = resolvePlayUrl(resolvedVideo, forceNetwork = true)
+            // Keep a still-valid warmed media URL while accepting fresh server progress.
+            // A new signed URL here would throw away the preloaded prefix and restart the player.
+            val playStream = if (warmedStream != null && freshStream != null &&
+                warmedStream.cid == freshStream.cid && !warmedStream.isPlayStreamCacheStale()) {
+                warmedStream.copy(lastPlayTimeMs = freshStream.lastPlayTimeMs, lastPlayCid = freshStream.lastPlayCid)
+            } else freshStream
             playStream?.let { stream -> playUrls.cachePlayStream(resolvedVideo, stream) }
+            if (navController.top !is AppNavEntry.VideoDetail) return@launch
+            if (shouldPush && (navController.top as AppNavEntry.VideoDetail).video.bvid != initialVideo.bvid) return@launch
             val resolvedDetailKey = detailPlaybackKeyFor(resolvedVideo)
             if (navController.top is AppNavEntry.VideoDetail) {
                 val current = navController.top as AppNavEntry.VideoDetail
@@ -1257,6 +1273,22 @@ fun BilibiliApp() {
                             onPullRefresh = { refreshDisplayedHome(showRefreshHint = true, force = true) },
                             onLoadMore = ::loadMoreHome,
                             onVideoClick = { video -> openVideoDetail(video) },
+                            onPreloadVideos = { videos ->
+                                kotlinx.coroutines.coroutineScope {
+                                    val slots = kotlinx.coroutines.sync.Semaphore(2)
+                                    videos.forEach { video ->
+                                        launch {
+                                            slots.withPermit {
+                                                val stream = resolvePlayUrl(video) ?: return@withPermit
+                                                com.example.bilibili.player.VideoWarmup.preload(
+                                                    stream, com.example.bilibili.player.bilibiliDataSourceFactory(context),
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            preloadEnabled = selectedTab == MainTab.Home && !navController.hasOverlay,
                             onEnsurePlayStream = { video -> scope.launch { resolvePlayUrl(video) } },
                             onAuthorClick = { mid ->
                                 val video = homeVideos.firstOrNull { it.authorMid == mid }
@@ -1689,6 +1721,9 @@ private fun AppNavStackLayers(
                 onClearPendingEnter = onClearPendingEnter,
                 onClearPendingExit = onClearPendingExit,
                 onHidden = onExitHidden,
+                coverOrigin = (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin,
+                coverSnapshot = (layer.entry as? AppNavEntry.VideoDetail)?.coverSnapshot,
+                onSwipeBack = if (isTop && coordinator.fullscreenKey == null) onPopNav else null,
             ) { activeEntry ->
                 Box(Modifier.fillMaxSize().blockHiddenTouches(isTop || isExitingLayer)) {
                     AppNavEntryContent(

@@ -72,7 +72,7 @@ private fun createStreamMediaSource(
     }
 }
 
-private fun bilibiliDataSourceFactory(
+internal fun bilibiliDataSourceFactory(
     context: Context,
     referer: String = BilibiliEndpoints.HOME,
     origin: String = "https://www.bilibili.com",
@@ -90,7 +90,7 @@ private fun bilibiliDataSourceFactory(
         .setUserAgent(BilibiliEndpoints.USER_AGENT)
         .setDefaultRequestProperties(headers)
         .setAllowCrossProtocolRedirects(true)
-    return DefaultDataSource.Factory(context, httpFactory)
+    return DefaultDataSource.Factory(context, VideoWarmup.factory(httpFactory))
 }
 
 fun formatVideoTime(ms: Long): String {

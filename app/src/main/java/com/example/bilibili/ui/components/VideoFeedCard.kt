@@ -34,10 +34,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -87,16 +94,34 @@ fun VideoFeedCard(
     onAuthorClick: ((Long) -> Unit)? = null,
     showAuthorInfo: Boolean = true,
 ) {
+    val cardLayer = rememberGraphicsLayer()
+    val cardScope = rememberCoroutineScope()
+    val trackedClick: () -> Unit = {
+        cardScope.launch {
+            val snapshot = runCatching { cardLayer.toImageBitmap() }.getOrNull()
+            VideoCoverOrigins.capture(video.playbackId(), snapshot)
+            onClick()
+        }
+    }
+    val trackedModifier = modifier.drawWithContent {
+        cardLayer.record { this@drawWithContent.drawContent() }
+        drawLayer(cardLayer)
+    }.onGloballyPositioned {
+        val bounds = it.boundsInRoot()
+        VideoCoverOrigins.update(video.playbackId(), androidx.compose.ui.geometry.Rect(
+            bounds.left, bounds.top, bounds.right, bounds.bottom,
+        ))
+    }
     if (gridStyle) {
         VideoFeedGridCard(
             video = video,
             playStream = playStream,
             coordinator = coordinator,
-            onClick = onClick,
+            onClick = trackedClick,
             onEnsurePlayStream = onEnsurePlayStream,
             onAuthorClick = onAuthorClick,
             showAuthorInfo = showAuthorInfo,
-            modifier = modifier,
+            modifier = trackedModifier,
         )
         return
     }
@@ -106,11 +131,11 @@ fun VideoFeedCard(
             video = video,
             playStream = playStream,
             coordinator = coordinator,
-            onClick = onClick,
+            onClick = trackedClick,
             onEnsurePlayStream = onEnsurePlayStream,
             onAuthorClick = onAuthorClick,
             showAuthorInfo = showAuthorInfo,
-            modifier = modifier,
+            modifier = trackedModifier,
         )
         return
     }
@@ -124,13 +149,13 @@ fun VideoFeedCard(
     }
 
     ElevatedCard(
-        modifier = modifier.fillMaxWidth(),
+        modifier = trackedModifier.fillMaxWidth(),
         shape = RoundedCornerShape(corner),
         colors = CardDefaults.elevatedCardColors(
             containerColor = MaterialTheme.colorScheme.surface,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
-        onClick = onClick,
+        onClick = trackedClick,
     ) {
         Column {
             if (playStream != null) {

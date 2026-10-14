@@ -13,6 +13,8 @@ sealed interface AppNavEntry {
 
     data class VideoDetail(
         val video: BiliVideoItem,
+        val coverOrigin: androidx.compose.ui.geometry.Rect? = null,
+        val coverSnapshot: androidx.compose.ui.graphics.ImageBitmap? = null,
     ) : AppNavEntry
 
     data class UserProfile(
@@ -104,7 +106,10 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
         if (stack.isEmpty()) return
         pendingEnterKey = null
         pendingExitKey = null
-        stack = stack.dropLast(1) + entry
+        val previous = stack.last()
+        val replacement = if (entry is AppNavEntry.VideoDetail && previous is AppNavEntry.VideoDetail &&
+            entry.video.bvid == previous.video.bvid) entry.copy(coverOrigin = previous.coverOrigin, coverSnapshot = previous.coverSnapshot) else entry
+        stack = stack.dropLast(1) + replacement
     }
 
     fun clearExitingLayer() {
