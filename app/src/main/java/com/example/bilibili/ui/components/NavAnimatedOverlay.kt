@@ -75,6 +75,7 @@ fun <T> NavAnimatedOverlay(
     coverOrigin: androidx.compose.ui.geometry.Rect? = null,
     coverSnapshot: androidx.compose.ui.graphics.ImageBitmap? = null,
     onSwipeBack: (() -> Unit)? = null,
+    pageSwipeBack: Boolean = false,
     content: @Composable (T) -> Unit,
 ) {
     val navTransitions = LocalNavTransitionCoordinator.current
@@ -167,11 +168,13 @@ fun <T> NavAnimatedOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(if (coverOrigin != null) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.background)
+                    .background(if (coverOrigin != null || pageSwipeBack) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.background)
                     .consumeTouchEvents(),
             ) {
                 if (coverOrigin != null) {
                     this@AnimatedVisibility.VideoCoverMotion(coverOrigin, coverSnapshot, onSwipeBack) { content(item) }
+                } else if (pageSwipeBack) {
+                    VideoPageSwipeBack(onSwipeBack = onSwipeBack) { content(item) }
                 } else {
                     content(item)
                 }

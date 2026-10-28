@@ -1727,6 +1727,7 @@ private fun AppNavStackLayers(
                 coverOrigin = (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin,
                 coverSnapshot = (layer.entry as? AppNavEntry.VideoDetail)?.coverSnapshot,
                 onSwipeBack = if (isTop && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
+                pageSwipeBack = layer.entry is AppNavEntry.VideoDetail,
             ) { activeEntry ->
                 Box(Modifier.fillMaxSize().blockHiddenTouches(isTop || isExitingLayer)) {
                     AppNavEntryContent(

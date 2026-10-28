@@ -80,8 +80,9 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
         .pointerInput(Unit) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                val backAction = back
                 // Leave the video surface's seek/volume/brightness gestures untouched.
-                if (back == null || down.position.y < statusTop + size.width * 9f / 16f || drag.isRunning) return@awaitEachGesture
+                if (backAction == null || down.position.y < statusTop + size.width * 9f / 16f || drag.isRunning) return@awaitEachGesture
                 var totalX = 0f
                 var totalY = 0f
                 var claimed = false
@@ -103,7 +104,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
                 if (claimed) scope.launch {
                     val commit = fraction > 0.24f
                     drag.animateTo(if (commit) 1f else 0f, tween(220))
-                    if (commit) back?.invoke()
+                    if (commit) backAction()
                 }
             }
         }) {

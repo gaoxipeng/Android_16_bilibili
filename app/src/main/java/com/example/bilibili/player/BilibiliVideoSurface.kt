@@ -26,6 +26,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -129,6 +132,7 @@ private const val CompactVideoDurationThresholdMs = 60_000L
 private val VideoSpeedOptions = listOf(0.5f, 0.75f, 1f, 1.5f, 2f, 3f)
 
 @Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 fun BilibiliVideoSurface(
     playbackKey: String,
     contentPlaybackKey: String = playbackKey,
@@ -240,6 +244,10 @@ fun BilibiliVideoSurface(
     var sourceErrorReported by remember(playbackKey, streamToken) { mutableStateOf(false) }
     var isPortraitPlayback by remember(playbackKey) { mutableStateOf(portraitVideo) }
     val fullscreenLandscape = isFullscreen && !isPortraitPlayback
+    // Inline detail already starts below the status bar. Keep portrait fullscreen
+    // corner controls at that same physical screen position, even when bars hide.
+    val portraitFullscreenSafeTop = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
+    val portraitCornerTop = VideoCornerButtonTopInset + if (isFullscreen && !fullscreenLandscape) portraitFullscreenSafeTop else 0.dp
     val controlBarHeight = if (fullscreenLandscape) {
         LandscapeFullscreenControlBarHeight
     } else {
@@ -1164,7 +1172,7 @@ fun BilibiliVideoSurface(
                         } else {
                             Modifier
                                 .align(Alignment.TopCenter)
-                                .padding(top = if (isFullscreen) 20.dp else 0.dp)
+                                .padding(top = if (isFullscreen) portraitFullscreenSafeTop + 20.dp else 0.dp)
                         },
                     )
                     .width(42.dp)
@@ -1239,32 +1247,37 @@ fun BilibiliVideoSurface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(
-                            start = if (fullscreenLandscape) VideoLandscapeBackStartInset + VideoCornerButtonSize + 8.dp else VideoCornerButtonInset,
-                            top = if (fullscreenLandscape) VideoLandscapeBackTopInset else VideoCornerButtonTopInset,
+                            start = (if (fullscreenLandscape) VideoLandscapeBackStartInset else VideoCornerButtonInset) + VideoCornerButtonSize + 8.dp,
+                            top = if (fullscreenLandscape) VideoLandscapeBackTopInset else portraitCornerTop,
                             end = VideoCornerButtonInset,
                             bottom = 12.dp,
                         ),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = if (fullscreenLandscape) Alignment.CenterVertically else Alignment.Top,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
+                        horizontalAlignment = Alignment.Start,
                     ) {
                         Text(
                             text = resolvedPlaybackMetadata.title,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Start,
                             color = Color.White,
                             style = videoControlLabelTextStyle(
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Medium,
                             ),
-                            maxLines = 1,
+                            maxLines = if (fullscreenLandscape) 1 else 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                         val authorName = resolvedPlaybackMetadata.artist.trim()
                         if (authorName.isNotBlank() && authorName != "哔哩哔哩") {
                             Text(
                                 text = "@$authorName",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Start,
                                 color = Color.White.copy(alpha = 0.72f),
                                 style = videoControlLabelTextStyle(
                                     fontSize = 12.sp,
@@ -1300,7 +1313,7 @@ fun BilibiliVideoSurface(
                         onClick = onCloseFullscreen,
                         backdrop = layerBackdrop,
                         modifier = Modifier
-                            .padding(start = VideoCornerButtonInset, top = VideoCornerButtonTopInset)
+                            .padding(start = VideoCornerButtonInset, top = portraitCornerTop)
                             .size(VideoCornerButtonSize),
                     )
                 }

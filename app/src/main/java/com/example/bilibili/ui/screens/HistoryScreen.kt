@@ -640,6 +640,7 @@ fun HistoryScreen(
                                             ) {
                                                 HistoryItemRow(
                                                     item = entry.item,
+                                                    onAuthorClick = { mid -> onAuthorClick(mid, entry.item.displayAuthorName(), entry.item.authorFace) },
                                                     compactTop = entry.showSectionHeader,
                                                     onClick = {
                                                         onHistoryItemClick(entry.item)
@@ -830,6 +831,7 @@ private fun HistoryItemRow(
     onMoreClick: (Rect) -> Unit,
     modifier: Modifier = Modifier,
     compactTop: Boolean = false,
+    onAuthorClick: (Long) -> Unit = {},
 ) {
     Row(
         modifier = modifier
@@ -874,8 +876,7 @@ private fun HistoryItemRow(
                     Spacer(Modifier.height(6.dp))
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(onClick = onClick),
+                            .clickable(enabled = item.authorMid > 0L) { onAuthorClick(item.authorMid) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (item.authorFace.isNotBlank() || item.authorMid > 0L) {

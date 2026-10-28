@@ -2,8 +2,6 @@ package com.example.bilibili.ui.screens
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -57,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -66,6 +65,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -522,51 +525,31 @@ fun UserProfileScreen(
     }
 
     val density = LocalDensity.current
-    val collapseThresholdPx = remember(density) { with(density) { 72.dp.roundToPx() } }
     val compactBarContentHeight = 48.dp
-    val collapseProgress by remember(
-        pagerState.currentPage,
-        postsStaggeredGridState,
-        postsListState,
-        dynamicsListState,
-        collapseThresholdPx,
-        useSingleColumnPosts,
-    ) {
-        derivedStateOf {
-            when (pagerState.currentPage) {
-                UserProfileContentTab.Posts.ordinal -> when {
-                    useSingleColumnPosts -> when {
-                        postsListState.firstVisibleItemIndex > 0 -> 1f
-                        else -> (postsListState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
-                            .coerceIn(0f, 1f)
-                    }
-                    postsStaggeredGridState.firstVisibleItemIndex > 0 -> 1f
-                    else -> (postsStaggeredGridState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
-                        .coerceIn(0f, 1f)
-                }
-                else -> when {
-                    dynamicsListState.firstVisibleItemIndex > 0 -> 1f
-                    else -> (dynamicsListState.firstVisibleItemScrollOffset.toFloat() / collapseThresholdPx)
-                        .coerceIn(0f, 1f)
-                }
-            }
-        }
-    }
-    val animatedCollapseAnim = remember { Animatable(0f) }
-    var collapseAnimationReady by remember { mutableStateOf(false) }
-    LaunchedEffect(collapseProgress) {
-        if (!collapseAnimationReady) {
-            animatedCollapseAnim.snapTo(collapseProgress)
-            collapseAnimationReady = true
-        } else {
-            animatedCollapseAnim.animateTo(
-                collapseProgress,
-                animationSpec = tween(durationMillis = 220),
-            )
-        }
-    }
-    val animatedCollapse = animatedCollapseAnim.value
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    var headerCollapseOffset by remember(mid) { mutableFloatStateOf(0f) }
+    val headerCollapseRange = with(density) {
+        (uiState.profileHeaderHeight.coerceAtLeast(1.dp) -
+            ProfileHeaderCardCoverOverlap - topInset - compactBarContentHeight).toPx().coerceAtLeast(1f)
+    }
+    LaunchedEffect(headerCollapseRange) {
+        headerCollapseOffset = headerCollapseOffset.coerceIn(0f, headerCollapseRange)
+    }
+    val animatedCollapse = (headerCollapseOffset / headerCollapseRange).coerceIn(0f, 1f)
+    val profileHeaderScrollConnection = remember(mid, headerCollapseRange) {
+        object : NestedScrollConnection {
+            fun consume(deltaY: Float): Offset {
+                val result = consumeProfileHeaderScroll(headerCollapseOffset, headerCollapseRange, deltaY)
+                headerCollapseOffset = result.offset
+                return Offset(0f, result.consumed)
+            }
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset =
+                if (available.y < 0f) consume(available.y) else Offset.Zero
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+                if (available.y > 0f) consume(available.y) else Offset.Zero
+        }
+    }
     val compactBarHeight = (topInset + compactBarContentHeight) * animatedCollapse
     val profileHeaderSlotHeight = when {
         uiState.profileHeaderHeight > 0.dp ->
@@ -624,7 +607,7 @@ fun UserProfileScreen(
                 onRefresh = { refresh(keepContent = true) },
                 modifier = Modifier.fillMaxWidth().weight(1f),
             ) {
-                Column(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize().nestedScroll(profileHeaderScrollConnection)) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -925,14 +908,6 @@ fun UserProfileScreen(
                                                     }
                                                 }
                                             }
-                                            item(key = "posts-scroll-fill") {
-                                                val fillHeight = uiState.profileHeaderHeight.coerceAtLeast(320.dp)
-                                                Spacer(
-                                                    Modifier
-                                                        .fillMaxWidth()
-                                                        .height(fillHeight),
-                                                )
-                                            }
                                         }
                                     } else {
                                         LazyVerticalStaggeredGrid(
@@ -976,17 +951,6 @@ fun UserProfileScreen(
                                                         ProfileListEndHint()
                                                     }
                                                 }
-                                            }
-                                            item(
-                                                key = "posts-scroll-fill",
-                                                span = StaggeredGridItemSpan.FullLine,
-                                            ) {
-                                                val fillHeight = uiState.profileHeaderHeight.coerceAtLeast(320.dp)
-                                                Spacer(
-                                                    Modifier
-                                                        .fillMaxWidth()
-                                                        .height(fillHeight),
-                                                )
                                             }
                                         }
                                     }
@@ -1071,14 +1035,6 @@ fun UserProfileScreen(
                                                     ProfileListEndHint()
                                                 }
                                             }
-                                        }
-                                        item(key = "dynamics-scroll-fill") {
-                                            val fillHeight = uiState.profileHeaderHeight.coerceAtLeast(320.dp)
-                                            Spacer(
-                                                Modifier
-                                                    .fillMaxWidth()
-                                                    .height(fillHeight),
-                                            )
                                         }
                                     }
                                 }
