@@ -28,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
@@ -131,17 +130,19 @@ internal fun BilibiliLiquidBottomBar(
                             tabs.forEachIndexed { index, tab ->
                                 val coverage = LocalLiquidBottomTabCoverage.current(index)
                                 val pressProgress = LocalLiquidBottomTabPressProgress.current
-                                val tabColor = lerp(Color.Black, accentColor, coverage)
-                                LiquidBottomTab(onClick = { onTabClick(tab) }) {
+                                val tabColor = if (isLightTheme) Color.Black else Color(0xFFD0D0D0)
+                                LiquidBottomTab(
+                                    onClick = { onTabClick(tab) },
+                                    modifier = Modifier.graphicsLayer {
+                                        val contentScale = 1f + 0.2f * pressProgress * coverage
+                                        transformOrigin = TransformOrigin.Center
+                                        scaleX = contentScale
+                                        scaleY = contentScale
+                                    },
+                                ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(28.dp)
-                                            .graphicsLayer {
-                                                val iconScale = 1f + 0.2f * pressProgress * coverage
-                                                transformOrigin = TransformOrigin.Center
-                                                scaleX = iconScale
-                                                scaleY = iconScale
-                                            },
+                                            .size(28.dp),
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         BilibiliTabIcon(tab = tab, color = tabColor)

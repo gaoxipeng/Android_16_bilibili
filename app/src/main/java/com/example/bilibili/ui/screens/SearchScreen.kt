@@ -348,15 +348,10 @@ fun SearchScreen(
     }
 
     LaunchedEffect(searchGeneration) {
+        pagerState.scrollToPage(0)
         videoListState.scrollToItem(0)
         videoStaggeredGridState.scrollToItem(0)
-    }
-
-    LaunchedEffect(pinnedMedia, searchGeneration) {
-        if (pinnedMedia.isNotEmpty()) {
-            videoListState.animateScrollToItem(0)
-            videoStaggeredGridState.animateScrollToItem(0)
-        }
+        userListState.scrollToItem(0)
     }
 
     LaunchedEffect(videoListState, videoStaggeredGridState, useSingleColumnVideos, activeQuery, searchGeneration, videoHasMore) {

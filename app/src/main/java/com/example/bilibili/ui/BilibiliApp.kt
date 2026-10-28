@@ -1143,7 +1143,9 @@ fun BilibiliApp() {
     val topVideoDetailEntry = navStack.lastVideoDetail()
     val coordinatorFullscreenVideo = coordinator.fullscreenVideo
     val coordinatorFullscreenStream = coordinator.fullscreenStream
-    val showFeedSearchBar = navController.stack.isEmpty() && when (selectedTab) {
+    // Keep home chrome composed underneath playback, just like the bottom bar,
+    // so it is already present while the video card follows a back gesture.
+    val showFeedSearchBar = when (selectedTab) {
         MainTab.Home -> activeAccount != null
         else -> false
     }
@@ -1706,6 +1708,7 @@ private fun AppNavStackLayers(
         key(layer.key) {
             val isTop = layer.target != null && layer.key == topActiveKey
             val isExitingLayer = layer.target == null && pendingExitKey == layer.key
+            var detailAllowsSwipeBack by remember { mutableStateOf(true) }
             NavAnimatedOverlay(
                 target = layer.target,
                 exitSeed = if (layer.target == null) layer.entry else null,
@@ -1723,7 +1726,7 @@ private fun AppNavStackLayers(
                 onHidden = onExitHidden,
                 coverOrigin = (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin,
                 coverSnapshot = (layer.entry as? AppNavEntry.VideoDetail)?.coverSnapshot,
-                onSwipeBack = if (isTop && coordinator.fullscreenKey == null) onPopNav else null,
+                onSwipeBack = if (isTop && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
             ) { activeEntry ->
                 Box(Modifier.fillMaxSize().blockHiddenTouches(isTop || isExitingLayer)) {
                     AppNavEntryContent(
@@ -1755,6 +1758,7 @@ private fun AppNavStackLayers(
                         onEnsurePlayStream = onEnsurePlayStream,
                         onRefreshPlayStream = onRefreshPlayStream,
                         episodeSwitchScope = episodeSwitchScope,
+                        onVideoSwipeBackEnabledChange = { detailAllowsSwipeBack = it },
                     )
                 }
             }
@@ -1792,6 +1796,7 @@ private fun AppNavEntryContent(
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
     onRefreshPlayStream: (BiliVideoItem) -> Unit,
     episodeSwitchScope: CoroutineScope,
+    onVideoSwipeBackEnabledChange: (Boolean) -> Unit = {},
 ) {
     when (entry) {
         is AppNavEntry.Search -> {
@@ -1836,6 +1841,7 @@ private fun AppNavEntryContent(
                 onSearchTagClick = onSearchTagClick,
                 onBack = onPopNav,
                 playbackActive = isActive,
+                onSwipeBackEnabledChange = onVideoSwipeBackEnabledChange,
                 onStreamSourceError = onRefreshPlayStream,
                 episodeSwitchScope = episodeSwitchScope,
                 modifier = Modifier.fillMaxSize(),

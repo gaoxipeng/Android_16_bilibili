@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -280,6 +281,7 @@ fun VideoDetailScreen(
     onSearchTagClick: (String) -> Unit = {},
     onBack: () -> Unit = {},
     playbackActive: Boolean = true,
+    onSwipeBackEnabledChange: (Boolean) -> Unit = {},
     onStreamSourceError: (BiliVideoItem) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -332,6 +334,23 @@ fun VideoDetailScreen(
     val introListState = rememberLazyListState()
     val commentsListState = rememberLazyListState()
     val commentsLoadMutex = remember(seedStateKey) { Mutex() }
+
+    val currentSwipeBackEnabledChange by rememberUpdatedState(onSwipeBackEnabledChange)
+    LaunchedEffect(pagerState, playbackActive) {
+        snapshotFlow {
+            playbackActive && pagerState.currentPage == VideoDetailTab.Intro.ordinal && !pagerState.isScrollInProgress
+        }.distinctUntilChanged().collect { enabled ->
+            currentSwipeBackEnabledChange(enabled)
+        }
+    }
+
+    // The detail tabs are an inner navigation level: back from comments should
+    // reveal the video's intro before leaving the playback page.
+    BackHandler(enabled = playbackActive && pagerState.currentPage == VideoDetailTab.Comments.ordinal) {
+        scope.launch {
+            pagerState.animateScrollToPage(VideoDetailTab.Intro.ordinal)
+        }
+    }
 
     suspend fun loadComments(reset: Boolean) {
         val aid = detail?.video?.aid ?: seedVideo.aid
@@ -1499,6 +1518,7 @@ fun VideoDetailScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
+            userScrollEnabled = true,
         ) { page ->
             when (VideoDetailTab.entries[page]) {
                 VideoDetailTab.Intro -> {

@@ -28,15 +28,18 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceIn
@@ -44,6 +47,9 @@ import androidx.compose.ui.util.lerp
 import com.example.bilibili.ui.theme.TabAccentDark
 import com.example.bilibili.ui.theme.TabAccentLight
 import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
@@ -67,6 +73,8 @@ fun LiquidBottomTabs(
     val isLightTheme = isAppLightTheme()
     val accentColor = if (isLightTheme) TabAccentLight else TabAccentDark
     val capsuleSurfaceColor = liquidLargeCapsuleSurfaceColor(isLightTheme)
+    val tabsBackdrop = rememberLayerBackdrop()
+    val indicatorBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
 
     BoxWithConstraints(
         modifier.graphicsLayer { clip = false },
@@ -251,6 +259,63 @@ fun LiquidBottomTabs(
                 .fillMaxWidth(),
         )
 
+        CompositionLocalProvider(
+            LocalLiquidBottomTabPressProgress provides indicatorPressProgress,
+            LocalLiquidBottomTabCoverage provides { index: Int ->
+                val iconHalfWidth = with(density) { 11.dp.toPx() }
+                val capsuleHalfWidth = tabWidth * indicatorScaleX / 2f
+                val centerDistance = abs(index - indicatorValue) * tabWidth
+                ((capsuleHalfWidth + iconHalfWidth - centerDistance) / (2f * iconHalfWidth))
+                    .coerceIn(0f, 1f)
+            },
+        ) {
+            Row(
+                Modifier
+                    .graphicsLayer {
+                        clip = false
+                        translationX = panelOffset
+                        val scale = lerp(1f, 1f + 16.dp.toPx() / size.width, indicatorPressProgress)
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .then(interactiveHighlight.modifier)
+                    .height(64.dp)
+                    .fillMaxWidth()
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = content,
+            )
+
+            // Same two-layer tab rendering as Weibo: the moving lens samples
+            // tinted icons/text, rather than switching an entire label at once.
+            Row(
+                Modifier
+                    .clearAndSetSemantics { }
+                    .alpha(0f)
+                    .layerBackdrop(tabsBackdrop)
+                    .graphicsLayer {
+                        clip = false
+                        translationX = panelOffset
+                        val scale = lerp(1f, 1f + 16.dp.toPx() / size.width, indicatorPressProgress)
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { barShape },
+                        effects = {
+                            blur(8.dp.toPx() * (1f - indicatorPressProgress), TileMode.Decal)
+                        },
+                        shadow = null,
+                    )
+                    .height(64.dp)
+                    .fillMaxWidth()
+                    .padding(4.dp)
+                    .graphicsLayer { colorFilter = ColorFilter.tint(accentColor) },
+                verticalAlignment = Alignment.CenterVertically,
+                content = content,
+            )
+
         Box(
             Modifier
                 .padding(horizontal = 4f.dp)
@@ -261,11 +326,10 @@ fun LiquidBottomTabs(
                     translationX = visualIndex * tabWidth + panelOffset
                 }
                 .drawBackdrop(
-                    backdrop = backdrop,
+                    backdrop = indicatorBackdrop,
                     shape = { RoundedCornerShape(percent = 50) },
                     effects = {
                         val progress = indicatorPressProgress
-                        blur(8f.dp.toPx() * (1f - progress), TileMode.Decal)
                         lens(10f.dp.toPx() * progress, 14f.dp.toPx() * progress, chromaticAberration = true)
                     },
                     highlight = {
@@ -294,29 +358,6 @@ fun LiquidBottomTabs(
                 .fillMaxWidth(1f / tabsCount)
         )
 
-        CompositionLocalProvider(
-            LocalLiquidBottomTabPressProgress provides indicatorPressProgress,
-            LocalLiquidBottomTabCoverage provides { index: Int ->
-                val iconHalfWidth = with(density) { 11.dp.toPx() }
-                val capsuleHalfWidth = tabWidth * indicatorScaleX / 2f
-                val centerDistance = abs(index - indicatorValue) * tabWidth
-                ((capsuleHalfWidth + iconHalfWidth - centerDistance) / (2f * iconHalfWidth))
-                    .coerceIn(0f, 1f)
-            },
-        ) {
-            Row(
-                Modifier
-                    .graphicsLayer {
-                        clip = false
-                        translationX = panelOffset
-                    }
-                    .then(interactiveHighlight.modifier)
-                    .height(64.dp)
-                    .fillMaxWidth()
-                    .padding(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                content = content,
-            )
         }
 
         Box(
