@@ -6,6 +6,7 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -30,6 +31,8 @@ import com.example.bilibili.util.BiliLinkTarget
 import com.example.bilibili.util.BiliTextLinkParser
 
 private val MentionPattern = Regex("""@([^ @:：\n]+)""")
+
+val LocalBiliSyncedEmoticons = compositionLocalOf<Map<String, String>> { emptyMap() }
 
 private data class CommentLinkRange(
     val start: Int,
@@ -62,11 +65,15 @@ fun BiliCommentText(
     overflow: TextOverflow = TextOverflow.Clip,
     onLinkClick: ((BiliLinkTarget) -> Unit)? = null,
 ) {
-    val phrases = remember(emoticons) { emoticons.keys.sortedByDescending { it.length } }
+    val syncedEmoticons = LocalBiliSyncedEmoticons.current
+    val resolvedEmoticons = remember(emoticons, syncedEmoticons) {
+        syncedEmoticons + emoticons
+    }
+    val phrases = remember(resolvedEmoticons) { resolvedEmoticons.keys.sortedByDescending { it.length } }
     val hasMentions = remember(text) { MentionPattern.containsMatchIn(text) }
     val linkRanges = remember(text) { commentLinkRanges(text) }
     val hasLinks = linkRanges.isNotEmpty()
-    if (emoticons.isEmpty() && !hasMentions && !hasLinks) {
+    if (resolvedEmoticons.isEmpty() && !hasMentions && !hasLinks) {
         Text(
             text = text,
             style = style,
@@ -80,8 +87,8 @@ fun BiliCommentText(
     val emojiSize = remember(style.fontSize) {
         if (style.fontSize != TextUnit.Unspecified) style.fontSize * 1.2f else 18.sp
     }
-    val inlineContent = remember(emoticons, emojiSize) {
-        emoticons.mapValues { (phrase, _) ->
+    val inlineContent = remember(resolvedEmoticons, emojiSize) {
+        resolvedEmoticons.mapValues { (phrase, _) ->
             InlineTextContent(
                 placeholder = Placeholder(
                     width = emojiSize,
@@ -90,7 +97,7 @@ fun BiliCommentText(
                 ),
             ) {
                 AsyncImage(
-                    model = emoticons[phrase],
+                    model = resolvedEmoticons[phrase],
                     contentDescription = phrase,
                     modifier = Modifier.size(emojiSize.value.dp),
                     contentScale = ContentScale.Fit,

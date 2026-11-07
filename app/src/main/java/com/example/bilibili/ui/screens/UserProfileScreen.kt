@@ -86,6 +86,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.AppearanceMode
+import com.example.bilibili.data.BiliDanmakuEmoticon
 import com.example.bilibili.data.BiliAuthorRelation
 import com.example.bilibili.data.BiliDynamicIpWebResolver
 import com.example.bilibili.data.BiliDynamicItem
@@ -219,6 +220,10 @@ fun UserProfileScreen(
     onAddAccount: () -> Unit = {},
     autoHideBarsOnScroll: Boolean = true,
     onAutoHideBarsOnScrollChange: (Boolean) -> Unit = {},
+    syncedEmoticonCount: Int = 0,
+    syncedEmoticons: Map<String, BiliDanmakuEmoticon> = emptyMap(),
+    syncingEmoticons: Boolean = false,
+    onSyncEmoticons: () -> Unit = {},
     bottomBarFrostAmount: Float = 0f,
     onBottomBarFrostAmountChange: (Float) -> Unit = {},
     onBottomBarFrostAmountCommit: () -> Unit = {},
@@ -596,6 +601,10 @@ fun UserProfileScreen(
             onAddAccount = onAddAccount,
             autoHideBarsOnScroll = autoHideBarsOnScroll,
             onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
+            syncedEmoticonCount = syncedEmoticonCount,
+            syncedEmoticons = syncedEmoticons,
+            syncingEmoticons = syncingEmoticons,
+            onSyncEmoticons = onSyncEmoticons,
             bottomBarFrostAmount = bottomBarFrostAmount,
             onBottomBarFrostAmountChange = onBottomBarFrostAmountChange,
             onBottomBarFrostAmountCommit = onBottomBarFrostAmountCommit,

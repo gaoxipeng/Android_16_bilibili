@@ -61,6 +61,8 @@ import com.example.bilibili.data.BiliDynamicItem
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.BilibiliAccountStore
 import com.example.bilibili.data.BilibiliApiClient
+import com.example.bilibili.data.BilibiliEmoticonStore
+import com.example.bilibili.data.BiliDanmakuEmoticon
 import com.example.bilibili.data.BilibiliEndpoints
 import com.example.bilibili.data.BiliVideoPage
 import com.example.bilibili.data.BilibiliHomeFeedStore
@@ -87,6 +89,7 @@ import com.example.bilibili.ui.components.FeedRefreshHintOverlay
 import com.example.bilibili.ui.components.PressAgainExitConfirmWindowMillis
 import com.example.bilibili.ui.components.PressAgainExitHintOverlay
 import com.example.bilibili.ui.components.NavAnimatedOverlay
+import com.example.bilibili.ui.components.LocalBiliSyncedEmoticons
 import com.example.bilibili.ui.components.NavFullscreenZIndex
 import com.example.bilibili.ui.components.blockHiddenTouches
 import com.example.bilibili.ui.components.feedRefreshHintMessage
@@ -198,6 +201,10 @@ fun BilibiliApp() {
     val scope = rememberCoroutineScope()
     val api = remember { BilibiliApiClient() }
     val accountStore = remember { BilibiliAccountStore(context) }
+    val bilibiliEmoticonStore = remember { BilibiliEmoticonStore(context) }
+    var syncedEmoticons by remember { mutableStateOf(bilibiliEmoticonStore.read()) }
+    val syncedEmoticonCount = syncedEmoticons.size
+    var syncingEmoticons by remember { mutableStateOf(false) }
     val appearanceSettingsStore = remember { AppearanceSettingsStore(context) }
     var appearanceMode by remember { mutableStateOf(appearanceSettingsStore.readAppearanceMode()) }
     val bottomBarDisplaySettingsStore = remember { BottomBarDisplaySettingsStore(context) }
@@ -914,6 +921,30 @@ fun BilibiliApp() {
         }
     }
 
+    fun syncBilibiliEmoticons() {
+        if (syncingEmoticons) return
+        scope.launch {
+            syncingEmoticons = true
+            runCatching {
+                val synced = linkedMapOf<String, BiliDanmakuEmoticon>()
+                synced.putAll(api.getBilibiliEmoticons("reply", credential()))
+                synced.putAll(api.getBilibiliEmoticons("dynamic", credential()))
+                synced
+            }.onSuccess { emoticons ->
+                if (emoticons.isNotEmpty()) {
+                    bilibiliEmoticonStore.write(emoticons)
+                    syncedEmoticons = emoticons
+                    Toast.makeText(context, "已同步 ${emoticons.size} 个 B 站表情", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "没有获取到表情，请稍后重试", Toast.LENGTH_SHORT).show()
+                }
+            }.onFailure { error ->
+                Toast.makeText(context, error.message?.takeIf(String::isNotBlank) ?: "表情同步失败，请稍后重试", Toast.LENGTH_SHORT).show()
+            }
+            syncingEmoticons = false
+        }
+    }
+
     fun loadMoreHome() {
         if (
             homeLoading ||
@@ -1249,6 +1280,7 @@ fun BilibiliApp() {
         LocalBilibiliCredential provides activeAccount?.credential,
         LocalWatchHistoryReporter provides watchHistoryReporter,
         LocalBiliImageSaveHint provides imageSaveHintController,
+        LocalBiliSyncedEmoticons provides syncedEmoticons.mapValues { it.value.url },
         LocalNavTransitionCoordinator provides navTransitionCoordinator,
     ) {
     Scaffold(
@@ -1443,6 +1475,10 @@ fun BilibiliApp() {
                         onAddAccount = ::prepareAddAccount,
                         autoHideBarsOnScroll = autoHideBarsOnScroll,
                         onAutoHideBarsOnScrollChange = ::updateAutoHideBarsOnScroll,
+                        syncedEmoticonCount = syncedEmoticonCount,
+                        syncedEmoticons = syncedEmoticons,
+                        syncingEmoticons = syncingEmoticons,
+                        onSyncEmoticons = ::syncBilibiliEmoticons,
                         bottomBarFrostAmount = bottomBarFrostAmount,
                         onBottomBarFrostAmountChange = { bottomBarFrostAmount = it },
                         onBottomBarFrostAmountCommit = {
@@ -1479,6 +1515,10 @@ fun BilibiliApp() {
                 feedColumnCount = feedColumnCount,
                 autoHideBarsOnScroll = autoHideBarsOnScroll,
                 onAutoHideBarsOnScrollChange = ::updateAutoHideBarsOnScroll,
+                syncedEmoticonCount = syncedEmoticonCount,
+                syncedEmoticons = syncedEmoticons,
+                syncingEmoticons = syncingEmoticons,
+                onSyncEmoticons = ::syncBilibiliEmoticons,
                 onFeedColumnCountChange = { count ->
                     feedColumnCount = count
                     feedLayoutStore.writeColumnCount(count)
@@ -1696,6 +1736,10 @@ private fun AppNavStackLayers(
     onFeedColumnCountChange: (Int) -> Unit,
     autoHideBarsOnScroll: Boolean,
     onAutoHideBarsOnScrollChange: (Boolean) -> Unit,
+    syncedEmoticonCount: Int,
+    syncedEmoticons: Map<String, BiliDanmakuEmoticon>,
+    syncingEmoticons: Boolean,
+    onSyncEmoticons: () -> Unit,
     contentPadding: PaddingValues,
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
@@ -1764,6 +1808,10 @@ private fun AppNavStackLayers(
                         onFeedColumnCountChange = onFeedColumnCountChange,
                         autoHideBarsOnScroll = autoHideBarsOnScroll,
                         onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
+                        syncedEmoticonCount = syncedEmoticonCount,
+                        syncedEmoticons = syncedEmoticons,
+                        syncingEmoticons = syncingEmoticons,
+                        onSyncEmoticons = onSyncEmoticons,
                         contentPadding = contentPadding,
                         onPopNav = onPopNav,
                         onOpenVideo = onOpenVideo,
@@ -1802,6 +1850,10 @@ private fun AppNavEntryContent(
     onFeedColumnCountChange: (Int) -> Unit,
     autoHideBarsOnScroll: Boolean,
     onAutoHideBarsOnScrollChange: (Boolean) -> Unit,
+    syncedEmoticonCount: Int,
+    syncedEmoticons: Map<String, BiliDanmakuEmoticon>,
+    syncingEmoticons: Boolean,
+    onSyncEmoticons: () -> Unit,
     contentPadding: PaddingValues,
     onPopNav: () -> Unit,
     onOpenVideo: (BiliVideoItem, Int) -> Unit,
@@ -1895,6 +1947,10 @@ private fun AppNavEntryContent(
                 onFeedColumnCountChange = onFeedColumnCountChange,
                 autoHideBarsOnScroll = autoHideBarsOnScroll,
                 onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
+                syncedEmoticonCount = syncedEmoticonCount,
+                syncedEmoticons = syncedEmoticons,
+                syncingEmoticons = syncingEmoticons,
+                onSyncEmoticons = onSyncEmoticons,
                 modifier = Modifier.fillMaxSize(),
             )
         }

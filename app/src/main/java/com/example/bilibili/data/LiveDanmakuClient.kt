@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CancellationException
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -24,6 +26,7 @@ import okio.ByteString
 import org.brotli.dec.BrotliInputStream
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.util.zip.InflaterInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Base64
@@ -48,6 +51,8 @@ class LiveDanmakuClient(
 
     private val _onlineRankTop3 = MutableStateFlow<List<BiliLiveRankUser>>(emptyList())
     val onlineRankTop3: StateFlow<List<BiliLiveRankUser>> = _onlineRankTop3.asStateFlow()
+    private val _likeCount = MutableStateFlow<Long?>(null)
+    val likeCount: StateFlow<Long?> = _likeCount.asStateFlow()
 
     private val _popularity = MutableStateFlow(0L)
     val popularity: StateFlow<Long> = _popularity.asStateFlow()
@@ -65,17 +70,21 @@ class LiveDanmakuClient(
     private var realRoomId: Long = 0L
 
     suspend fun connect(playInfo: BiliLivePlayResult) {
+        android.util.Log.i("BiliLiveDanmaku", "开始获取弹幕配置 room=${playInfo.realRoomId}")
         val danmuInfo = api.getLiveDanmuInfo(playInfo.realRoomId, credential)
             ?: error("无法获取弹幕服务器配置")
+        android.util.Log.i("BiliLiveDanmaku", "弹幕服务器数=${danmuInfo.hosts.size}")
         realRoomId = playInfo.realRoomId
         val token = danmuInfo.token
         var lastError: Throwable? = null
         for (host in danmuInfo.hosts.asReversed()) {
             val url = "wss://${host.host}:${host.wssPort}/sub"
             try {
-                connectToHost(url, realRoomId, token)
+                withTimeout(8_000) { connectToHost(url, realRoomId, token) }
                 return
             } catch (error: Throwable) {
+                if (error is CancellationException && !kotlin.coroutines.coroutineContext.isActive) throw error
+                android.util.Log.w("BiliLiveDanmaku", "弹幕服务器连接失败", error)
                 lastError = error
             }
         }
@@ -93,11 +102,15 @@ class LiveDanmakuClient(
                 request,
                 object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
+                        android.util.Log.i("BiliLiveDanmaku", "弹幕连接已建立")
                         webSocket.send(buildVerifyPacket(realRoomId, token))
                     }
 
                     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                        handlePacket(bytes.toByteArray()) {
+                        runCatching { handlePacket(bytes.toByteArray(), onRejected = { code ->
+                            if (continuation.isActive) continuation.resumeWithException(IllegalStateException("弹幕认证失败：$code"))
+                            webSocket.close(1000, "verification failed")
+                        }) {
                             if (!_connected.value) {
                                 _connected.value = true
                                 startHeartbeat(realRoomId)
@@ -105,7 +118,7 @@ class LiveDanmakuClient(
                                     continuation.resume(Unit)
                                 }
                             }
-                        }
+                        } }.onFailure { error -> android.util.Log.w("BiliLiveDanmaku", "弹幕消息解析失败", error) }
                     }
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -126,14 +139,15 @@ class LiveDanmakuClient(
             }
         }
 
-    private fun handlePacket(raw: ByteArray, onVerified: () -> Unit = {}) {
+    private fun handlePacket(raw: ByteArray, onRejected: (Int) -> Unit = {}, onVerified: () -> Unit = {}) {
         if (raw.size < 16) return
         val packets = unpack(raw)
         for (packet in packets) {
             when (packet.type) {
                 PACKET_VERIFY_SUCCESS -> {
                     val code = packet.json?.optInt("code", -1) ?: -1
-                    if (code == 0) onVerified()
+                    android.util.Log.i("BiliLiveDanmaku", "弹幕认证结果=$code")
+                    if (code == 0) onVerified() else onRejected(code)
                 }
                 PACKET_HEARTBEAT_RESPONSE -> {
                     heartbeatCounter.set(30)
@@ -141,19 +155,32 @@ class LiveDanmakuClient(
                 }
                 PACKET_NOTICE -> {
                     val cmd = packet.json?.optString("cmd").orEmpty()
+                if (cmd.isBlank() && packet.body != null) {
+                    val users = parseOnlineRankProto(packet.body)
+                    if (users.isNotEmpty()) _onlineRankTop3.value = users
+                }
                     when {
                         cmd.startsWith("DANMU_MSG") -> {
+                            android.util.Log.i("BiliLiveDanmaku", "收到弹幕消息")
                             packet.json?.optJSONArray("info")?.let { info ->
                                 BilibiliJsonParser.parseLiveDanmakuMessage(info)?.let { item ->
                                     scope.launch { _danmaku.emit(item) }
                                 }
                             }
                         }
-                        cmd == "ONLINE_RANK_V2" -> {
+                        cmd == "ONLINE_RANK_V2" || cmd == "ONLINE_RANK_V3" -> {
                             packet.json?.let { payload ->
                                 val users = BilibiliJsonParser.parseLiveOnlineRankList(payload)
+                                android.util.Log.i("BiliLiveDanmaku", "收到榜单，头像数=${users.size}")
                                 if (users.isNotEmpty()) {
                                     _onlineRankTop3.value = users
+                                }
+                            }
+                        }
+                        cmd == "LIKE_INFO_V3_UPDATE" -> {
+                            packet.json?.optJSONObject("data")?.let { data ->
+                                when {
+                                    data.has("click_count") -> _likeCount.value = data.optLong("click_count")
                                 }
                             }
                         }
@@ -201,39 +228,83 @@ class LiveDanmakuClient(
         val type: Int,
         val json: JSONObject? = null,
         val view: Int? = null,
+        val body: ByteArray? = null,
     )
 
     private fun unpack(data: ByteArray): List<LivePacket> {
         if (data.size < 16) return emptyList()
-        val topHeader = readHeader(data, 0)
-        val realData = if (topHeader.protocolVersion == PROTOCOL_BROTLI) {
-            val compressed = data.copyOfRange(16, data.size)
-            BrotliInputStream(ByteArrayInputStream(compressed)).use { it.readBytes() }
-        } else {
-            data
-        }
-        if (topHeader.protocolVersion == PROTOCOL_HEARTBEAT &&
-            topHeader.packetType == PACKET_HEARTBEAT_RESPONSE &&
-            realData.size >= 20
-        ) {
-            val view = ByteBuffer.wrap(realData, 16, 4).order(ByteOrder.BIG_ENDIAN).int
-            return listOf(LivePacket(type = PACKET_HEARTBEAT_RESPONSE, view = view))
-        }
         val packets = mutableListOf<LivePacket>()
         var offset = 0
-        while (offset + 16 <= realData.size) {
-            val header = readHeader(realData, offset)
-            if (header.totalLength <= 16) break
-            val end = (offset + header.totalLength).coerceAtMost(realData.size)
-            val chunk = realData.copyOfRange(offset + 16, end)
+        while (offset + 16 <= data.size) {
+            val header = readHeader(data, offset)
+            if (header.headerLength < 16 || header.totalLength < header.headerLength || header.totalLength > data.size - offset) break
+            val end = offset + header.totalLength
+            val chunk = data.copyOfRange(offset + header.headerLength, end)
+            if (header.protocolVersion == PROTOCOL_BROTLI || header.protocolVersion == 2) {
+                val decoded = if (header.protocolVersion == PROTOCOL_BROTLI) BrotliInputStream(ByteArrayInputStream(chunk)).use { it.readBytes() } else InflaterInputStream(ByteArrayInputStream(chunk)).use { it.readBytes() }
+                packets += unpack(decoded)
+                offset = end
+                continue
+            }
+            if (header.packetType == PACKET_HEARTBEAT_RESPONSE && chunk.size >= 4) {
+                packets += LivePacket(type = header.packetType, view = ByteBuffer.wrap(chunk).order(ByteOrder.BIG_ENDIAN).int)
+                offset = end
+                continue
+            }
             val json = runCatching {
                 JSONObject(chunk.toString(Charsets.UTF_8))
             }.getOrNull()
-            packets += LivePacket(type = header.packetType, json = json)
-            offset += header.totalLength
+            packets += LivePacket(type = header.packetType, json = json, body = chunk)
+            offset = end
         }
         return packets
     }
+
+    private fun parseOnlineRankProto(body: ByteArray): List<BiliLiveRankUser> {
+        fun readVarint(pos: IntArray): Long {
+            var value = 0L; var shift = 0
+            while (pos[0] < body.size && shift < 64) {
+                val b = body[pos[0]++].toInt() and 0xFF
+                value = value or ((b and 0x7F).toLong() shl shift)
+                if (b and 0x80 == 0) break
+                shift += 7
+            }
+            return value
+        }
+        fun readBytes(pos: IntArray): ByteArray {
+            val length = readVarint(pos).toInt().coerceAtLeast(0)
+            val end = (pos[0] + length).coerceAtMost(body.size)
+            val result = body.copyOfRange(pos[0], end); pos[0] = end; return result
+        }
+        fun parseItem(bytes: ByteArray, index: Int): BiliLiveRankUser? {
+            val old = body
+            val p = intArrayOf(0); var uid = 0L; var face = ""; var name = ""; var rank = index + 1; var guard = 0
+            while (p[0] < bytes.size) {
+                val key = run { var v = 0L; var s = 0; while (p[0] < bytes.size) { val b=bytes[p[0]++].toInt() and 255; v = v or ((b and 127).toLong() shl s); if (b and 128 == 0) break; s += 7 }; v }
+                when (key.toInt() ushr 3) {
+                    1 -> uid = readVarintFrom(bytes, p)
+                    2 -> face = readBytesFrom(bytes, p).toString(Charsets.UTF_8)
+                    4 -> name = readBytesFrom(bytes, p).toString(Charsets.UTF_8)
+                    5 -> rank = readVarintFrom(bytes, p).toInt()
+                    6 -> guard = readVarintFrom(bytes, p).toInt()
+                    else -> if ((key.toInt() and 7) == 2) readBytesFrom(bytes, p) else readVarintFrom(bytes, p)
+                }
+            }
+            return face.takeIf { it.isNotBlank() }?.let { BiliLiveRankUser(uid, it, name, rank, guard) }
+        }
+        val result = mutableListOf<BiliLiveRankUser>(); val p = intArrayOf(0)
+        while (p[0] < body.size) {
+            val key = readVarint(p).toInt(); val field = key ushr 3; val wire = key and 7
+            if (wire == 2 && (field == 2 || field == 3)) parseItem(readBytes(p), result.size)?.let(result::add)
+            else if (wire == 2) readBytes(p) else if (wire == 0) readVarint(p) else break
+        }
+        return result.sortedBy { it.rank }.distinctBy { it.uid to it.face }.take(3)
+    }
+
+    private fun readVarintFrom(bytes: ByteArray, pos: IntArray): Long {
+        var value=0L; var shift=0; while (pos[0] < bytes.size && shift < 64) { val b=bytes[pos[0]++].toInt() and 255; value=value or ((b and 127).toLong() shl shift); if (b and 128 == 0) break; shift += 7 }; return value
+    }
+    private fun readBytesFrom(bytes: ByteArray, pos: IntArray): ByteArray { val n=readVarintFrom(bytes,pos).toInt().coerceAtLeast(0); val e=(pos[0]+n).coerceAtMost(bytes.size); val r=bytes.copyOfRange(pos[0],e); pos[0]=e; return r }
 
     private data class PacketHeader(
         val totalLength: Int,

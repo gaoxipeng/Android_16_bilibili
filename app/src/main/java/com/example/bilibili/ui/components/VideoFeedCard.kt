@@ -107,12 +107,12 @@ fun VideoFeedCard(
     }
     val trackedModifier = modifier.drawWithContent {
         cardLayer.record { this@drawWithContent.drawContent() }
-        drawLayer(cardLayer)
+        if (VideoCoverOrigins.hiddenId != video.playbackId()) drawLayer(cardLayer)
     }.onGloballyPositioned {
         val bounds = it.boundsInRoot()
         VideoCoverOrigins.update(video.playbackId(), androidx.compose.ui.geometry.Rect(
             bounds.left, bounds.top, bounds.right, bounds.bottom,
-        ))
+        ), if (gridStyle) 8f else if (overlayMetaOnCover) 14f else if (compact) 10f else 16f)
     }
     if (gridStyle) {
         VideoFeedGridCard(

@@ -1839,12 +1839,21 @@ class BilibiliApiClient {
     ): BiliLiveRoomDetail? =
         withContext(Dispatchers.IO) {
             runCatching {
-                getJson(
+                val detail = getJson(
                     url = BilibiliEndpoints.LIVE_ROOM_INFO_BY_ROOM,
                     params = mapOf("room_id" to roomId.toString()),
                     credential = credential,
                     referer = liveRoomReferer(roomId),
                 ).let(BilibiliJsonParser::parseLiveRoomDetail)
+                if (detail?.likeCount == null) {
+                    val legacy = getJson(
+                        url = BilibiliEndpoints.LIVE_ROOM_GET_INFO,
+                        params = mapOf("id" to roomId.toString()),
+                        credential = credential,
+                        referer = liveRoomReferer(roomId),
+                    ).let(BilibiliJsonParser::parseLiveRoomDetail)
+                    detail?.copy(likeCount = legacy?.likeCount)
+                } else detail
             }.getOrNull()
         }
 
@@ -1856,7 +1865,7 @@ class BilibiliApiClient {
         withContext(Dispatchers.IO) {
             if (anchorUid <= 0L) return@withContext BiliLiveOnlineGoldRank()
             runCatching {
-                getJson(
+                getWbiJsonOnCurrentThread(
                     url = BilibiliEndpoints.LIVE_ONLINE_GOLD_RANK,
                     params = mapOf(
                         "roomId" to roomId.toString(),
@@ -1866,7 +1875,11 @@ class BilibiliApiClient {
                     ),
                     credential = credential,
                     referer = liveRoomReferer(roomId),
-                ).let(BilibiliJsonParser::parseLiveOnlineGoldRank)
+                ).let { json ->
+                    val data = json.optJSONObject("data")
+                    android.util.Log.i("BiliLiveDanmaku", "榜单字段=${data?.keys()?.asSequence()?.toList()} 列表长度=${data?.optJSONArray("OnlineRankItem")?.length() ?: data?.optJSONArray("online_list")?.length() ?: data?.optJSONArray("list")?.length() ?: 0}")
+                    BilibiliJsonParser.parseLiveOnlineGoldRank(json)
+                }
             }.getOrDefault(BiliLiveOnlineGoldRank())
         }
 
@@ -1917,6 +1930,26 @@ class BilibiliApiClient {
             }.getOrNull()
         }
 
+    suspend fun getLiveRecentDanmaku(roomId: Long, credential: BilibiliCredential?): List<BiliDanmakuItem> = withContext(Dispatchers.IO) {
+        runCatching {
+            val data = getJson(
+                url = "https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory",
+                params = mapOf("roomid" to roomId.toString(), "room_type" to "0"),
+                credential = credential,
+                referer = liveRoomReferer(roomId),
+            ).optJSONObject("data")
+            val messages = data?.optJSONArray("room") ?: org.json.JSONArray()
+            buildList {
+                for (index in 0 until messages.length()) {
+                    val item = messages.optJSONObject(index) ?: continue
+                    val content = item.optString("text")
+                    if (content.isBlank()) continue
+                    add(BiliDanmakuItem(timeMs = System.currentTimeMillis(), mode = 1, fontSize = 25, colorArgb = 0xFFFFFFFF.toInt(), content = content, senderId = item.optLong("uid"), senderName = item.optString("nickname")))
+                }
+            }
+        }.onFailure { android.util.Log.w("BiliLiveDanmaku", "读取近期弹幕失败", it) }.getOrDefault(emptyList())
+    }
+
     suspend fun getLiveEmoticons(
         roomId: Long,
         credential: BilibiliCredential? = null,
@@ -1933,6 +1966,21 @@ class BilibiliApiClient {
                     referer = liveRoomReferer(roomId),
                 ).let(BilibiliJsonParser::parseLiveEmoticonMap)
             }.getOrDefault(emptyMap())
+        }
+
+    suspend fun getBilibiliEmoticons(
+        business: String,
+        credential: BilibiliCredential? = null,
+    ): Map<String, BiliDanmakuEmoticon> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                getJson(
+                    url = "https://api.bilibili.com/x/emote/user/panel/web",
+                    params = mapOf("business" to business),
+                    credential = credential,
+                    referer = BilibiliEndpoints.HOME,
+                ).let(BilibiliJsonParser::parseLiveEmoticonMap)
+            }.getOrThrow()
         }
 
     suspend fun sendLiveDanmaku(

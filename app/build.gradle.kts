@@ -24,8 +24,8 @@ android {
         applicationId = "com.example.bilibili"
         minSdk = 36
         targetSdk = 37
-        versionCode = 27
-        versionName = "20261028"
+        versionCode = 28
+        versionName = "20261107"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

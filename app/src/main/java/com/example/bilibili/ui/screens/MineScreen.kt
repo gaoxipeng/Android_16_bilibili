@@ -21,6 +21,7 @@ import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.data.StoredBilibiliAccount
 import com.example.bilibili.data.AppearanceMode
+import com.example.bilibili.data.BiliDanmakuEmoticon
 import com.example.bilibili.data.UserRelationTab
 import com.example.bilibili.player.VideoPlaybackCoordinator
 
@@ -53,6 +54,10 @@ fun MineScreen(
     onAddAccount: () -> Unit = {},
     autoHideBarsOnScroll: Boolean = true,
     onAutoHideBarsOnScrollChange: (Boolean) -> Unit = {},
+    syncedEmoticonCount: Int = 0,
+    syncedEmoticons: Map<String, BiliDanmakuEmoticon> = emptyMap(),
+    syncingEmoticons: Boolean = false,
+    onSyncEmoticons: () -> Unit = {},
     bottomBarFrostAmount: Float = 0f,
     onBottomBarFrostAmountChange: (Float) -> Unit = {},
     onBottomBarFrostAmountCommit: () -> Unit = {},
@@ -110,6 +115,10 @@ fun MineScreen(
         onAddAccount = onAddAccount,
         autoHideBarsOnScroll = autoHideBarsOnScroll,
         onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
+        syncedEmoticonCount = syncedEmoticonCount,
+        syncedEmoticons = syncedEmoticons,
+        syncingEmoticons = syncingEmoticons,
+        onSyncEmoticons = onSyncEmoticons,
         bottomBarFrostAmount = bottomBarFrostAmount,
         onBottomBarFrostAmountChange = onBottomBarFrostAmountChange,
         onBottomBarFrostAmountCommit = onBottomBarFrostAmountCommit,

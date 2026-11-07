@@ -1827,6 +1827,14 @@ object BilibiliJsonParser {
             liveStatus = roomInfo.optInt("live_status"),
             description = roomInfo.optString("description"),
             isPortrait = roomInfo.livePortraitHint() ?: data.livePortraitHint(),
+            likeCount = sequenceOf(
+                data.optJSONObject("like_info_v3")?.optLong("click_count", 0L),
+                roomInfo.optJSONObject("like_info_v3")?.optLong("click_count", 0L),
+                data.optLong("like_num", 0L),
+                data.optLong("like_count", 0L),
+                roomInfo.optLong("like_num", 0L),
+                roomInfo.optLong("like_count", 0L),
+            ).filterNotNull().firstOrNull { it > 0L },
         )
     }
 
@@ -2266,6 +2274,8 @@ object BilibiliJsonParser {
             scanEmoticonArray(obj.optJSONArray("emoticon_list"))
             scanEmoticonArray(obj.optJSONArray("emotes"))
             scanEmoticonArray(obj.optJSONArray("emoji_list"))
+            scanEmoticonArray(obj.optJSONArray("emote"))
+            scanEmoticonArray(obj.optJSONArray("list"))
             scanEmoticonMap(obj.optJSONObject("emoticons"))
             scanEmoticonMap(obj.optJSONObject("emote"))
         }
@@ -2312,9 +2322,11 @@ object BilibiliJsonParser {
     fun parseLiveOnlineGoldRank(json: JSONObject): BiliLiveOnlineGoldRank {
         val data = json.optJSONObject("data") ?: return BiliLiveOnlineGoldRank()
         val onlineNum = data.optLong("onlineNum").takeIf { it > 0L }
-            ?: data.optLong("online_num")
+            ?: data.optLong("online_num").takeIf { it > 0L }
+            ?: data.optString("onlineNumText").filter { it.isDigit() }.toLongOrNull()
+            ?: 0L
         val users = parseLiveOnlineRankUsers(
-            data.optJSONArray("OnlineRankItem") ?: data.optJSONArray("list"),
+            data.optJSONArray("OnlineRankItem") ?: data.optJSONArray("online_list") ?: data.optJSONArray("list"),
         )
         return BiliLiveOnlineGoldRank(
             onlineNum = onlineNum,
@@ -2324,9 +2336,25 @@ object BilibiliJsonParser {
 
     fun parseLiveOnlineRankList(json: JSONObject): List<BiliLiveRankUser> {
         val data = json.optJSONObject("data") ?: json
-        return parseLiveOnlineRankUsers(
-            data.optJSONArray("list") ?: data.optJSONArray("OnlineRankItem"),
+        val direct = parseLiveOnlineRankUsers(
+            data.optJSONArray("list") ?: data.optJSONArray("online_list") ?: data.optJSONArray("OnlineRankItem"),
         )
+        if (direct.isNotEmpty()) return direct
+        val found = mutableListOf<BiliLiveRankUser>()
+        fun walk(value: Any?) {
+            when (value) {
+                is JSONObject -> {
+                    if (value.has("face") || value.has("uname") || value.has("uinfo")) {
+                        parseLiveOnlineRankUsers(org.json.JSONArray().put(value)).firstOrNull()?.let(found::add)
+                    }
+                    val keys = value.keys()
+                    while (keys.hasNext()) walk(value.opt(keys.next()))
+                }
+                is org.json.JSONArray -> for (i in 0 until value.length()) walk(value.opt(i))
+            }
+        }
+        walk(data)
+        return found.distinctBy { it.uid to it.face }.take(3)
     }
 
     private fun parseLiveOnlineRankUsers(list: org.json.JSONArray?): List<BiliLiveRankUser> {
@@ -2334,7 +2362,7 @@ object BilibiliJsonParser {
         return buildList {
             for (index in 0 until list.length()) {
                 val item = list.optJSONObject(index) ?: continue
-                val uid = item.optLong("uid")
+                val uid = item.optLong("uid").takeIf { it > 0L } ?: item.optJSONObject("uinfo")?.optLong("uid") ?: 0L
                 val rank = item.optInt("userRank").takeIf { it > 0 }
                     ?: item.optInt("rank", index + 1)
                 val face = normalizeImageUrl(
@@ -2354,7 +2382,7 @@ object BilibiliJsonParser {
                             ?.optString("name")
                             .orEmpty()
                     }
-                if (uid <= 0L || face.isBlank() || uname.isBlank()) continue
+                if (face.isBlank()) continue
                 add(
                     BiliLiveRankUser(
                         uid = uid,

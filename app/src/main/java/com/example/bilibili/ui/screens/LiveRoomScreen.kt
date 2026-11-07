@@ -114,6 +114,7 @@ import com.example.bilibili.player.LiveDanmakuOverlay
 import com.example.bilibili.player.isPortraitVideoSize
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import android.graphics.Color as AndroidColor
 import com.example.bilibili.player.VideoPlaybackCoordinator
@@ -193,10 +194,12 @@ fun LiveRoomScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val liveKeyboardController = LocalSoftwareKeyboardController.current
 
     var loading by remember(room.roomId) { mutableStateOf(true) }
     var error by remember(room.roomId) { mutableStateOf<String?>(null) }
     var detail by remember(room.roomId) { mutableStateOf<BiliLiveRoomDetail?>(null) }
+    var liveLikeCount by remember(room.roomId) { mutableStateOf<Long?>(null) }
     var playInfo by remember(room.roomId) { mutableStateOf<BiliLivePlayResult?>(null) }
     var showDanmakuSettings by remember(room.roomId) { mutableStateOf(false) }
     var onlineCount by remember(room.roomId) { mutableStateOf(0L) }
@@ -328,14 +331,16 @@ fun LiveRoomScreen(
             exoPlayer.play()
             danmakuClient.connect(resolvedPlay)
         }.onFailure {
+            android.util.Log.w("BiliLiveDanmaku", "直播连接失败", it)
             error = it.message ?: "加载失败"
         }
         loading = false
     }
 
     suspend fun refreshOnlineRank() {
-        val anchorUid = detail?.anchorUid ?: return
-        val result = api.getLiveOnlineGoldRank(room.roomId, anchorUid, credential)
+        val anchorUid = detail?.anchorUid?.takeIf { it > 0 } ?: playInfo?.anchorUid?.takeIf { it > 0 } ?: return
+        val result = api.getLiveOnlineGoldRank(playInfo?.realRoomId?.takeIf { it > 0 } ?: room.roomId, anchorUid, credential)
+        android.util.Log.i("BiliLiveDanmaku", "榜单请求完成，头像数=${result.users.size}，人数=${result.onlineNum}")
         if (result.onlineNum > 0L) {
             onlineCount = result.onlineNum
         }
@@ -344,7 +349,7 @@ fun LiveRoomScreen(
         }
     }
 
-    LaunchedEffect(room.roomId, detail?.anchorUid, reloadToken) {
+    LaunchedEffect(room.roomId, detail?.anchorUid, playInfo?.anchorUid, reloadToken) {
         refreshOnlineRank()
     }
 
@@ -356,6 +361,17 @@ fun LiveRoomScreen(
                 repeat(danmakuEntries.size - LIVE_DANMAKU_BUFFER_MAX) {
                     if (danmakuEntries.isNotEmpty()) danmakuEntries.removeAt(0)
                 }
+            }
+        }
+    }
+    LaunchedEffect(playInfo?.realRoomId) {
+        val realRoomId = playInfo?.realRoomId?.takeIf { it > 0 } ?: return@LaunchedEffect
+        val recent = api.getLiveRecentDanmaku(realRoomId, credential)
+        android.util.Log.i("BiliLiveDanmaku", "近期弹幕数=${recent.size}")
+        if (danmakuEntries.isEmpty()) {
+            recent.forEach { item ->
+                nextDanmakuListKey++
+                danmakuEntries.add(LiveRoomChatEntry(nextDanmakuListKey, item))
             }
         }
     }
@@ -393,6 +409,9 @@ fun LiveRoomScreen(
             if (ranks.isNotEmpty()) rankUsers = ranks
         }
     }
+    LaunchedEffect(room.roomId) {
+        danmakuClient.likeCount.collectLatest { liveLikeCount = it }
+    }
 
     val view = LocalView.current
     DisposableEffect(playInfo?.isLive) {
@@ -407,7 +426,7 @@ fun LiveRoomScreen(
     val isPortraitLive = !isFullscreen && isPortraitStream == true
     val supportsClearScreen = isLayoutKnown && (!isFullscreen || isPortraitStream == false)
     val showLiveInfoUi = supportsClearScreen && !liveInfoCleared
-    val showLiveDanmakuOverlay = danmakuEnabled
+    val showLiveDanmakuOverlay = danmakuEnabled && !isPortraitLive
     val showLivePlayerControls = livePlayerOverlayVisible && !liveInfoCleared
 
     LaunchedEffect(room.roomId, isPortraitStream) {
@@ -538,7 +557,7 @@ fun LiveRoomScreen(
         } else if (!isLayoutKnown) {
             LiveRoomResolvingLayout(
                 room = room,
-                detail = detail,
+                detail = detail?.copy(likeCount = liveLikeCount ?: detail?.likeCount),
                 onlineCount = onlineCount,
                 topRankUsers = rankUsers,
                 onAnchorClick = onAnchorProfileClick,
@@ -640,12 +659,16 @@ fun LiveRoomScreen(
                         .zIndex(8f),
                 ) {
                     LiveRoomFullscreenTopBar(
+                        face = anchorFace,
+                        authorName = anchorName,
+                        likeCount = liveLikeCount ?: detail?.likeCount,
                         title = liveRoomTitle,
+                        topRankUsers = rankUsers,
+                        onlineCount = onlineCount,
                         immersive = true,
                         backdrop = livePlayerBackdrop,
-                        onClose = {
-                            onLivePlayerControlInteraction()
-                            isFullscreen = false
+                        onTopTap = {
+                            liveKeyboardController?.hide()
                         },
                     )
                 }
@@ -717,7 +740,7 @@ fun LiveRoomScreen(
                         Column(Modifier.fillMaxSize()) {
                             LiveRoomHeader(
                                 room = room,
-                                detail = detail,
+                                detail = detail?.copy(likeCount = liveLikeCount ?: detail?.likeCount),
                                 onlineCount = onlineCount,
                                 topRankUsers = rankUsers,
                                 followState = liveHeaderFollowState,
@@ -775,7 +798,7 @@ fun LiveRoomScreen(
                 LiveRoomHeaderSlot(
                     visible = showLiveInfoUi,
                     room = room,
-                    detail = detail,
+                    detail = detail?.copy(likeCount = liveLikeCount ?: detail?.likeCount),
                     onlineCount = onlineCount,
                     topRankUsers = rankUsers,
                     followState = liveHeaderFollowState,
@@ -919,6 +942,7 @@ private fun LiveRoomResolvingLayout(
 ) {
     Column(
         modifier = modifier
+            .fillMaxWidth()
             .background(Color(0xFF0F0F0F))
             .pointerInput(Unit) {
                 detectTapGestures { /* 拦截点击，避免穿透到下层直播列表 */ }
@@ -1080,23 +1104,6 @@ private fun BoxScope.LiveRoomPlayerContent(
                     },
             )
         }
-        if (!showDanmakuSettings && !isPortraitLive) {
-            AnimatedVisibility(
-                visible = overlayControlsVisible,
-                enter = OverlayFadeTransition.enter,
-                exit = OverlayFadeTransition.exit,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(end = 12.dp, top = 10.dp)
-                    .zIndex(6f),
-            ) {
-                LiveRefreshCapsule(
-                    loading = loading,
-                    onRefresh = onRefresh,
-                    backdrop = backdrop,
-                )
-            }
-        }
         if (!showDanmakuSettings && !isPortraitLive && showBottomControlCapsules) {
             AnimatedVisibility(
                 visible = overlayControlsVisible,
@@ -1250,7 +1257,6 @@ private fun LiveRoomHeader(
 ) {
     val resolvedBackdrop = backdrop ?: LocalLiquidMenuBackdrop.current
     val authorName = detail?.userName?.ifBlank { room.userName } ?: room.userName
-    val title = detail?.title?.ifBlank { room.title } ?: room.title
     val face = detail?.userFace?.ifBlank { room.userFace } ?: room.userFace
     val titleShadow = Shadow(
         color = Color.Black.copy(alpha = 0.65f),
@@ -1265,6 +1271,7 @@ private fun LiveRoomHeader(
 
     Row(
         modifier = modifier
+            .fillMaxWidth()
             .then(
                 if (overlayStyle) {
                     Modifier
@@ -1281,23 +1288,23 @@ private fun LiveRoomHeader(
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RemoteImage(
-            url = face,
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .then(anchorClickModifier),
-        )
-        Spacer(Modifier.width(10.dp))
         Row(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.widthIn(max = 180.dp)
+                .liveLiquidGlassSurface(if (overlayStyle) backdrop else null, RoundedCornerShape(50))
+                .padding(start = 3.dp, end = if (followState?.relation?.following == true || followState == null) 10.dp else 4.dp, top = 3.dp, bottom = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            RemoteImage(
+                url = face,
+                modifier = Modifier.size(28.dp).clip(CircleShape).then(anchorClickModifier),
+            )
+            Spacer(Modifier.width(6.dp))
+            Column(modifier = Modifier.weight(1f, fill = false)) {
                 Text(
                     text = authorName,
                     modifier = anchorClickModifier,
                     color = Color.White,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     style = if (overlayStyle) {
                         TextStyle(shadow = titleShadow)
@@ -1307,17 +1314,9 @@ private fun LiveRoomHeader(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = title,
-                    color = Color.White.copy(alpha = 0.65f),
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        shadow = if (overlayStyle) titleShadow else null,
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                detail?.likeCount?.let { Text("${formatBiliCount(it)}点赞", color = Color.White.copy(alpha = 0.76f), fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1) }
             }
-            followState?.let { follow ->
+            followState?.takeIf { !it.relation.following }?.let { follow ->
                 Spacer(Modifier.width(8.dp))
                 LiveRoomFollowCapsule(
                     follow = follow,
@@ -1325,50 +1324,36 @@ private fun LiveRoomHeader(
                 )
             }
         }
-        if (topRankUsers.isNotEmpty()) {
+        Spacer(Modifier.weight(1f))
+        if (topRankUsers.isNotEmpty() || onlineCount > 0L) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy((-6).dp),
+                modifier = Modifier
+                    .liveLiquidGlassSurface(if (overlayStyle) resolvedBackdrop else null, RoundedCornerShape(50))
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                topRankUsers.take(3).forEach { user ->
-                    RemoteImage(
-                        url = user.face,
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .border(1.dp, Color.White.copy(alpha = 0.85f), CircleShape),
-                    )
+                if (topRankUsers.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy((-6).dp), verticalAlignment = Alignment.CenterVertically) {
+                        topRankUsers.take(3).forEach { user ->
+                            RemoteImage(
+                                url = user.face,
+                                modifier = Modifier.size(23.dp).clip(CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.85f), CircleShape),
+                            )
+                        }
+                    }
                 }
-            }
-            Spacer(Modifier.width(10.dp))
-        }
-        if (onlineCount > 0L || onRefresh != null) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
                 if (onlineCount > 0L) {
                     Text(
-                        text = "${formatBiliCount(onlineCount)}人",
+                        text = formatBiliCount(onlineCount),
                         color = Color.White.copy(alpha = if (overlayStyle) 0.88f else 0.72f),
                         style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 11.sp,
                             shadow = if (overlayStyle) titleShadow else null,
                         ),
                         maxLines = 1,
                     )
-                }
-                if (onRefresh != null) {
-                    AnimatedVisibility(
-                        visible = overlayControlsVisible,
-                        enter = OverlayFadeTransition.enter,
-                        exit = OverlayFadeTransition.exit,
-                    ) {
-                        LiveRefreshCapsule(
-                            loading = refreshLoading,
-                            onRefresh = onRefresh,
-                            backdrop = resolvedBackdrop,
-                        )
-                    }
                 }
             }
         }
@@ -1480,15 +1465,22 @@ private fun LiveRoomFollowCapsule(
     backdrop: Backdrop?,
 ) {
     val relation = follow.relation
-    val label = when {
-        !relation.following -> "+关注"
-        relation.followerMe -> "互相关注"
-        else -> "已关注"
+    val label = if (relation.following) "已关注" else "关注"
+    var confirmUnfollow by remember { mutableStateOf(false) }
+    if (confirmUnfollow) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmUnfollow = false },
+            title = { Text("取消关注") },
+            text = { Text("确定取消关注该主播吗？") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { confirmUnfollow = false; follow.onClick() }) { Text("取消关注") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmUnfollow = false }) { Text("保留关注") } },
+        )
     }
-    LiveControlCapsule(
-        onClick = if (follow.loading) null else follow.onClick,
-        backdrop = backdrop,
-        modifier = Modifier.height(28.dp),
+    Row(
+        modifier = Modifier.height(23.dp).clip(RoundedCornerShape(50)).background(BiliPink)
+            .clickable(enabled = !follow.loading) { if (relation.following) confirmUnfollow = true else follow.onClick() }
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         if (follow.loading) {
             CircularProgressIndicator(
@@ -1499,8 +1491,8 @@ private fun LiveRoomFollowCapsule(
         } else {
             Text(
                 text = label,
-                color = if (relation.following) Color.White.copy(alpha = 0.9f) else BiliPink,
-                fontSize = 11.sp,
+                color = Color.White,
+                fontSize = 9.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
             )
@@ -1551,8 +1543,12 @@ private fun LiveDanmakuInputBar(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val imeBottomPx = WindowInsets.ime.getBottom(density)
     val isKeyboardVisible = imeBottomPx > 0
+    val imeHeightDp = with(density) { imeBottomPx.toDp() }
+    val sendButtonProgress = (imeHeightDp / 260.dp).coerceIn(0f, 1f)
+    val sendButtonWidth = 64.dp * sendButtonProgress
     val capsuleShape = RoundedCornerShape(percent = 50)
     val inputTextStyle = TextStyle(
         color = Color.White,
@@ -1600,15 +1596,14 @@ private fun LiveDanmakuInputBar(
                 }
             },
         )
-        AnimatedVisibility(
-            visible = isKeyboardVisible,
-            enter = expandHorizontally(expandFrom = Alignment.End),
-            exit = shrinkHorizontally(shrinkTowards = Alignment.End),
-        ) {
+        if (sendButtonProgress > 0f) {
             LiveControlCapsule(
                 onClick = if (danmakuInput.isNotBlank()) ({ sendMessage() }) else null,
                 backdrop = backdrop,
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier
+                    .width(sendButtonWidth)
+                    .padding(start = 8.dp)
+                    .graphicsLayer { alpha = sendButtonProgress },
             ) {
                 Text(
                     "发送",
@@ -1713,46 +1708,72 @@ private fun LiveRecentDanmakuLine(
 
 @Composable
 private fun LiveRoomFullscreenTopBar(
+    face: String,
+    authorName: String,
+    likeCount: Long?,
     title: String,
-    onClose: () -> Unit,
+    topRankUsers: List<BiliLiveRankUser>,
+    onlineCount: Long,
     immersive: Boolean = false,
     backdrop: Backdrop? = null,
+    onTopTap: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .then(if (immersive) Modifier else Modifier.statusBarsPadding())
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+        .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 8.dp)
+        .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onTopTap),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        LiveControlCapsule(onClick = onClose, backdrop = backdrop) {
-            Text(
-                text = "关闭",
-                color = Color.White,
-                style = TextStyle(
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                ),
-            )
+        Row(
+            modifier = Modifier
+                .liveLiquidGlassSurface(backdrop, RoundedCornerShape(50))
+                .height(34.dp)
+                .padding(start = 3.dp, end = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            RemoteImage(url = face, modifier = Modifier.size(28.dp).clip(CircleShape))
+            Column(verticalArrangement = Arrangement.Center) {
+                Text(authorName, color = Color.White, fontSize = 11.sp, lineHeight = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                likeCount?.takeIf { it > 0L }?.let {
+                    Text("${formatBiliCount(it)}点赞", color = Color.White.copy(alpha = 0.78f), fontSize = 9.sp, lineHeight = 10.sp, maxLines = 1)
+                }
+            }
         }
         Text(
             text = title,
-            color = Color.White,
-            style = TextStyle(
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-                shadow = Shadow(
-                    color = Color.Black.copy(alpha = 0.65f),
-                    offset = androidx.compose.ui.geometry.Offset(0f, 1f),
-                    blurRadius = 4f,
-                ),
-            ),
+            modifier = Modifier.weight(1f),
+            color = Color.White.copy(alpha = 0.95f),
+            fontSize = 16.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            style = TextStyle(shadow = Shadow(Color.Black.copy(alpha = 0.6f), blurRadius = 3f)),
         )
+        if (topRankUsers.isNotEmpty() || onlineCount > 0L) {
+            Row(
+                modifier = Modifier.liveLiquidGlassSurface(backdrop, RoundedCornerShape(50))
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy((-7).dp), verticalAlignment = Alignment.CenterVertically) {
+                    topRankUsers.take(3).forEach { user ->
+                        RemoteImage(url = user.face, modifier = Modifier.size(23.dp).clip(CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.9f), CircleShape))
+                    }
+                }
+                if (onlineCount > 0L) Text(
+                    text = onlineCount.toString(),
+                    color = Color.White,
+                    style = TextStyle(fontSize = 12.sp, shadow = Shadow(Color.Black.copy(alpha = 0.55f), blurRadius = 3f)),
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 

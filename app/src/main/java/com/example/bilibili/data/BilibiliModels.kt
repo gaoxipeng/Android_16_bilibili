@@ -204,6 +204,7 @@ data class BiliLiveRoomDetail(
     val liveStatus: Int,
     val description: String = "",
     val isPortrait: Boolean? = null,
+    val likeCount: Long? = null,
 ) {
     val isLive: Boolean get() = liveStatus == 1
 }
