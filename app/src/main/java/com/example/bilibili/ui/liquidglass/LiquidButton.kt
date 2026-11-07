@@ -6,6 +6,8 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import com.example.bilibili.ui.theme.isAppLightTheme
+import com.example.bilibili.data.bottomBarGlassEffects
+import com.example.bilibili.data.bottomBarGlassSurfaceColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -75,12 +77,15 @@ internal fun BackdropEffectScope.liquidMenuGlassEffects() {
     lens(12f.dp.toPx(), 24f.dp.toPx())
 }
 
-internal fun BackdropEffectScope.liquidLargeCapsuleGlassEffects() {
+internal fun BackdropEffectScope.liquidLargeCapsuleGlassEffects(
+    refractionHeight: Dp = 24.dp,
+    refractionAmount: Dp = 40.dp,
+) {
     vibrancy()
     // Keep the top and bottom refraction bands from overlapping in short capsules;
     // overlap makes their opposing sample offsets meet as a visible seam at center.
     val nonOverlappingEdgeHeight = (size.minDimension / 2f - 1f.dp.toPx()).coerceAtLeast(0f)
-    lens(24f.dp.toPx().coerceAtMost(nonOverlappingEdgeHeight), 40f.dp.toPx())
+    lens(refractionHeight.toPx().coerceAtMost(nonOverlappingEdgeHeight), refractionAmount.toPx())
 }
 
 internal fun liquidLargeCapsuleSurfaceColor(isLightTheme: Boolean): Color =
@@ -146,6 +151,12 @@ fun LiquidButton(
     blurRadius: Dp = 2.dp,
     enableEdgeHighlight: Boolean = true,
     useMenuGlassStyle: Boolean = false,
+    useLargeCapsuleEffect: Boolean = false,
+    largeCapsuleRefractionHeight: Dp = 24.dp,
+    largeCapsuleRefractionAmount: Dp = 40.dp,
+    showMenuBorder: Boolean = false,
+    bottomBarFrostAmount: Float? = null,
+    bottomBarGlassAmount: Float = 1f,
     borderWidth: Dp = 0.dp,
     borderColor: Color = Color.Unspecified,
     onDoubleClick: (() -> Unit)? = null,
@@ -153,9 +164,15 @@ fun LiquidButton(
     content: @Composable RowScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(percent = 50)
+    val bottomBarSurface = bottomBarFrostAmount?.let {
+        bottomBarGlassSurfaceColor(isAppLightTheme(), it)
+    }
+    val largeCapsuleSurface = if (useLargeCapsuleEffect) liquidLargeCapsuleSurfaceColor(isAppLightTheme()) else Color.Unspecified
     val borderModifier =
         if (borderWidth > 0.dp && borderColor.isSpecified) {
             Modifier.border(borderWidth, borderColor, shape)
+        } else if (useMenuGlassStyle || showMenuBorder) {
+            Modifier.border(LiquidMenuBorderWidth, liquidMenuBorderColor(isAppLightTheme()), shape)
         } else {
             Modifier
         }
@@ -192,18 +209,22 @@ fun LiquidButton(
                     effects = {
                         if (useMenuGlassStyle) {
                             liquidMenuGlassEffects()
+                        } else if (useLargeCapsuleEffect) {
+                            liquidLargeCapsuleGlassEffects(largeCapsuleRefractionHeight, largeCapsuleRefractionAmount)
+                        } else if (bottomBarFrostAmount != null) {
+                            bottomBarGlassEffects(bottomBarFrostAmount, bottomBarGlassAmount)
                         } else {
                             vibrancy()
                             blur(blurRadius.toPx())
                             lens(12f.dp.toPx(), 24f.dp.toPx())
                         }
                     },
-                    highlight = if (enableEdgeHighlight) {
+                    highlight = if (useLargeCapsuleEffect || enableEdgeHighlight) {
                         { Highlight.Default }
                     } else {
                         null
                     },
-                    shadow = null,
+                    shadow = if (useLargeCapsuleEffect) ({ Shadow.Default }) else null,
                     layerBlock = if (isInteractive) {
                     {
                         val width = size.width
@@ -236,6 +257,10 @@ fun LiquidButton(
                     }
                     if (surfaceColor.isSpecified) {
                         drawRect(surfaceColor)
+                    } else if (useLargeCapsuleEffect) {
+                        drawRect(largeCapsuleSurface)
+                    } else if (bottomBarSurface != null) {
+                        drawRect(bottomBarSurface)
                     }
                 },
             )
@@ -276,6 +301,8 @@ fun SurfaceLiquidCapsule(
     cornerRadius: Dp = 22.dp,
     useMenuGlassStyle: Boolean = false,
     useLargeCapsuleEffect: Boolean = false,
+    largeCapsuleFrostAmount: Float? = null,
+    largeCapsuleGlassAmount: Float = 1f,
     tint: Color = Color.Unspecified,
     borderWidth: Dp = 0.dp,
     borderColor: Color = Color.Unspecified,
@@ -315,6 +342,8 @@ fun SurfaceLiquidCapsule(
                         effects = {
                             if (useMenuGlassStyle) {
                                 liquidMenuGlassEffects()
+                            } else if (useLargeCapsuleEffect && largeCapsuleFrostAmount != null) {
+                                bottomBarGlassEffects(largeCapsuleFrostAmount, largeCapsuleGlassAmount)
                             } else if (useLargeCapsuleEffect) {
                                 liquidLargeCapsuleGlassEffects()
                             } else {
@@ -337,6 +366,9 @@ fun SurfaceLiquidCapsule(
                                 drawRect(tint.copy(alpha = 0.75f))
                             } else {
                                 drawRect(surfaceColor)
+                            }
+                            if (useLargeCapsuleEffect && largeCapsuleFrostAmount != null) {
+                                drawRect(bottomBarGlassSurfaceColor(isLightTheme, largeCapsuleFrostAmount))
                             }
                         },
                     ),
@@ -430,6 +462,35 @@ fun SurfaceLiquidIconButton(
     onDoubleClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     isInteractive: Boolean = true,
+    bottomBarFrostAmount: Float? = null,
+    bottomBarGlassAmount: Float = 1f,
+    content: @Composable RowScope.() -> Unit,
+) {
+    LiquidButton(
+        onClick = onClick,
+        backdrop = backdrop,
+        modifier = modifier,
+        bottomBarFrostAmount = bottomBarFrostAmount,
+        bottomBarGlassAmount = bottomBarGlassAmount,
+        onDoubleClick = onDoubleClick,
+        onLongClick = onLongClick,
+        isInteractive = isInteractive,
+        surfaceColor = liquidSurfaceColor(isAppLightTheme()),
+        content = content,
+    )
+}
+
+@Composable
+fun TransparentLiquidIconButton(
+    onClick: () -> Unit,
+    backdrop: Backdrop,
+    modifier: Modifier = Modifier,
+    onDoubleClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    isInteractive: Boolean = true,
+    useLargeCapsuleEffect: Boolean = true,
+    largeCapsuleRefractionHeight: Dp = 24.dp,
+    largeCapsuleRefractionAmount: Dp = 40.dp,
     content: @Composable RowScope.() -> Unit,
 ) {
     LiquidButton(
@@ -439,7 +500,11 @@ fun SurfaceLiquidIconButton(
         onDoubleClick = onDoubleClick,
         onLongClick = onLongClick,
         isInteractive = isInteractive,
-        surfaceColor = liquidSurfaceColor(isAppLightTheme()),
+        useLargeCapsuleEffect = useLargeCapsuleEffect,
+        largeCapsuleRefractionHeight = largeCapsuleRefractionHeight,
+        largeCapsuleRefractionAmount = largeCapsuleRefractionAmount,
+        enableEdgeHighlight = false,
+        showMenuBorder = true,
         content = content,
     )
 }

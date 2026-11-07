@@ -44,6 +44,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,10 +63,15 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import androidx.compose.ui.zIndex
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
 import com.example.bilibili.data.FeedLayoutStore
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.ui.components.ObserveListNearEnd
 import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
@@ -136,6 +142,26 @@ fun HomeScreen(
     onPreloadVideos: suspend (List<BiliVideoItem>) -> Unit = {},
     preloadEnabled: Boolean = true,
 ) {
+    val titlePreferenceContext = LocalContext.current
+    val titlePreferenceStore = remember(titlePreferenceContext) { FeedLayoutStore(titlePreferenceContext) }
+    var showFullVideoTitles by remember { mutableStateOf(titlePreferenceStore.readShowFullTitle()) }
+    LaunchedEffect(titlePreferenceStore) {
+        while (true) {
+            val stored = titlePreferenceStore.readShowFullTitle()
+            if (stored != showFullVideoTitles) showFullVideoTitles = stored
+            delay(250)
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, titlePreferenceStore) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                showFullVideoTitles = titlePreferenceStore.readShowFullTitle()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(loggedIn, preloadEnabled, videos, feedColumnCount) {
         if (!loggedIn || !preloadEnabled) return@LaunchedEffect
         snapshotFlow {
@@ -260,6 +286,7 @@ fun HomeScreen(
             onEnsurePlayStream = onEnsurePlayStream,
             onAuthorClick = onAuthorClick,
             coordinator = coordinator,
+            showFullTitle = showFullVideoTitles,
         )
     }
 
@@ -307,6 +334,7 @@ private fun HomeFeedContent(
     onEnsurePlayStream: (BiliVideoItem) -> Unit,
     onAuthorClick: (Long) -> Unit,
     coordinator: VideoPlaybackCoordinator,
+    showFullTitle: Boolean,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -369,6 +397,7 @@ private fun HomeFeedContent(
                                     onEnsurePlayStream = { onEnsurePlayStream(video) },
                                     onAuthorClick = onAuthorClick,
                                     overlayMetaOnCover = true,
+                                    showFullTitle = showFullTitle,
                                 )
                             }
                             if (loadingMore) {
@@ -442,6 +471,7 @@ private fun HomeFeedContent(
                                     onEnsurePlayStream = { onEnsurePlayStream(video) },
                                     onAuthorClick = onAuthorClick,
                                     gridStyle = true,
+                                    showFullTitle = showFullTitle,
                                 )
                             }
                             if (loadingMore) {
@@ -469,6 +499,8 @@ fun HomeSearchCapsule(
     contentPadding: PaddingValues,
     onSearchClick: () -> Unit,
     modifier: Modifier = Modifier,
+    frostAmount: Float = 0f,
+    glassAmount: Float = 1f,
 ) {
     val topOffsetPx = with(LocalDensity.current) {
         (contentPadding.calculateTopPadding() + HomeSearchBarTopGap).roundToPx()
@@ -484,6 +516,8 @@ fun HomeSearchCapsule(
         SurfaceLiquidCapsule(
             pill = true,
             useLargeCapsuleEffect = true,
+            largeCapsuleFrostAmount = frostAmount,
+            largeCapsuleGlassAmount = glassAmount,
             borderWidth = HomeSearchBarBorderWidth,
             borderColor = homeSearchBarBorderColor(),
             modifier = Modifier

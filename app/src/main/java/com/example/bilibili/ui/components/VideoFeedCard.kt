@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
+import com.example.bilibili.data.rememberShowFullVideoTitles
 import com.example.bilibili.player.InlineVideoCard
 import com.example.bilibili.player.VideoPlaybackCoordinator
 import com.example.bilibili.player.videoPlaybackKey
@@ -93,6 +94,7 @@ fun VideoFeedCard(
     onEnsurePlayStream: (() -> Unit)? = null,
     onAuthorClick: ((Long) -> Unit)? = null,
     showAuthorInfo: Boolean = true,
+    showFullTitle: Boolean = rememberShowFullVideoTitles(),
 ) {
     val cardLayer = rememberGraphicsLayer()
     val cardScope = rememberCoroutineScope()
@@ -121,6 +123,7 @@ fun VideoFeedCard(
             onEnsurePlayStream = onEnsurePlayStream,
             onAuthorClick = onAuthorClick,
             showAuthorInfo = showAuthorInfo,
+            showFullTitle = showFullTitle,
             modifier = trackedModifier,
         )
         return
@@ -135,6 +138,7 @@ fun VideoFeedCard(
             onEnsurePlayStream = onEnsurePlayStream,
             onAuthorClick = onAuthorClick,
             showAuthorInfo = showAuthorInfo,
+            showFullTitle = showFullTitle,
             modifier = trackedModifier,
         )
         return
@@ -201,8 +205,9 @@ fun VideoFeedCard(
                 Text(
                     text = video.title,
                     style = titleStyle,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    minLines = if (showFullTitle) 1 else 2,
+                    maxLines = if (showFullTitle) Int.MAX_VALUE else 2,
+                    overflow = if (showFullTitle) TextOverflow.Clip else TextOverflow.Ellipsis,
                 )
                 if (compact) {
                     Text(
@@ -244,6 +249,7 @@ private fun VideoFeedGridCard(
     onEnsurePlayStream: (() -> Unit)?,
     onAuthorClick: ((Long) -> Unit)? = null,
     showAuthorInfo: Boolean = true,
+    showFullTitle: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -323,6 +329,9 @@ private fun VideoFeedGridCard(
                     text = video.title,
                     style = MaterialTheme.typography.bodyMedium,
                     color = titleColor,
+                    minLines = if (showFullTitle) 1 else 2,
+                    maxLines = if (showFullTitle) Int.MAX_VALUE else 2,
+                    overflow = if (showFullTitle) TextOverflow.Clip else TextOverflow.Ellipsis,
                 )
                 if (showAuthorInfo) {
                     Row(
@@ -378,6 +387,7 @@ private fun VideoFeedOverlayCard(
     onEnsurePlayStream: (() -> Unit)?,
     onAuthorClick: ((Long) -> Unit)? = null,
     showAuthorInfo: Boolean = true,
+    showFullTitle: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -446,8 +456,9 @@ private fun VideoFeedOverlayCard(
                     text = video.title,
                     color = overlayTextColor,
                     style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    minLines = if (showFullTitle) 1 else 2,
+                    maxLines = if (showFullTitle) Int.MAX_VALUE else 2,
+                    overflow = if (showFullTitle) TextOverflow.Clip else TextOverflow.Ellipsis,
                 )
                 Row(
                     modifier = Modifier

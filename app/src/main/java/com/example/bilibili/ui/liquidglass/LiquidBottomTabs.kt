@@ -46,6 +46,9 @@ import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.lerp
 import com.example.bilibili.ui.theme.TabAccentDark
 import com.example.bilibili.ui.theme.TabAccentLight
+import com.example.bilibili.data.bottomBarGlassEffects
+import com.example.bilibili.data.bottomBarGlassSurfaceColor
+import com.example.bilibili.data.normalizeBottomBarGlassAmount
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -66,13 +69,17 @@ fun LiquidBottomTabs(
     onTabSelected: (index: Int) -> Unit,
     backdrop: Backdrop,
     tabsCount: Int,
+    frostAmount: Float = 0f,
+    glassAmount: Float = 1f,
     modifier: Modifier = Modifier,
     gestureController: LiquidBottomTabsGestureController = rememberLiquidBottomTabsGestureController(),
     content: @Composable RowScope.() -> Unit
 ) {
     val isLightTheme = isAppLightTheme()
     val accentColor = if (isLightTheme) TabAccentLight else TabAccentDark
-    val capsuleSurfaceColor = liquidLargeCapsuleSurfaceColor(isLightTheme)
+    val frost = normalizeBottomBarGlassAmount(frostAmount)
+    val glass = normalizeBottomBarGlassAmount(glassAmount)
+    val capsuleSurfaceColor = bottomBarGlassSurfaceColor(isLightTheme, frost)
     val tabsBackdrop = rememberLayerBackdrop()
     val indicatorBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
 
@@ -249,7 +256,7 @@ fun LiquidBottomTabs(
                 .drawBackdrop(
                     backdrop = backdrop,
                     shape = { barShape },
-                    effects = { liquidLargeCapsuleGlassEffects() },
+                    effects = { bottomBarGlassEffects(frost, glass) },
                     highlight = { Highlight.Default },
                     shadow = { Shadow.Default },
                     onDrawSurface = { drawRect(capsuleSurfaceColor) },

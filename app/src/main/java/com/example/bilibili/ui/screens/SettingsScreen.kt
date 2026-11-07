@@ -42,7 +42,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -69,10 +68,13 @@ import com.example.bilibili.data.FeedLayoutStore
 import com.example.bilibili.data.StoredBilibiliAccount
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.liquidglass.BottomBarFeedOverlapReserve
+import com.example.bilibili.ui.liquidglass.SettingsLiquidSlider
+import com.example.bilibili.ui.liquidglass.SettingsLiquidToggle
 import com.example.bilibili.ui.theme.isAppLightTheme
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
-private val SettingsBottomBarInset = 96.dp
+private val SettingsBottomBarInset = 20.dp
 private val SettingsAboutIconSize = 58.dp
 private val SettingsAboutIconCornerRadius = 13.dp
 private const val SettingsAboutIconCropScale = 1.14f
@@ -184,6 +186,12 @@ fun SettingsScreen(
     onAddAccount: () -> Unit = {},
     autoHideBarsOnScroll: Boolean = true,
     onAutoHideBarsOnScrollChange: (Boolean) -> Unit = {},
+    bottomBarFrostAmount: Float = 0f,
+    onBottomBarFrostAmountChange: (Float) -> Unit = {},
+    onBottomBarFrostAmountCommit: () -> Unit = {},
+    bottomBarGlassAmount: Float = 1f,
+    onBottomBarGlassAmountChange: (Float) -> Unit = {},
+    onBottomBarGlassAmountCommit: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -195,6 +203,8 @@ fun SettingsScreen(
     var appearanceExpanded by remember { mutableStateOf(false) }
     var accountExpanded by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
+    val feedLayoutStore = remember(context) { FeedLayoutStore(context) }
+    var showFullVideoTitles by remember { mutableStateOf(feedLayoutStore.readShowFullTitle()) }
 
     BackHandler {
         if (showHelp) {
@@ -255,6 +265,25 @@ fun SettingsScreen(
                     )
                 }
                 item {
+                    SettingsFullTitlesCard(
+                        enabled = showFullVideoTitles,
+                        onEnabledChange = {
+                            showFullVideoTitles = it
+                            feedLayoutStore.writeShowFullTitle(it)
+                        },
+                    )
+                }
+                item {
+                    SettingsBottomBarGlassCard(
+                        frostAmount = bottomBarFrostAmount,
+                        onFrostChange = onBottomBarFrostAmountChange,
+                        onFrostCommit = onBottomBarFrostAmountCommit,
+                        glassAmount = bottomBarGlassAmount,
+                        onGlassChange = onBottomBarGlassAmountChange,
+                        onGlassCommit = onBottomBarGlassAmountCommit,
+                    )
+                }
+                item {
                     SettingsPlaybackCard(
                         backgroundPlaybackEnabled = backgroundPlaybackEnabled,
                         onBackgroundPlaybackChange = onBackgroundPlaybackChange,
@@ -268,6 +297,112 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsFullTitlesCard(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+    SettingsPlainCard {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("显示完整标题", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (enabled) "视频标题完整显示" else "视频标题最多显示两行",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            SettingsLiquidToggle(checked = enabled, onCheckedChange = onEnabledChange)
+        }
+    }
+}
+
+@Composable
+private fun SettingsBottomBarGlassCard(
+    frostAmount: Float,
+    onFrostChange: (Float) -> Unit,
+    onFrostCommit: () -> Unit,
+    glassAmount: Float,
+    onGlassChange: (Float) -> Unit,
+    onGlassCommit: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    SettingsPlainCard {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        text = "底栏 Liquid Glass",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "调整底栏磨砂和折射强度",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = if (expanded) "收起" else "展开",
+                    modifier = Modifier.graphicsLayer { rotationZ = if (expanded) 180f else 0f },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    SettingsBottomBarGlassSlider("磨砂效果", frostAmount, onFrostChange, onFrostCommit, "透明", "磨砂")
+                    SettingsBottomBarGlassSlider("玻璃效果", glassAmount, onGlassChange, onGlassCommit, "无折射", "强折射")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsBottomBarGlassSlider(
+    title: String,
+    amount: Float,
+    onAmountChange: (Float) -> Unit,
+    onCommit: () -> Unit,
+    leftLabel: String,
+    rightLabel: String,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "${(amount.coerceIn(0f, 1f) * 100f).roundToInt()}%",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(leftLabel, Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        SettingsLiquidSlider(
+            value = amount.coerceIn(0f, 1f),
+            onValueChange = onAmountChange,
+            onValueChangeFinished = onCommit,
+            valueRange = 0f..1f,
+            modifier = Modifier.weight(1f),
+        )
+        Text(rightLabel, Modifier.width(44.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.End)
     }
 }
 
@@ -303,7 +438,7 @@ private fun SettingsAutoHideBarsCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(
+            SettingsLiquidToggle(
                 checked = enabled,
                 onCheckedChange = onEnabledChange,
             )
@@ -409,7 +544,7 @@ private fun SettingsPlaybackCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(
+            SettingsLiquidToggle(
                 checked = backgroundPlaybackEnabled,
                 onCheckedChange = onBackgroundPlaybackChange,
             )

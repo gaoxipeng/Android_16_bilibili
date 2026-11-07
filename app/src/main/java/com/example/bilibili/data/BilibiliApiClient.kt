@@ -839,19 +839,23 @@ class BilibiliApiClient {
             return@withContext Result.failure(IllegalStateException("登录凭证无效，请重新登录"))
         }
         runCatching {
-            val folderId = getDefaultFavoriteFolderId(credential)
-                ?: error("未找到收藏夹")
+            val folderIds = if (add) {
+                listOf(getDefaultFavoriteFolderId(credential) ?: error("未找到收藏夹"))
+            } else {
+                getFavoriteFolders(credential, videoAid = aid).filter { it.containsVideo }.map { it.id }
+            }
+            if (!add && folderIds.isEmpty()) error("无法确认视频所在收藏夹，请重试")
             postForm(
                 url = BilibiliEndpoints.FAV_RESOURCE_DEAL,
                 form = buildMap {
                     put("rid", aid.toString())
                     put("type", "2")
                     if (add) {
-                        put("add_media_ids", folderId.toString())
+                        put("add_media_ids", folderIds.joinToString(","))
                         put("del_media_ids", "")
                     } else {
                         put("add_media_ids", "")
-                        put("del_media_ids", folderId.toString())
+                        put("del_media_ids", folderIds.joinToString(","))
                     }
                     put("csrf", credential.biliJct)
                 },
@@ -879,15 +883,16 @@ class BilibiliApiClient {
         credential: BilibiliCredential,
         page: Int = 1,
         pageSize: Int = 20,
+        folderId: Long? = null,
     ): BiliFavoriteVideoPage = withContext(Dispatchers.IO) {
-        val folderId = getDefaultFavoriteFolderId(credential)
+        val resolvedFolderId = folderId ?: getDefaultFavoriteFolderId(credential)
             ?: error("未找到收藏夹")
         val safePage = page.coerceAtLeast(1)
         val safePageSize = pageSize.coerceIn(1, 20)
         getJson(
             url = BilibiliEndpoints.FAV_RESOURCE_LIST,
             params = mapOf(
-                "media_id" to folderId.toString(),
+                "media_id" to resolvedFolderId.toString(),
                 "platform" to "web",
                 "type" to "0",
                 "order" to "mtime",
@@ -897,6 +902,29 @@ class BilibiliApiClient {
             credential = credential,
             referer = BilibiliEndpoints.HOME,
         ).let { BilibiliJsonParser.parseFavoriteVideoPage(it, safePage, safePageSize) }
+    }
+
+    suspend fun getFavoriteFolders(credential: BilibiliCredential, videoAid: Long? = null): List<BiliFavoriteFolder> = withContext(Dispatchers.IO) {
+        val list = getJson(
+            url = BilibiliEndpoints.FAV_FOLDER_LIST,
+            params = buildMap { put("up_mid", credential.dedeUserId); put("type", "2"); if (videoAid != null) put("rid", videoAid.toString()) },
+            credential = credential,
+            referer = BilibiliEndpoints.HOME,
+        ).optJSONObject("data")?.optJSONArray("list") ?: return@withContext emptyList()
+        buildList {
+            for (index in 0 until list.length()) {
+                val item = list.optJSONObject(index) ?: continue
+                val id = item.optLong("id").takeIf { it > 0 } ?: item.optLong("media_id")
+                if (id <= 0) continue
+                val covers = if (videoAid == null) runCatching { getFavoriteVideoPage(credential, pageSize = 3, folderId = id).videos.map { it.coverUrl } }.getOrDefault(emptyList()) else emptyList()
+                add(BiliFavoriteFolder(id, item.optString("title"), item.optInt("media_count"), item.optString("intro"), covers, item.optInt("fav_state") == 1))
+            }
+        }
+    }
+
+    suspend fun updateFavoriteFolders(bvid: String, aid: Long, credential: BilibiliCredential, add: Set<Long>, remove: Set<Long>) = withContext(Dispatchers.IO) {
+        require(credential.biliJct.isNotBlank()) { "登录凭证无效，请重新登录" }
+        postForm(url = BilibiliEndpoints.FAV_RESOURCE_DEAL, form = mapOf("rid" to aid.toString(), "type" to "2", "add_media_ids" to add.joinToString(","), "del_media_ids" to remove.joinToString(","), "csrf" to credential.biliJct), credential = credential, referer = "https://www.bilibili.com/video/$bvid")
     }
 
     suspend fun getVideoOnlineCount(

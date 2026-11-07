@@ -35,6 +35,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Button
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +64,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
@@ -113,6 +123,14 @@ import com.example.bilibili.ui.components.BiliVideoPlayCountIcon
 import com.example.bilibili.ui.components.BilibiliFollowButton
 import com.example.bilibili.ui.components.VideoCoinChoiceDialog
 import com.example.bilibili.ui.components.VideoDetailActionBar
+import com.example.bilibili.ui.liquidglass.SurfaceLiquidCapsule
+import com.example.bilibili.ui.liquidglass.SurfaceLiquidMenuCard
+import com.example.bilibili.ui.liquidglass.LiquidMenuBorderWidth
+import com.example.bilibili.ui.liquidglass.liquidMenuBorderColor
+import com.example.bilibili.ui.theme.isAppLightTheme
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.materials.HazeMaterials
+import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoDetailMoreMenu
 import com.example.bilibili.ui.components.VideoDetailTab
@@ -315,6 +333,15 @@ fun VideoDetailScreen(
     var commentImageViewer by remember(seedStateKey) { mutableStateOf<CommentImageViewerRequest?>(null) }
     var videoRelation by remember(seedStateKey) { mutableStateOf(BiliVideoRelation()) }
     var videoActionLoading by remember(seedStateKey) { mutableStateOf(false) }
+    var favoriteHint by remember(seedStateKey) { mutableStateOf(false) }
+    var favoriteHintAdded by remember(seedStateKey) { mutableStateOf(true) }
+    var showFavoriteSheet by remember(seedStateKey) { mutableStateOf(false) }
+    var favoriteFolders by remember(seedStateKey) { mutableStateOf<List<com.example.bilibili.data.BiliFavoriteFolder>>(emptyList()) }
+    var favoriteSelection by remember(seedStateKey) { mutableStateOf(setOf<Long>()) }
+    var favoriteOriginal by remember(seedStateKey) { mutableStateOf(setOf<Long>()) }
+    LaunchedEffect(favoriteHint) {
+        if (favoriteHint) { kotlinx.coroutines.delay(5000); favoriteHint = false }
+    }
     var showCoinDialog by remember(seedStateKey) { mutableStateOf(false) }
     var coinMenuAnchor by remember(seedStateKey) { mutableStateOf(Rect.Zero) }
     var showMoreMenu by remember(seedStateKey) { mutableStateOf(false) }
@@ -1767,6 +1794,8 @@ fun VideoDetailScreen(
                                                 credential = cred,
                                             ).getOrThrow()
                                             videoRelation = videoRelation.copy(favorited = targetFavorite)
+                                            favoriteHintAdded = targetFavorite
+                                            favoriteHint = true
                                             detail = detail?.let { loaded ->
                                                 val delta = if (targetFavorite) 1L else -1L
                                                 loaded.copy(
@@ -1782,6 +1811,21 @@ fun VideoDetailScreen(
                                             ).show()
                                         }
                                         videoActionLoading = false
+                                    }
+                                },
+                                onFavoriteLongClick = {
+                                    val cred = credential
+                                    if (cred == null) onLoginRequired() else {
+                                        favoriteHint = false
+                                        favoriteFolders = emptyList()
+                                        showFavoriteSheet = true
+                                        scope.launch {
+                                            runCatching { api.getFavoriteFolders(cred, currentVideo.aid) }.onSuccess { folders ->
+                                                favoriteFolders = folders
+                                                favoriteOriginal = folders.filter { it.containsVideo }.map { it.id }.toSet()
+                                                favoriteSelection = favoriteOriginal
+                                            }.onFailure { Toast.makeText(context, it.message ?: "加载失败", Toast.LENGTH_SHORT).show() }
+                                        }
                                     }
                                 },
                                 onShareClick = {
@@ -2072,6 +2116,35 @@ fun VideoDetailScreen(
             onPartClick = ::switchToPart,
         )
     }
+    if (favoriteHint) {
+        Box(Modifier.fillMaxSize().padding(bottom = 40.dp), contentAlignment = Alignment.BottomCenter) {
+            FavoriteHintSurface(hazeState = hazeState) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 18.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(if (favoriteHintAdded) "已加入默认收藏夹" else "已取消收藏", color = MaterialTheme.colorScheme.onSurface)
+                if (favoriteHintAdded) Text("修改收藏夹", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable {
+                    favoriteHint = false
+                    showFavoriteSheet = true
+                    scope.launch {
+                        runCatching { api.getFavoriteFolders(credential!!, currentVideo.aid) }.onSuccess { folders ->
+                            favoriteFolders = folders
+                            favoriteOriginal = folders.filter { it.containsVideo }.map { it.id }.toSet()
+                            favoriteSelection = favoriteOriginal
+                        }.onFailure { Toast.makeText(context, it.message ?: "加载失败", Toast.LENGTH_SHORT).show() }
+                    }
+                })
+            }
+            }
+        }
+    }
+    if (showFavoriteSheet) {
+        FavoriteFolderSheet(favoriteFolders, favoriteSelection, hazeState = hazeState, onSelectionChange = { favoriteSelection = it }, onDismiss = { showFavoriteSheet = false }, onSave = {
+            scope.launch {
+                runCatching { api.updateFavoriteFolders(currentVideo.bvid, currentVideo.aid, credential!!, favoriteSelection - favoriteOriginal, favoriteOriginal - favoriteSelection) }
+                    .onSuccess { videoRelation = videoRelation.copy(favorited = favoriteSelection.isNotEmpty()); showFavoriteSheet = false }
+                    .onFailure { Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_SHORT).show() }
+            }
+        })
+    }
     commentImageViewer?.let { request ->
         BiliFullscreenImageViewer(
             images = request.images,
@@ -2081,6 +2154,48 @@ fun VideoDetailScreen(
             onDismiss = { commentImageViewer = null },
         )
     }
+    }
+}
+
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+private fun FavoriteHintSurface(hazeState: dev.chrisbanes.haze.HazeState, content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit) {
+    val light = isAppLightTheme()
+    val shape = RoundedCornerShape(50)
+    val surface = MaterialTheme.colorScheme.surface.copy(alpha = if (light) 0.94f else 0.88f)
+    val hazeStyle = HazeMaterials.thick(containerColor = surface)
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(48.dp).clip(shape).hazeEffect(state = hazeState) { style = hazeStyle; blurRadius = 36.dp }.border(LiquidMenuBorderWidth, liquidMenuBorderColor(light), shape), content = content)
+}
+
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+private fun FavoriteFolderSheet(folders: List<com.example.bilibili.data.BiliFavoriteFolder>, selected: Set<Long>, hazeState: dev.chrisbanes.haze.HazeState, onSelectionChange: (Set<Long>) -> Unit, onDismiss: () -> Unit, onSave: () -> Unit) {
+    BackHandler(onBack = onDismiss)
+    val isLightTheme = isAppLightTheme()
+    val panelShape = RoundedCornerShape(14.dp)
+    val surface = MaterialTheme.colorScheme.surface.copy(alpha = if (isLightTheme) 0.94f else 0.88f)
+    val panelHazeStyle = HazeMaterials.thick(containerColor = surface)
+    Box(Modifier.fillMaxSize().zIndex(1000f), contentAlignment = Alignment.BottomCenter) {
+        Box(Modifier.fillMaxSize().clickable(indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onDismiss))
+        AnimatedVisibility(visible = true, enter = fadeIn() + slideInVertically { it }, exit = fadeOut() + slideOutVertically { it }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp).clip(panelShape).hazeEffect(state = hazeState) { style = panelHazeStyle; blurRadius = 36.dp }.border(LiquidMenuBorderWidth, liquidMenuBorderColor(isLightTheme), panelShape).padding(vertical = 6.dp)) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) { Text("选择收藏夹", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold) }
+            LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 420.dp)) {
+                items(folders, key = { it.id }) { folder ->
+                    Row(Modifier.fillMaxWidth().height(46.dp).clickable { onSelectionChange(if (folder.id in selected) selected - folder.id else selected + folder.id) }.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(folder.title, style = MaterialTheme.typography.bodyMedium)
+                            Text("${folder.count} 个内容", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Checkbox(checked = folder.id in selected, onCheckedChange = { onSelectionChange(if (it) selected + folder.id else selected - folder.id) })
+                    }
+                }
+            }
+            Button(onClick = onSave, modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 8.dp), enabled = folders.isNotEmpty()) { Text("完成") }
+        }
+        }
+        }
     }
 }
 

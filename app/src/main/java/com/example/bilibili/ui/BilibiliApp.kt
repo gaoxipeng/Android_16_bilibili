@@ -204,11 +204,18 @@ fun BilibiliApp() {
     var autoHideBarsOnScroll by remember {
         mutableStateOf(bottomBarDisplaySettingsStore.readAutoHideOnScroll())
     }
+    var bottomBarFrostAmount by remember {
+        mutableFloatStateOf(bottomBarDisplaySettingsStore.readBottomBarFrostAmount())
+    }
+    var bottomBarGlassAmount by remember {
+        mutableFloatStateOf(bottomBarDisplaySettingsStore.readBottomBarGlassAmount())
+    }
     val homeFeedStore = remember { BilibiliHomeFeedStore(context) }
     val cachedHomeFeed = remember { homeFeedStore.read() }
     val playerPreferences = remember { BilibiliPlayerPreferences(context) }
     val feedLayoutStore = remember { FeedLayoutStore(context) }
     var feedColumnCount by remember { mutableIntStateOf(feedLayoutStore.readColumnCount()) }
+    var showFullVideoTitles by remember { mutableStateOf(feedLayoutStore.readShowFullTitle()) }
     var backgroundPlaybackEnabled by remember {
         mutableStateOf(playerPreferences.readBackgroundPlaybackEnabled())
     }
@@ -236,32 +243,32 @@ fun BilibiliApp() {
     var lastOpenedHistoryKid by remember { mutableStateOf<String?>(null) }
     var bottomBarExpanded by remember { mutableStateOf(true) }
     var bottomBarVisible by remember { mutableStateOf(true) }
-    var bottomBarScrollDistance by remember { mutableFloatStateOf(0f) }
+    val bottomBarScrollDistance = remember { floatArrayOf(0f) }
     val bottomBarScrollConnection = remember(selectedTab, autoHideBarsOnScroll) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (!autoHideBarsOnScroll) {
                     bottomBarVisible = true
-                    bottomBarScrollDistance = 0f
+                    bottomBarScrollDistance[0] = 0f
                     return Offset.Zero
                 }
                 val delta = available.y
                 if (delta == 0f) return Offset.Zero
-                if (bottomBarScrollDistance != 0f &&
-                    (bottomBarScrollDistance > 0f) != (delta > 0f)
+                if (bottomBarScrollDistance[0] != 0f &&
+                    (bottomBarScrollDistance[0] > 0f) != (delta > 0f)
                 ) {
-                    bottomBarScrollDistance = 0f
+                    bottomBarScrollDistance[0] = 0f
                 }
-                bottomBarScrollDistance = (bottomBarScrollDistance + delta)
+                bottomBarScrollDistance[0] = (bottomBarScrollDistance[0] + delta)
                     .coerceIn(-BottomBarHideGestureThresholdPx, BottomBarHideGestureThresholdPx)
                 when {
-                    bottomBarScrollDistance <= -BottomBarHideGestureThresholdPx -> {
+                    bottomBarScrollDistance[0] <= -BottomBarHideGestureThresholdPx -> {
                         bottomBarVisible = false
-                        bottomBarScrollDistance = 0f
+                        bottomBarScrollDistance[0] = 0f
                     }
-                    bottomBarScrollDistance >= BottomBarHideGestureThresholdPx -> {
+                    bottomBarScrollDistance[0] >= BottomBarHideGestureThresholdPx -> {
                         bottomBarVisible = true
-                        bottomBarScrollDistance = 0f
+                        bottomBarScrollDistance[0] = 0f
                     }
                 }
                 return Offset.Zero
@@ -372,6 +379,7 @@ fun BilibiliApp() {
 
     fun handleBottomTabClick(tab: MainTab) {
         bottomBarVisible = true
+        bottomBarScrollDistance[0] = 0f
         if (tab == selectedTab && tab in FeedTabReselectController.FEED_RESELECT_TABS) {
             feedTabReselectController.handleReselect(tab, scope)
             return
@@ -902,7 +910,7 @@ fun BilibiliApp() {
         bottomBarDisplaySettingsStore.writeAutoHideOnScroll(enabled)
         if (!enabled) {
             bottomBarVisible = true
-            bottomBarScrollDistance = 0f
+            bottomBarScrollDistance[0] = 0f
         }
     }
 
@@ -1435,6 +1443,16 @@ fun BilibiliApp() {
                         onAddAccount = ::prepareAddAccount,
                         autoHideBarsOnScroll = autoHideBarsOnScroll,
                         onAutoHideBarsOnScrollChange = ::updateAutoHideBarsOnScroll,
+                        bottomBarFrostAmount = bottomBarFrostAmount,
+                        onBottomBarFrostAmountChange = { bottomBarFrostAmount = it },
+                        onBottomBarFrostAmountCommit = {
+                            bottomBarDisplaySettingsStore.writeBottomBarFrostAmount(bottomBarFrostAmount)
+                        },
+                        bottomBarGlassAmount = bottomBarGlassAmount,
+                        onBottomBarGlassAmountChange = { bottomBarGlassAmount = it },
+                        onBottomBarGlassAmountCommit = {
+                            bottomBarDisplaySettingsStore.writeBottomBarGlassAmount(bottomBarGlassAmount)
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -1575,6 +1593,8 @@ fun BilibiliApp() {
                     visible = bottomBarVisible,
                     contentPadding = padding,
                     onSearchClick = { openSearch() },
+                    frostAmount = bottomBarFrostAmount,
+                    glassAmount = bottomBarGlassAmount,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
@@ -1619,6 +1639,8 @@ fun BilibiliApp() {
                         onTabClick = ::handleBottomTabClick,
                         expanded = bottomBarExpanded,
                         backdrop = bottomBarBackdrop,
+                        frostAmount = bottomBarFrostAmount,
+                        glassAmount = bottomBarGlassAmount,
                         onExpandRequest = { bottomBarExpanded = true },
                         onCollapsedTap = {
                             if (selectedTab in FeedTabReselectController.FEED_RESELECT_TABS) {

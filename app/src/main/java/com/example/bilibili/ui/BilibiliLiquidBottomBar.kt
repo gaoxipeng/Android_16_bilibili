@@ -41,7 +41,7 @@ import com.example.bilibili.ui.liquidglass.LiquidBottomTab
 import com.example.bilibili.ui.liquidglass.LiquidBottomTabs
 import com.example.bilibili.ui.liquidglass.LocalLiquidBottomTabCoverage
 import com.example.bilibili.ui.liquidglass.LocalLiquidBottomTabPressProgress
-import com.example.bilibili.ui.liquidglass.SurfaceLiquidIconButton
+import com.example.bilibili.ui.liquidglass.TransparentLiquidIconButton
 import com.example.bilibili.ui.theme.TabAccentDark
 import com.example.bilibili.ui.theme.TabAccentLight
 import com.kyant.backdrop.Backdrop
@@ -54,6 +54,8 @@ internal fun BilibiliLiquidBottomBar(
     onTabClick: (MainTab) -> Unit,
     expanded: Boolean,
     backdrop: Backdrop,
+    frostAmount: Float = 0f,
+    glassAmount: Float = 1f,
     onExpandRequest: () -> Unit,
     onCollapsedTap: () -> Unit,
     modifier: Modifier = Modifier,
@@ -125,6 +127,8 @@ internal fun BilibiliLiquidBottomBar(
                             onTabSelected = { index -> onTabClick(tabs[index]) },
                             backdrop = backdrop,
                             tabsCount = tabs.size,
+                            frostAmount = frostAmount,
+                            glassAmount = glassAmount,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             tabs.forEachIndexed { index, tab ->
@@ -172,7 +176,7 @@ internal fun BilibiliLiquidBottomBar(
                                 scaleY = 0.9f + collapsedAlpha * 0.1f
                             },
                     ) {
-                        SurfaceLiquidIconButton(
+                        TransparentLiquidIconButton(
                             onClick = onExpandRequest,
                             onDoubleClick = onCollapsedTap,
                             backdrop = backdrop,

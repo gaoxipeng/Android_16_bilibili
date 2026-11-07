@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -75,6 +76,7 @@ import com.example.bilibili.data.BiliHistoryCursor
 import com.example.bilibili.data.BiliHistoryItem
 import com.example.bilibili.data.BiliPlayStream
 import com.example.bilibili.data.BiliVideoItem
+import com.example.bilibili.data.BiliFavoriteFolder
 import com.example.bilibili.data.BilibiliApiClient
 import com.example.bilibili.data.BilibiliCredential
 import com.example.bilibili.data.BilibiliJsonParser
@@ -99,6 +101,7 @@ import com.example.bilibili.ui.components.VideoFeedAuthorAvatar
 import com.example.bilibili.ui.components.VideoCoverBottomScrim
 import com.example.bilibili.ui.components.VideoCoverOverlayText
 import com.example.bilibili.ui.components.VideoFeedCard
+import com.example.bilibili.ui.theme.isAppLightTheme
 import com.example.bilibili.ui.format.formatBiliHistorySectionLabel
 import com.example.bilibili.ui.format.formatBiliHistoryViewTime
 import com.example.bilibili.ui.format.formatHistoryDurationBadge
@@ -275,6 +278,8 @@ fun HistoryScreen(
     var historyError by remember { mutableStateOf<String?>(null) }
 
     var favoriteVideos by remember { mutableStateOf<List<BiliVideoItem>>(emptyList()) }
+    var favoriteFolders by remember { mutableStateOf<List<BiliFavoriteFolder>>(emptyList()) }
+    var selectedFolderId by remember { mutableStateOf<Long?>(null) }
     var favoritePage by remember { mutableStateOf(1) }
     var favoriteHasMore by remember { mutableStateOf(true) }
     var favoriteLoading by remember { mutableStateOf(false) }
@@ -326,7 +331,7 @@ fun HistoryScreen(
         }
     }
 
-    suspend fun loadFavorites(reset: Boolean, scrollToTopWhenDone: Boolean = false) {
+    suspend fun loadFavorites(reset: Boolean, scrollToTopWhenDone: Boolean = false, refreshFolders: Boolean = false) {
         val cred = credential ?: return
         if (reset) {
             favoriteLoading = true
@@ -338,8 +343,15 @@ fun HistoryScreen(
             favoriteLoadingMore = true
         }
         try {
+            if (reset && (favoriteFolders.isEmpty() || refreshFolders)) {
+                val updatedFolders = api.getFavoriteFolders(cred)
+                favoriteFolders = updatedFolders
+                if (updatedFolders.none { it.id == selectedFolderId }) {
+                    selectedFolderId = updatedFolders.firstOrNull { it.title == "默认收藏夹" }?.id ?: updatedFolders.firstOrNull()?.id
+                }
+            }
             val nextPage = if (reset) 1 else favoritePage + 1
-            val page = api.getFavoriteVideoPage(credential = cred, page = nextPage)
+            val page = api.getFavoriteVideoPage(credential = cred, page = nextPage, folderId = selectedFolderId)
             favoriteVideos = if (reset) {
                 page.videos
             } else {
@@ -374,7 +386,7 @@ fun HistoryScreen(
             try {
                 when (HistoryContentTab.entries[pagerState.currentPage]) {
                     HistoryContentTab.History -> loadHistory(reset = true, scrollToTopWhenDone = scrollToTopWhenDone)
-                    HistoryContentTab.Favorites -> loadFavorites(reset = true, scrollToTopWhenDone = scrollToTopWhenDone)
+                    HistoryContentTab.Favorites -> loadFavorites(reset = true, scrollToTopWhenDone = scrollToTopWhenDone, refreshFolders = true)
                 }
             } finally {
                 refreshing = false
@@ -383,6 +395,8 @@ fun HistoryScreen(
     }
 
     LaunchedEffect(loggedIn, credential?.dedeUserId) {
+        favoriteFolders = emptyList()
+        selectedFolderId = null
         if (loggedIn && credential != null) {
             loadHistory(reset = true)
             favoritesLoaded = false
@@ -688,6 +702,31 @@ fun HistoryScreen(
                         }
                     }
                     HistoryContentTab.Favorites -> {
+                        Column(Modifier.fillMaxSize()) {
+                        if (favoriteFolders.isNotEmpty()) {
+                            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                items(favoriteFolders, key = { it.id }) { folder ->
+                                    Column(Modifier.width(220.dp).clip(RoundedCornerShape(12.dp)).background(if (isAppLightTheme()) { if (folder.id == selectedFolderId) Color(0xFFEAEAEA) else Color.White } else { if (folder.id == selectedFolderId) Color(0xFF424242) else Color(0xFF292929) }).clickable {
+                                        if (folder.id != selectedFolderId) {
+                                            selectedFolderId = folder.id
+                                            favoriteVideos = emptyList()
+                                            scope.launch { loadFavorites(reset = true) }
+                                        }
+                                    }.padding(10.dp)) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            repeat(3) { index ->
+                                                Box(Modifier.weight(1f).height(42.dp).clip(RoundedCornerShape(5.dp)).background(MaterialTheme.colorScheme.surface)) {
+                                                    folder.covers.getOrNull(index)?.let { RemoteImage(url = it, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+                                                }
+                                            }
+                                        }
+                                        Text(folder.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
+                                        Text("${folder.count} 个视频" + if (folder.description.isNotBlank()) " · ${folder.description}" else "", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+                        Box(Modifier.weight(1f)) {
                         when {
                             favoriteLoading && favoriteVideos.isEmpty() -> {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -781,6 +820,8 @@ fun HistoryScreen(
                                     }
                                 }
                             }
+                        }
+                        }
                         }
                     }
                 }

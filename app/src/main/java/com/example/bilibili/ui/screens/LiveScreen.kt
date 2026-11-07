@@ -555,6 +555,7 @@ private fun LiveRoomCard(
     room: BiliLiveRoom,
     onClick: () -> Unit,
 ) {
+    val showFullTitle = com.example.bilibili.data.rememberShowFullVideoTitles()
     val shape = RoundedCornerShape(VideoFeedCardCorner)
     val cardBorderColor = MaterialTheme.colorScheme.outlineVariant
     val metaBackground = MaterialTheme.colorScheme.surface
@@ -610,8 +611,9 @@ private fun LiveRoomCard(
             ) {
                 Text(
                     text = room.title.ifBlank { room.userName },
-                    maxLines = LiveFeedTitleMaxLines,
-                    overflow = TextOverflow.Ellipsis,
+                    minLines = if (showFullTitle) 1 else 2,
+                    maxLines = if (showFullTitle) Int.MAX_VALUE else 2,
+                    overflow = if (showFullTitle) TextOverflow.Clip else TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium,
                     color = titleColor,
                 )
@@ -641,7 +643,6 @@ private fun LiveRoomCard(
 }
 
 private const val LiveFeedCoverAspectRatio = 16f / 9f
-private const val LiveFeedTitleMaxLines = 2
 private val LiveFeedMetaPadding = 8.dp
 private val LiveFeedCoverOverlayPadding = 6.dp
 private val LiveFeedCoverScrimHeightFraction = 0.45f

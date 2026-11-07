@@ -219,6 +219,12 @@ fun UserProfileScreen(
     onAddAccount: () -> Unit = {},
     autoHideBarsOnScroll: Boolean = true,
     onAutoHideBarsOnScrollChange: (Boolean) -> Unit = {},
+    bottomBarFrostAmount: Float = 0f,
+    onBottomBarFrostAmountChange: (Float) -> Unit = {},
+    onBottomBarFrostAmountCommit: () -> Unit = {},
+    bottomBarGlassAmount: Float = 1f,
+    onBottomBarGlassAmountChange: (Float) -> Unit = {},
+    onBottomBarGlassAmountCommit: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -590,6 +596,12 @@ fun UserProfileScreen(
             onAddAccount = onAddAccount,
             autoHideBarsOnScroll = autoHideBarsOnScroll,
             onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
+            bottomBarFrostAmount = bottomBarFrostAmount,
+            onBottomBarFrostAmountChange = onBottomBarFrostAmountChange,
+            onBottomBarFrostAmountCommit = onBottomBarFrostAmountCommit,
+            bottomBarGlassAmount = bottomBarGlassAmount,
+            onBottomBarGlassAmountChange = onBottomBarGlassAmountChange,
+            onBottomBarGlassAmountCommit = onBottomBarGlassAmountCommit,
             onBack = { showSettings = false },
             modifier = Modifier.fillMaxSize(),
         )

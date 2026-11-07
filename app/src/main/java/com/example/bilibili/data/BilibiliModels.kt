@@ -787,6 +787,8 @@ data class BiliHistoryPage(
     val cursor: BiliHistoryCursor?,
 )
 
+data class BiliFavoriteFolder(val id: Long, val title: String, val count: Int, val description: String, val covers: List<String> = emptyList(), val containsVideo: Boolean = false)
+
 data class BiliFavoriteVideoPage(
     val videos: List<BiliVideoItem>,
     val page: Int,

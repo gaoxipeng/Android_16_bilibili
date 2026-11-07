@@ -6,6 +6,8 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -76,6 +78,7 @@ fun VideoDetailActionBar(
     onTripleClick: () -> Unit,
     onCoinClick: (anchorBounds: Rect) -> Unit,
     onFavoriteClick: () -> Unit,
+    onFavoriteLongClick: () -> Unit,
     onShareClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -146,6 +149,7 @@ fun VideoDetailActionBar(
             enabled = enabled,
             ringProgress = displayProgress,
             onClick = onFavoriteClick,
+            onLongClick = onFavoriteLongClick,
         )
         VideoDetailActionItem(
             iconRes = R.drawable.ic_bili_share,
@@ -246,6 +250,7 @@ private fun VideoDetailLikeActionItem(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoDetailActionItem(
     @DrawableRes iconRes: Int,
@@ -256,6 +261,7 @@ private fun VideoDetailActionItem(
     modifier: Modifier = Modifier,
     ringProgress: Float = 0f,
     onBoundsClick: ((Rect) -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     var boundsInRoot by remember { mutableStateOf(Rect.Zero) }
@@ -273,9 +279,10 @@ private fun VideoDetailActionItem(
                 }
                 .then(
                     if (enabled) {
-                        Modifier.clickable(
+                        Modifier.combinedClickable(
                             interactionSource = interactionSource,
                             indication = null,
+                            onLongClick = onLongClick,
                             onClick = {
                                 if (onBoundsClick != null) {
                                     onBoundsClick(boundsInRoot)
