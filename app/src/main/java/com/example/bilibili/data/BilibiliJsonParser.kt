@@ -856,7 +856,24 @@ object BilibiliJsonParser {
         if (dash != null) {
             val videoUrl = dash.pickStreamUrl("video") ?: return null
             val audioUrl = dash.pickStreamUrl("audio")
+            val qualityUrls = buildMap {
+                val videos = dash.optJSONArray("video")
+                for (index in 0 until (videos?.length() ?: 0)) {
+                    val candidate = videos?.optJSONObject(index) ?: continue
+                    val id = candidate.optInt("id")
+                    val group = org.json.JSONArray()
+                    for (i in 0 until (videos?.length() ?: 0)) {
+                        val entry = videos?.optJSONObject(i) ?: continue
+                        if (entry.optInt("id") == id) group.put(entry)
+                    }
+                    val url = JSONObject().put("video", group).pickStreamUrl("video")
+                    if (id > 0 && url != null) put(id, url)
+                }
+            }
             return BiliPlayStream(
+                videoDashManifest = buildVideoDashManifest(dash, qualityUrls),
+                quality = qualityUrls.entries.firstOrNull { it.value == normalizeHttpsUrl(videoUrl) }?.key ?: data.optInt("quality"),
+                qualityUrls = qualityUrls,
                 videoUrl = normalizeHttpsUrl(videoUrl),
                 audioUrl = audioUrl?.let(::normalizeHttpsUrl),
                 lastPlayTimeMs = lastPlayTimeMs,
@@ -871,6 +888,27 @@ object BilibiliJsonParser {
                 lastPlayCid = lastPlayCid,
             )
         }
+    }
+
+    private fun buildVideoDashManifest(dash: JSONObject, urls: Map<Int, String>): String? {
+        val duration = dash.optDouble("duration", 0.0)
+        if (duration <= 0 || urls.isEmpty()) return null
+        fun escape(value: String) = android.text.TextUtils.htmlEncode(value)
+        val videos = dash.optJSONArray("video") ?: return null
+        val representations = urls.mapNotNull { (quality, url) ->
+            val entry = (0 until videos.length()).mapNotNull { videos.optJSONObject(it) }
+                .firstOrNull { candidate ->
+                    candidate.optInt("id") == quality &&
+                        JSONObject().put("video", org.json.JSONArray().put(candidate)).pickStreamUrl("video") == url
+                } ?: return@mapNotNull null
+            val base = entry.optJSONObject("SegmentBase") ?: entry.optJSONObject("segment_base") ?: return@mapNotNull null
+            val index = base.optString("indexRange").ifBlank { base.optString("index_range") }
+            val init = base.optString("Initialization").ifBlank { base.optString("initialization") }
+            if (!index.matches(Regex("\\d+-\\d+")) || !init.matches(Regex("\\d+-\\d+"))) return@mapNotNull null
+            """<Representation id="$quality" bandwidth="${entry.optLong("bandwidth")}" codecs="${escape(entry.optString("codecs"))}" width="${entry.optInt("width")}" height="${entry.optInt("height")}" mimeType="video/mp4"><BaseURL>${escape(url)}</BaseURL><SegmentBase indexRange="$index"><Initialization range="$init"/></SegmentBase></Representation>"""
+        }
+        if (representations.size != urls.size) return null
+        return """<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT${duration}S" minBufferTime="PT1.5S" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011"><Period duration="PT${duration}S"><AdaptationSet id="0" contentType="video" segmentAlignment="true">${representations.joinToString("")}</AdaptationSet></Period></MPD>"""
     }
 
     private fun JSONObject.pickStreamUrl(type: String): String? {

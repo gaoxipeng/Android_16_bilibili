@@ -198,6 +198,7 @@ fun UserProfileScreen(
     playUrls: Map<String, BiliPlayStream>,
     coordinator: VideoPlaybackCoordinator,
     onVideoClick: (BiliVideoItem) -> Unit,
+    onSwipeBackEnabledChange: (Boolean) -> Unit = {},
     onDynamicClick: (BiliDynamicItem) -> Unit = {},
     onArticleClick: (String, String) -> Unit = { _, _ -> },
     onEnsurePlayStream: (BiliVideoItem) -> Unit = {},
@@ -509,6 +510,12 @@ fun UserProfileScreen(
         uiState.loading = false
     }
 
+    LaunchedEffect(pagerState.currentPage, pagerState.currentPageOffsetFraction, pagerState.isScrollInProgress) {
+        onSwipeBackEnabledChange(
+            pagerState.currentPage == 0 &&
+                pagerState.currentPageOffsetFraction == 0f && !pagerState.isScrollInProgress,
+        )
+    }
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
             .distinctUntilChanged()
@@ -1681,16 +1688,24 @@ private fun DynamicVideoCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var coverBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick),
+            .clickable {
+                coverBounds?.let { bounds ->
+                    com.example.bilibili.ui.components.VideoCoverOrigins.update(video.playbackId(), bounds, 8f)
+                }
+                com.example.bilibili.ui.components.VideoCoverOrigins.capture(video.playbackId(), null)
+                onClick()
+            },
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
+                .onGloballyPositioned { coverBounds = it.boundsInRoot() }
                 .clip(RoundedCornerShape(8.dp)),
         ) {
             RemoteImage(

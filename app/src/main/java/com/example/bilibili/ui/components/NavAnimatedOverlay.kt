@@ -1,6 +1,12 @@
 package com.example.bilibili.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -28,6 +34,18 @@ import com.example.bilibili.ui.navigation.LocalNavTransitionCoordinator
 import kotlinx.coroutines.delay
 
 const val NavTransitionDurationMs = 280
+private val NavPageMotionEasing = CubicBezierEasing(0.18f, 0.72f, 0.22f, 1f)
+
+@Composable
+fun Modifier.navPageUnderlay(coveringKey: String?): Modifier {
+    val coordinator = LocalNavTransitionCoordinator.current
+    return graphicsLayer {
+        translationX = -size.width * 0.25f * (coordinator.pageProgress[coveringKey] ?: 0f)
+    }.drawWithContent {
+        drawContent()
+        drawRect(Color.Black.copy(alpha = 0.20f * (coordinator.pageProgress[coveringKey] ?: 0f)))
+    }
+}
 
 private const val NavOverlayTopZIndex = 590f
 private const val NavOverlayExitZIndex = 595f
@@ -43,13 +61,13 @@ private fun <T> isExitOverlayFinished(
 
 fun navStackEnterTransition(): EnterTransition =
     slideInHorizontally(
-        animationSpec = tween(NavTransitionDurationMs, easing = FastOutSlowInEasing),
+        animationSpec = tween(NavTransitionDurationMs, easing = NavPageMotionEasing),
         initialOffsetX = { fullWidth -> fullWidth },
     )
 
 fun navStackExitTransition(): ExitTransition =
     slideOutHorizontally(
-        animationSpec = tween(NavTransitionDurationMs, easing = FastOutSlowInEasing),
+        animationSpec = tween(NavTransitionDurationMs, easing = NavPageMotionEasing),
         targetOffsetX = { fullWidth -> fullWidth },
     )
 
@@ -76,6 +94,7 @@ fun <T> NavAnimatedOverlay(
     coverSnapshot: androidx.compose.ui.graphics.ImageBitmap? = null,
     onSwipeBack: (() -> Unit)? = null,
     pageSwipeBack: Boolean = false,
+    standardPageMotion: Boolean = false,
     content: @Composable (T) -> Unit,
 ) {
     val navTransitions = LocalNavTransitionCoordinator.current
@@ -164,17 +183,37 @@ fun <T> NavAnimatedOverlay(
         exit = if (coverOrigin != null) ExitTransition.None else effectiveExit,
         label = "nav-stack-overlay",
     ) {
+        val motion by transition.animateFloat(
+            transitionSpec = { tween(NavTransitionDurationMs, easing = NavPageMotionEasing) },
+            label = "page-underlay-progress",
+        ) { if (it == EnterExitState.Visible) 1f else 0f }
+        var swipeProgress by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+        SideEffect {
+            navTransitions.pageProgress[layerKey] = if (standardPageMotion) motion * (1f - swipeProgress) else 0f
+        }
+        DisposableEffect(layerKey) {
+            onDispose { navTransitions.pageProgress.remove(layerKey) }
+        }
         displayed?.let { item ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(if (coverOrigin != null || pageSwipeBack) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.background)
+                    .background(if (coverOrigin != null || pageSwipeBack || standardPageMotion) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.background)
                     .consumeTouchEvents(),
             ) {
                 if (coverOrigin != null) {
                     this@AnimatedVisibility.VideoCoverMotion(coverOrigin, coverSnapshot, onSwipeBack) { content(item) }
-                } else if (pageSwipeBack) {
-                    VideoPageSwipeBack(onSwipeBack = onSwipeBack) { content(item) }
+                } else if (pageSwipeBack || standardPageMotion) {
+                    VideoPageSwipeBack(
+                        onSwipeBack = onSwipeBack,
+                        restrictToBelowVideo = pageSwipeBack,
+                        onProgress = { fraction ->
+                            swipeProgress = fraction
+                            if (standardPageMotion) {
+                                navTransitions.pageProgress[layerKey] = motion * (1f - fraction)
+                            }
+                        },
+                    ) { content(item) }
                 } else {
                     content(item)
                 }

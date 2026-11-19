@@ -89,6 +89,7 @@ import com.example.bilibili.ui.components.FeedRefreshHintOverlay
 import com.example.bilibili.ui.components.PressAgainExitConfirmWindowMillis
 import com.example.bilibili.ui.components.PressAgainExitHintOverlay
 import com.example.bilibili.ui.components.NavAnimatedOverlay
+import com.example.bilibili.ui.components.navPageUnderlay
 import com.example.bilibili.ui.components.LocalBiliSyncedEmoticons
 import com.example.bilibili.ui.components.NavFullscreenZIndex
 import com.example.bilibili.ui.components.blockHiddenTouches
@@ -1290,6 +1291,7 @@ fun BilibiliApp() {
             Box(
                 Modifier
                     .fillMaxSize()
+                    .navPageUnderlay(navStack.firstOrNull()?.stableKey(0) ?: navController.exitingLayer?.takeIf { it.index == 0 }?.key)
                     .layerBackdrop(bottomBarBackdrop)
                     .nestedScroll(bottomBarScrollConnection)
                     .blockHiddenTouches(!navOverlayOpen),
@@ -1778,7 +1780,7 @@ private fun AppNavStackLayers(
             NavAnimatedOverlay(
                 target = layer.target,
                 exitSeed = if (layer.target == null) layer.entry else null,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().navPageUnderlay(renderLayers.firstOrNull { it.index == layer.index + 1 }?.key),
                 stackTop = isTop || isExitingLayer,
                 layerBaseZIndex = 90f + layer.index,
                 visible = isTop,
@@ -1794,6 +1796,7 @@ private fun AppNavStackLayers(
                 coverSnapshot = (layer.entry as? AppNavEntry.VideoDetail)?.coverSnapshot,
                 onSwipeBack = if (isTop && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
                 pageSwipeBack = layer.entry is AppNavEntry.VideoDetail,
+                standardPageMotion = layer.entry !is AppNavEntry.Search && layer.entry !is AppNavEntry.DynamicDetail && (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin == null,
             ) { activeEntry ->
                 Box(Modifier.fillMaxSize().blockHiddenTouches(isTop || isExitingLayer)) {
                     AppNavEntryContent(
@@ -1926,6 +1929,7 @@ private fun AppNavEntryContent(
         is AppNavEntry.UserProfile -> {
             BackHandler(enabled = isActive, onBack = onPopNav)
             UserProfileScreen(
+                onSwipeBackEnabledChange = onVideoSwipeBackEnabledChange,
                 mid = entry.mid,
                 seedName = entry.name,
                 seedFace = entry.face,

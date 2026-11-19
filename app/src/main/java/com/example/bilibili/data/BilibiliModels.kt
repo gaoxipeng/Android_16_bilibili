@@ -36,6 +36,9 @@ data class BiliPlayStream(
     val lastPlayTimeMs: Long = 0L,
     val lastPlayCid: Long = 0L,
     val cachedAtMs: Long = 0L,
+    val quality: Int = 0,
+    val qualityUrls: Map<Int, String> = emptyMap(),
+    val videoDashManifest: String? = null,
 ) {
     val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
 

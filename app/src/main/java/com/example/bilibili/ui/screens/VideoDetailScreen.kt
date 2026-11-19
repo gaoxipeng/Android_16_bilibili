@@ -371,13 +371,8 @@ fun VideoDetailScreen(
         }
     }
 
-    // The detail tabs are an inner navigation level: back from comments should
-    // reveal the video's intro before leaving the playback page.
-    BackHandler(enabled = playbackActive && pagerState.currentPage == VideoDetailTab.Comments.ordinal) {
-        scope.launch {
-            pagerState.animateScrollToPage(VideoDetailTab.Intro.ordinal)
-        }
-    }
+    // System back leaves playback; horizontal paging still switches detail tabs.
+    BackHandler(enabled = playbackActive, onBack = onBack)
 
     suspend fun loadComments(reset: Boolean) {
         val aid = detail?.video?.aid ?: seedVideo.aid
@@ -899,6 +894,7 @@ fun VideoDetailScreen(
             !(coordinator.hasHandoffPlayer(playbackKey) || handoffKey != null),
         )
     }
+    var playerSurfaceWasReady by remember(playbackKey) { mutableStateOf(false) }
     val playerStreamReady = currentStream != null && streamMatchesTarget
     val playbackActiveState = rememberUpdatedState(playbackActive)
     val hasHandoffPlayer = coordinator.hasHandoffPlayer(playbackKey) ||
@@ -1297,6 +1293,7 @@ fun VideoDetailScreen(
     }
 
     val isVideoFullscreen = coordinator.fullscreenKey == playbackKey
+    val showPlayerCover = !playerSurfaceWasReady && !hasHandoffPlayer
     val showPlayerLoadingOverlay = !isVideoFullscreen &&
         !hasHandoffPlayer &&
         (!playerStreamReady || playerSurfaceLoading)
@@ -1484,23 +1481,26 @@ fun VideoDetailScreen(
                             onLoadingStateChange = { loading ->
                                 if (playbackActiveState.value) {
                                     playerSurfaceLoading = loading
+                                    if (!loading) playerSurfaceWasReady = true
                                 }
                             },
                         )
                         }
                     }
-                    if (showPlayerLoadingOverlay) {
+                    if (showPlayerLoadingOverlay && (showPlayerCover || showDelayedPlayerSpinner)) {
                         Box(
                             Modifier
                                 .fillMaxSize()
-                                .background(Color.Black),
+                                .background(if (showPlayerCover) Color.Black else Color.Transparent),
                             contentAlignment = Alignment.Center,
                         ) {
-                            com.example.bilibili.ui.components.RemoteImage(
-                                url = currentVideo.coverUrl,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                            )
+                            if (showPlayerCover) {
+                                com.example.bilibili.ui.components.RemoteImage(
+                                    url = currentVideo.coverUrl,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                )
+                            }
                             if (showDelayedPlayerSpinner) VideoPlayerLoadingIndicator()
                         }
                     }

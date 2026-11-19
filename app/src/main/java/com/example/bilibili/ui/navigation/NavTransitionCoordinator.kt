@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
 class NavTransitionCoordinator {
+    val pageProgress = androidx.compose.runtime.mutableStateMapOf<String?, Float>()
     var activeTransitions by mutableIntStateOf(0)
     val isTransitioning: Boolean
         get() = activeTransitions > 0

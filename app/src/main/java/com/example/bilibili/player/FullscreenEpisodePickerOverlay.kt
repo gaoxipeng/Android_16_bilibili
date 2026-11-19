@@ -10,10 +10,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -30,17 +30,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import com.example.bilibili.ui.components.ActionFrostedCard
-import com.example.bilibili.ui.components.actionMenuSurfaceColor
-import com.example.bilibili.ui.components.ImageActionMenuBlurRadius
 import com.example.bilibili.ui.theme.BiliPink
-import com.example.bilibili.ui.theme.isAppLightTheme
 import com.kyant.backdrop.Backdrop
 
 private val EpisodePickerPanelPadding = 10.dp
@@ -50,11 +48,7 @@ private val EpisodePickerMaxListHeight = 320.dp
 @Composable
 private fun episodePickerDetailColor(selected: Boolean): Color {
     if (selected) return BiliPink.copy(alpha = 0.85f)
-    return if (isAppLightTheme()) {
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
-    } else {
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.82f)
-    }
+    return Color.White.copy(alpha = 0.82f)
 }
 
 @Composable
@@ -63,6 +57,8 @@ fun FullscreenEpisodePickerOverlay(
     pickerState: VideoEpisodePickerState?,
     onDismiss: () -> Unit,
     backdrop: Backdrop,
+    anchorFromRight: Dp,
+    bottomInset: Dp,
     modifier: Modifier = Modifier,
 ) {
     if (!visible || pickerState == null) return
@@ -84,11 +80,6 @@ fun FullscreenEpisodePickerOverlay(
             .fillMaxSize()
             .zIndex(20f),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.35f)),
-        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -120,17 +111,32 @@ fun FullscreenEpisodePickerOverlay(
         )
         BoxWithConstraints(
             modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth(0.86f)
+                .fillMaxSize()
                 .zIndex(1f),
         ) {
-            ActionFrostedCard(
+            val measurer = rememberTextMeasurer()
+            val density = LocalDensity.current
+            val titleStyle = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+            val rowStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+            val detailStyle = MaterialTheme.typography.labelSmall
+            val contentWidth = with(density) {
+                val heading = measurer.measure(pickerState.sheetTitle, titleStyle, maxLines = 1).size.width.toDp()
+                val rows = pickerState.entries.maxOfOrNull { entry ->
+                    val title = measurer.measure(entry.title, rowStyle, maxLines = 1).size.width
+                    val detail = measurer.measure(entry.detail, detailStyle, maxLines = 1).size.width
+                    maxOf(title, detail).toDp() + 44.dp
+                } ?: 0.dp
+                maxOf(heading, rows) + EpisodePickerPanelPadding * 2
+            }
+            val panelWidth = contentWidth.coerceIn(0.dp, (maxWidth - 16.dp).coerceAtLeast(0.dp))
+            val rightInset = (anchorFromRight - panelWidth).coerceAtLeast(8.dp)
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = maxHeight * 0.92f),
-                backdrop = backdrop,
-                effectBlurRadius = ImageActionMenuBlurRadius,
-                effectContainerColor = actionMenuSurfaceColor(),
+                    .align(Alignment.BottomEnd)
+                    .padding(end = rightInset, bottom = bottomInset)
+                    .width(panelWidth)
+                    .heightIn(max = (maxHeight - bottomInset - 8.dp).coerceAtLeast(0.dp))
+                    .videoPopupGlass(backdrop),
             ) {
                 Column(
                     modifier = Modifier
@@ -142,9 +148,7 @@ fun FullscreenEpisodePickerOverlay(
                         text = pickerState.sheetTitle,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        color = Color.White,
                     )
                     LazyColumn(
                         state = listState,
@@ -176,7 +180,7 @@ private fun EpisodePickerRow(
     entry: VideoEpisodePickerEntry,
     onClick: () -> Unit,
 ) {
-    val titleColor = if (entry.selected) BiliPink else MaterialTheme.colorScheme.onSurface
+    val titleColor = if (entry.selected) BiliPink else Color.White
     val indexBackground = if (entry.selected) {
         BiliPink.copy(alpha = 0.12f)
     } else {
@@ -185,9 +189,9 @@ private fun EpisodePickerRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(EpisodePickerRowHeight)
+            .heightIn(min = EpisodePickerRowHeight)
             .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp),
+            .padding(horizontal = 4.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -212,16 +216,12 @@ private fun EpisodePickerRow(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = if (entry.selected) FontWeight.SemiBold else FontWeight.Normal,
                 color = titleColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             if (entry.detail.isNotBlank()) {
                 Text(
                     text = entry.detail,
                     style = MaterialTheme.typography.labelSmall,
                     color = episodePickerDetailColor(entry.selected),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

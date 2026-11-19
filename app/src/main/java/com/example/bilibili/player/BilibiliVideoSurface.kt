@@ -1,4 +1,10 @@
 package com.example.bilibili.player
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.layout
 
 import android.media.AudioManager
 import android.provider.Settings
@@ -224,6 +230,19 @@ fun BilibiliVideoSurface(
     var showDanmakuSettings by remember(playbackKey) { mutableStateOf(false) }
     var showEpisodePicker by remember(playbackKey) { mutableStateOf(false) }
     var showSpeedMenu by remember(playbackKey) { mutableStateOf(false) }
+    var showQualityMenu by remember(playbackKey) { mutableStateOf(false) }
+    var requestedQuality by remember(playbackKey) { mutableStateOf<Int?>(null) }
+    var primaryVideoSlot by remember(playbackKey) { mutableIntStateOf(0) }
+    var qualityCandidate by remember(playbackKey) { mutableStateOf<ExoPlayer?>(null) }
+    var qualityAudioPlayer by remember(playbackKey, contentPlaybackKey, stream.cid) {
+        mutableStateOf<ExoPlayer?>(null)
+    }
+    var retiredQualityPlayer by remember(playbackKey) { mutableStateOf<ExoPlayer?>(null) }
+    var surfaceBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    var qualityCenter by remember { mutableFloatStateOf(0f) }
+    var speedCenter by remember { mutableFloatStateOf(0f) }
+    var episodeAnchorLeft by remember { mutableFloatStateOf(0f) }
+    var selectedQuality by remember(stream) { mutableStateOf(stream.quality) }
     val showDanmakuFeature = danmakuEnabled && danmakuCid > 0L && loadDanmaku != null
     val danmakuVisible = coordinator.danmakuVisible
     val danmakuSettings = coordinator.danmakuSettings
@@ -551,6 +570,99 @@ fun BilibiliVideoSurface(
 
     val activePlayer = player
     val activePlayerState = rememberUpdatedState(activePlayer)
+    LaunchedEffect(activePlayer, stream, requestedQuality) {
+        val quality = requestedQuality ?: return@LaunchedEffect
+        val current = activePlayer ?: return@LaunchedEffect
+        try {
+            val candidate = prepareVideoQuality(context, current, stream, quality, shotRefererUrl,
+                playbackMetadata, clock = qualityAudioPlayer ?: current,
+                onCandidate = { qualityCandidate = it })
+            candidate.playWhenReady = current.playWhenReady
+            requestedQuality = null
+            selectedQuality = quality
+            if (qualityAudioPlayer == null) qualityAudioPlayer = current
+            else retiredQualityPlayer = current
+            primaryVideoSlot = 1 - primaryVideoSlot
+            player = candidate
+            qualityCandidate = null
+        } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+            android.widget.Toast.makeText(context, "目标画质缓冲超时，继续播放原画质", android.widget.Toast.LENGTH_LONG).show()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            val reason = error.localizedMessage.orEmpty()
+            android.widget.Toast.makeText(context, "切换失败：$reason，继续播放原画质", android.widget.Toast.LENGTH_LONG).show()
+        }
+        requestedQuality = null
+    }
+    LaunchedEffect(retiredQualityPlayer) {
+        val retired = retiredQualityPlayer ?: return@LaunchedEffect
+        retired.release()
+        retiredQualityPlayer = null
+    }
+    DisposableEffect(qualityAudioPlayer, activePlayer) {
+        val audio = qualityAudioPlayer
+        val video = activePlayer
+        if (audio == null || video == null || audio === video) return@DisposableEffect onDispose {}
+        val listener = object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                audio.playWhenReady = playWhenReady
+            }
+            override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) {
+                audio.playbackParameters = playbackParameters
+            }
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int,
+            ) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK &&
+                    kotlin.math.abs(audio.currentPosition - newPosition.positionMs) > 80L) {
+                    audio.seekTo(newPosition.positionMs)
+                }
+            }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) audio.pause()
+            }
+        }
+        video.addListener(listener)
+        onDispose { video.removeListener(listener) }
+    }
+    val latestAudioReplacement by rememberUpdatedState(activePlayer)
+    DisposableEffect(qualityAudioPlayer) {
+        val audio = qualityAudioPlayer
+        onDispose {
+            if (audio != null) {
+                val replacement = latestAudioReplacement
+                runCatching {
+                    val volume = audio.volume
+                    val attributes = audio.audioAttributes
+                    audio.volume = 0f
+                    audio.setAudioAttributes(attributes, false)
+                    replacement?.setAudioAttributes(attributes, true)
+                    replacement?.volume = volume
+                }
+                audio.release()
+            }
+        }
+    }
+    LaunchedEffect(qualityAudioPlayer, activePlayer, streamToken) {
+        val audio = qualityAudioPlayer ?: return@LaunchedEffect
+        val video = activePlayer ?: return@LaunchedEffect
+        if (audio === video) return@LaunchedEffect
+        // The retained player only supplies audio. Free its video decoder for
+        // the next candidate while leaving the selected audio track intact.
+        audio.trackSelectionParameters = audio.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_VIDEO, true)
+            .build()
+        while (true) {
+            delay(100L)
+            if (audio.playerError != null || video.playbackState == Player.STATE_READY &&
+                audio.playbackState == Player.STATE_ENDED && video.playWhenReady &&
+                audio.currentPosition < video.currentPosition - 300L) {
+                qualityAudioPlayer = null
+                return@LaunchedEffect
+            }
+        }
+    }
     val hasPendingHandoff = coordinator.hasHandoffPlayer(playbackKey) ||
         coordinator.hasHandoffPlayer(handoffLookupKey)
     val surfaceLoading = (activePlayer == null && !hasPendingHandoff) || isBuffering
@@ -797,14 +909,14 @@ fun BilibiliVideoSurface(
             }
         }
         onDispose {
-            val disposedPlayer = activePlayerState.value
-            if (disposedPlayer != null) {
-                coordinator.savePlaybackPosition(
-                    currentContentPlaybackKey.value,
-                    disposedPlayer.safeCurrentPosition(),
-                )
-                runCatching { disposedPlayer.removeListener(listener) }
-            }
+            // This effect owns the player captured when it was installed, not its replacement.
+            val disposedPlayer = activePlayer
+            coordinator.savePlaybackPosition(
+                currentContentPlaybackKey.value,
+                disposedPlayer.safeCurrentPosition(),
+            )
+            runCatching { disposedPlayer.removeListener(listener) }
+            if (disposedPlayer === retiredQualityPlayer || disposedPlayer === qualityAudioPlayer) return@onDispose
             if (isFullscreen) {
                 coordinator.unregisterFullscreenPauseHandler(playbackKey)
             } else {
@@ -927,13 +1039,13 @@ fun BilibiliVideoSurface(
         }
     }
 
-    LaunchedEffect(isPlaying, isBuffering, controlsHideSignal, showSpeedMenu) {
-        if (!isPlaying || isBuffering || showSpeedMenu) {
+    LaunchedEffect(isPlaying, isBuffering, controlsHideSignal, showSpeedMenu, showQualityMenu) {
+        if (!isPlaying || isBuffering || showSpeedMenu || showQualityMenu) {
             controlsVisible = true
             return@LaunchedEffect
         }
         delay(2_000)
-        if (!showSpeedMenu) {
+        if (!showSpeedMenu && !showQualityMenu) {
             controlsVisible = false
         }
     }
@@ -941,6 +1053,7 @@ fun BilibiliVideoSurface(
     LaunchedEffect(controlsVisible, showDanmakuSettings, showEpisodePicker) {
         if (!controlsVisible || showDanmakuSettings || showEpisodePicker) {
             showSpeedMenu = false
+            showQualityMenu = false
         }
     }
 
@@ -979,6 +1092,7 @@ fun BilibiliVideoSurface(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .onGloballyPositioned { surfaceBounds = it.boundsInWindow() }
             .background(Color.Black)
             .clipToBounds(),
     ) {
@@ -992,32 +1106,30 @@ fun BilibiliVideoSurface(
                 .fillMaxSize()
                 .layerBackdrop(layerBackdrop),
         ) {
-            AndroidView(
-                factory = { ctx ->
-                    val playerView = LayoutInflater.from(ctx).inflate(R.layout.view_video_player, null, false)
-                        as androidx.media3.ui.PlayerView
-                    playerView.apply {
-                        setKeepContentOnPlayerReset(true)
-                        setShutterBackgroundColor(AndroidColor.TRANSPARENT)
-                    }
-                },
-                update = { playerView ->
-                    runCatching {
-                        playerView.player = activePlayerState.value?.takeIf { it === player }
-                    }
-                    playerView.resizeMode = if (isFullscreen && isPortraitPlayback) {
-                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    } else {
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
-                },
-                onRelease = { playerView ->
-                    playerView.player = null
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
+            repeat(2) { slot ->
+                val primary = slot == primaryVideoSlot
+                val output = if (primary) activePlayer else qualityCandidate
+                AndroidView(
+                    factory = { ctx ->
+                        (LayoutInflater.from(ctx).inflate(R.layout.view_video_player, null, false)
+                            as androidx.media3.ui.PlayerView).apply {
+                            setKeepContentOnPlayerReset(true)
+                            setShutterBackgroundColor(AndroidColor.TRANSPARENT)
+                        }
+                    },
+                    update = { view ->
+                        if (view.player !== output) view.player = output
+                        view.resizeMode = if (isFullscreen && isPortraitPlayback) {
+                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        } else {
+                            AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        }
+                    },
+                    onRelease = { it.player = null },
+                    modifier = Modifier.fillMaxSize().zIndex(if (primary) 1f else 0f),
+                )
+            }
         }
-
         if (showDanmakuFeature && fullscreenDanmakuMountAllowed) {
             val danmakuBottomReserve = controlBarHeight +
                 VideoControlBarBottomGap +
@@ -1079,6 +1191,7 @@ fun BilibiliVideoSurface(
                             },
                             onSideLevelChange = { isRightSide, level ->
                                 showSpeedMenu = false
+                                showQualityMenu = false
                                 if (isRightSide) {
                                     val maxVolume = audioManager
                                         .getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -1128,8 +1241,9 @@ fun BilibiliVideoSurface(
                                 }
                             },
                             onTap = {
-                                if (controlsVisible || showSpeedMenu) {
+                                if (controlsVisible || showSpeedMenu || showQualityMenu) {
                                     showSpeedMenu = false
+                                    showQualityMenu = false
                                     controlsVisible = false
                                 } else {
                                     controlsVisible = true
@@ -1139,7 +1253,7 @@ fun BilibiliVideoSurface(
                             onDoubleTap = { onPlayPauseState.value() },
                             onLongPress = {
                                 val heldPlayer = activePlayerState.value
-                                if (heldPlayer?.playWhenReady == true && !showSpeedMenu) {
+                                if (heldPlayer?.playWhenReady == true && !showSpeedMenu && !showQualityMenu) {
                                     longPressSpeedBoost = true
                                     selectedSpeed = 2f
                                     heldPlayer.setPlaybackSpeed(2f)
@@ -1269,7 +1383,7 @@ fun BilibiliVideoSurface(
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Medium,
                             ),
-                            maxLines = if (fullscreenLandscape) 1 else 2,
+                            maxLines = 3,
                             overflow = TextOverflow.Ellipsis,
                         )
                         val authorName = resolvedPlaybackMetadata.artist.trim()
@@ -1416,8 +1530,17 @@ fun BilibiliVideoSurface(
                 onScrubCommit = { onScrubCommitState.value(it) },
                 onPlayPause = { onPlayPauseState.value() },
                 onSpeedClick = {
+                    showQualityMenu = false
                     controlsVisible = true
                     showSpeedMenu = !showSpeedMenu
+                },
+                qualityLabel = videoQualityLabel(selectedQuality),
+                onQualityPosition = { qualityCenter = it },
+                onSpeedPosition = { speedCenter = it },
+                onQualityClick = {
+                    showSpeedMenu = false
+                    showQualityMenu = !showQualityMenu
+                    controlsVisible = true
                 },
                 showDanmakuToggle = showDanmakuFeature,
                 danmakuVisible = danmakuVisible,
@@ -1436,6 +1559,7 @@ fun BilibiliVideoSurface(
                     controlsVisible = false
                     showEpisodePicker = true
                 },
+                onEpisodePickerPosition = { episodeAnchorLeft = it },
                 isFullscreen = isFullscreen,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1459,14 +1583,26 @@ fun BilibiliVideoSurface(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .zIndex(11f)
-                    .padding(
-                        end = if (isFullscreen) 48.dp else 42.dp,
-                        bottom = (if (isFullscreen) 40.dp else 8.dp) +
-                            controlBarHeight + 8.dp,
-                    ),
+                    .alignVideoPopup(speedCenter, surfaceBounds)
+                    .padding(bottom = controlBarHeight + (if (isFullscreen) 48.dp else 16.dp)),
             )
         }
 
+        if (showQualityMenu && controlsEnabled && !showDanmakuSettings && !showEpisodePicker) {
+            VideoQualityPopup(
+                qualities = (stream.qualityUrls.keys + stream.quality).filter { it > 0 }.sortedDescending(),
+                selectedQuality = selectedQuality,
+                backdrop = layerBackdrop,
+                onSelected = { quality ->
+                    if (quality != selectedQuality && retiredQualityPlayer == null) requestedQuality = quality
+                    showQualityMenu = false
+                    controlsHideSignal++
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).zIndex(11f)
+                    .alignVideoPopup(qualityCenter, surfaceBounds)
+                    .padding(bottom = controlBarHeight + (if (isFullscreen) 48.dp else 16.dp)),
+            )
+        }
         val scrubProgressFraction = if (durationMs > 0L) {
             (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
         } else {
@@ -1504,6 +1640,10 @@ fun BilibiliVideoSurface(
             pickerState = episodePicker,
             onDismiss = { showEpisodePicker = false },
             backdrop = layerBackdrop,
+            anchorFromRight = with(LocalDensity.current) {
+                (surfaceBounds.right - episodeAnchorLeft).coerceAtLeast(0f).toDp()
+            },
+            bottomInset = controlBarHeight + (if (isFullscreen) 48.dp else 16.dp),
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(30f),
@@ -1522,6 +1662,10 @@ private fun VideoControls(
     onScrubPreview: (Long) -> Unit,
     onScrubCommit: (Long) -> Unit,
     onSpeedClick: () -> Unit,
+    qualityLabel: String = "清晰度",
+    onQualityClick: () -> Unit = {},
+    onQualityPosition: (Float) -> Unit = {},
+    onSpeedPosition: (Float) -> Unit = {},
     isScrubbing: Boolean,
     onScrubbingChange: (Boolean) -> Unit,
     showDanmakuToggle: Boolean = false,
@@ -1530,26 +1674,18 @@ private fun VideoControls(
     onDanmakuLongPress: () -> Unit = {},
     showEpisodePickerButton: Boolean = false,
     onEpisodePickerClick: () -> Unit = {},
+    onEpisodePickerPosition: (Float) -> Unit = {},
     isFullscreen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    val controlSpacing = if (isFullscreen) 12.dp else 6.dp
-    val playToDanmakuExtra = when {
-        isFullscreen -> 6.dp
-        else -> 4.dp
-    }
-    val rightControlExtra = if (isFullscreen) 6.dp else 0.dp
-    val compactTimeControls = durationMs in 1 until CompactVideoDurationThresholdMs
-    val timeLabelMinWidth = if (compactTimeControls) 36.dp else 42.dp
-    val speedControlMinWidth = when {
-        isFullscreen -> 42.dp
-        compactTimeControls -> 30.dp
-        else -> 34.dp
-    }
-    val speedToRemainingExtra = when {
-        isFullscreen -> rightControlExtra
-        compactTimeControls -> 0.dp
-        else -> 4.dp
+    val controlSpacing = if (isFullscreen) 36.dp else 27.dp
+    val controlFontSize = 14.sp
+    val timeStyle = videoControlLabelTextStyle(fontSize = controlFontSize, fontWeight = FontWeight.Bold)
+        .copy(fontFeatureSettings = "tnum")
+    val timePattern = formatVideoTime(durationMs.coerceAtLeast(0L)).replace(Regex("[0-9]"), "8")
+    val timeMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val timeWidth = with(LocalDensity.current) {
+        timeMeasurer.measure(timePattern, timeStyle, maxLines = 1).size.width.toDp() + 1.dp
     }
     val progress = if (durationMs > 0L) {
         (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
@@ -1588,11 +1724,12 @@ private fun VideoControls(
             horizontalArrangement = Arrangement.spacedBy(controlSpacing),
         ) {
             Text(
-                text = formatVideoTime(positionMs),
-                modifier = Modifier.widthIn(min = timeLabelMinWidth),
+                text = formatVideoTime(positionMs.coerceIn(0L, durationMs.coerceAtLeast(0L))),
+                modifier = Modifier.width(timeWidth),
                 color = Color.White,
-                style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                style = timeStyle,
                 maxLines = 1,
+                textAlign = TextAlign.End,
             )
             IconButton(
                 onClick = onPlayPause,
@@ -1608,13 +1745,10 @@ private fun VideoControls(
                 )
             }
             if (showDanmakuToggle) {
-                if (playToDanmakuExtra > 0.dp) {
-                    Spacer(Modifier.width(playToDanmakuExtra))
-                }
                 Box(
                     modifier = Modifier
                         .zIndex(1f)
-                        .sizeIn(minWidth = 28.dp, minHeight = 28.dp)
+                        .sizeIn(minHeight = 28.dp)
                         .pointerInput(onDanmakuToggle, onDanmakuLongPress) {
                             detectTapGestures(
                                 onTap = { onDanmakuToggle() },
@@ -1627,7 +1761,7 @@ private fun VideoControls(
                         text = "弹",
                         color = if (danmakuVisible) Color.White else Color.White.copy(alpha = 0.42f),
                         style = videoControlLabelTextStyle(
-                            fontSize = 14.sp,
+                            fontSize = controlFontSize,
                             fontWeight = if (danmakuVisible) FontWeight.Bold else FontWeight.Normal,
                         ),
                     )
@@ -1648,11 +1782,20 @@ private fun VideoControls(
                         )
                     },
             )
+            Text(
+                text = qualityLabel,
+                color = Color.White,
+                modifier = Modifier
+                    .onGloballyPositioned { onQualityPosition(it.boundsInWindow().center.x) }
+                    .clickable(onClick = onQualityClick),
+                style = videoControlLabelTextStyle(fontSize = controlFontSize, fontWeight = FontWeight.Bold),
+            )
             if (showEpisodePickerButton) {
                 Box(
                     modifier = Modifier
                         .zIndex(1f)
-                        .sizeIn(minWidth = 40.dp, minHeight = 28.dp)
+                        .onGloballyPositioned { onEpisodePickerPosition(it.boundsInWindow().left) }
+                        .sizeIn(minHeight = 28.dp)
                         .clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() },
@@ -1663,17 +1806,15 @@ private fun VideoControls(
                     Text(
                         text = "选集",
                         color = Color.White,
-                        style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                        style = videoControlLabelTextStyle(fontSize = controlFontSize, fontWeight = FontWeight.Bold),
                     )
                 }
-            }
-            if (showEpisodePickerButton && rightControlExtra > 0.dp) {
-                Spacer(Modifier.width(rightControlExtra))
             }
             Box(
                 modifier = Modifier
                     .zIndex(2f)
-                    .sizeIn(minWidth = speedControlMinWidth, minHeight = 28.dp)
+                    .onGloballyPositioned { onSpeedPosition(it.boundsInWindow().center.x) }
+                    .sizeIn(minHeight = 28.dp)
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() },
@@ -1684,87 +1825,101 @@ private fun VideoControls(
                 Text(
                     text = speedLabel(speed),
                     color = Color.White,
-                    style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                    style = videoControlLabelTextStyle(fontSize = controlFontSize, fontWeight = FontWeight.Bold),
                     maxLines = 1,
                 )
             }
-            if (speedToRemainingExtra > 0.dp) {
-                Spacer(Modifier.width(speedToRemainingExtra))
-            }
             Text(
                 text = formatVideoTime((durationMs - positionMs).coerceAtLeast(0L)),
-                modifier = Modifier.widthIn(min = timeLabelMinWidth),
+                modifier = Modifier.width(timeWidth),
                 color = Color.White,
-                style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                style = timeStyle,
                 maxLines = 1,
-                textAlign = TextAlign.End,
+                textAlign = TextAlign.Start,
             )
         }
     }
+}
+
+private fun Modifier.alignVideoPopup(
+    anchorCenter: Float,
+    surfaceBounds: androidx.compose.ui.geometry.Rect,
+): Modifier = layout { measurable, constraints ->
+    val popup = measurable.measure(constraints)
+    val minOffset = -(surfaceBounds.width - popup.width).coerceAtLeast(0f)
+    val offset = (anchorCenter - surfaceBounds.right + popup.width / 2f)
+        .coerceIn(minOffset, 0f).roundToInt()
+    layout(popup.width, popup.height) { popup.place(offset, 0) }
 }
 
 @Composable
 private fun VideoSpeedPopup(
-    selectedSpeed: Float,
-    backdrop: Backdrop,
-    onSpeedSelected: (Float) -> Unit,
+    selectedSpeed: Float, backdrop: Backdrop, onSpeedSelected: (Float) -> Unit,
     modifier: Modifier = Modifier,
+) = VideoOptionPopup(VideoSpeedOptions.map(::speedLabel), VideoSpeedOptions.indexOf(selectedSpeed), backdrop,
+    { onSpeedSelected(VideoSpeedOptions[it]) }, modifier)
+
+@Composable
+private fun VideoOptionPopup(
+    labels: List<String>, selectedIndex: Int, backdrop: Backdrop,
+    onSelected: (Int) -> Unit, modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier
-            .width(246.dp)
-            .height(42.dp)
-            .graphicsLayer { clip = false }
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { VideoControlCapsuleShape },
-                effects = { liquidLargeCapsuleGlassEffects() },
-                highlight = { com.kyant.backdrop.highlight.Highlight.Default },
-                shadow = null,
-                onDrawSurface = {},
-            )
-            .border(VideoControlBorderWidth, VideoControlBorderColor, VideoControlCapsuleShape)
-            .clip(VideoControlCapsuleShape)
-            .padding(horizontal = 5.dp, vertical = 5.dp),
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val style = videoControlLabelTextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    val density = LocalDensity.current
+    val contentWidth = labels.maxOfOrNull { measurer.measure(it, style).size.width } ?: 0
+    val menuWidth = with(density) { contentWidth.toDp() } + 30.dp
+    Column(
+        modifier.width(menuWidth).heightIn(max = 240.dp)
+            .videoPopupGlass(backdrop)
+            .verticalScroll(rememberScrollState()).padding(5.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            VideoSpeedOptions.forEach { option ->
-                val selected = selectedSpeed == option
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(
-                            if (selected) BiliPink.copy(alpha = 0.88f) else Color.Transparent,
-                        )
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                            onClick = { onSpeedSelected(option) },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = speedLabel(option),
-                        color = Color.White,
-                        style = videoControlLabelTextStyle(
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                        maxLines = 1,
-                    )
-                }
+        labels.forEachIndexed { index, label ->
+            Box(Modifier.fillMaxWidth().height(26.dp).clip(RoundedCornerShape(8.dp))
+                .background(if (index == selectedIndex) BiliPink.copy(alpha = 0.88f) else Color.Transparent)
+                .clickable { onSelected(index) }, contentAlignment = Alignment.Center) {
+                Text(label, color = Color.White, style = style, maxLines = 1)
             }
         }
     }
 }
-
+internal fun Modifier.videoPopupGlass(backdrop: Backdrop): Modifier {
+    val shape = RoundedCornerShape(12.dp)
+    return drawBackdrop(
+        backdrop = backdrop,
+        shape = { shape },
+        effects = { liquidLargeCapsuleGlassEffects() },
+        highlight = { com.kyant.backdrop.highlight.Highlight.Default },
+        shadow = null,
+        onDrawSurface = {},
+    ).border(VideoControlBorderWidth, VideoControlBorderColor, shape).clip(shape)
+}
 private val VideoControlCapsuleShape = RoundedCornerShape(percent = 50)
+private fun videoQualityLabel(id: Int): String = when (id) {
+    127 -> "8K"
+    126 -> "杜比视界"
+    125 -> "HDR"
+    120 -> "4K"
+    116 -> "1080P60"
+    112 -> "1080P高码率"
+    80 -> "1080P"
+    74 -> "720P60"
+    64 -> "720P"
+    32 -> "480P"
+    16 -> "360P"
+    else -> "清晰度"
+}
+
+@Composable
+private fun VideoQualityPopup(
+    qualities: List<Int>, selectedQuality: Int, backdrop: Backdrop,
+    onSelected: (Int) -> Unit, modifier: Modifier = Modifier,
+) = VideoOptionPopup(
+    if (qualities.isEmpty()) listOf("暂无可选清晰度") else qualities.map(::videoQualityLabel),
+    qualities.indexOf(selectedQuality), backdrop,
+    { index -> qualities.getOrNull(index)?.let(onSelected) }, modifier,
+)
 private val VideoFullscreenButtonShape = CircleShape
 
 @Composable

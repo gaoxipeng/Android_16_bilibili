@@ -28,8 +28,9 @@ import kotlin.math.abs
 
 /** Video details without a source-card rectangle (history, favourites, etc.). */
 @Composable
-internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, content: @Composable () -> Unit) {
+internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo: Boolean = true, onProgress: (Float) -> Unit = {}, content: @Composable () -> Unit) {
     val back by rememberUpdatedState(onSwipeBack)
+    val progressCallback by rememberUpdatedState(onProgress)
     val drag = remember { Animatable(0f) }
     var settling by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -38,7 +39,7 @@ internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, content: @Composable
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             val backAction = back
-            if (backAction == null || settling || down.position.y < statusTop + size.width * 9f / 16f) return@awaitEachGesture
+            if (backAction == null || settling || (restrictToBelowVideo && down.position.y < statusTop + size.width * 9f / 16f)) return@awaitEachGesture
             var dx = 0f
             var dy = 0f
             var claimed = false
@@ -54,6 +55,7 @@ internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, content: @Composable
                 if (claimed) {
                     change.consume()
                     val offset = dx.coerceIn(0f, size.width.toFloat())
+                    progressCallback(offset / size.width.coerceAtLeast(1))
                     scope.launch { drag.snapTo(offset) }
                 }
             }
@@ -62,7 +64,7 @@ internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, content: @Composable
                 val width = size.width.toFloat()
                 val commit = dx > width * 0.24f
                 scope.launch {
-                    drag.animateTo(if (commit) width else 0f, tween(220))
+                    drag.animateTo(if (commit) width else 0f, tween(220)) { progressCallback(value / width.coerceAtLeast(1f)) }
                     // Retain the offscreen position while the existing navigation exit
                     // completes; resetting to zero here would flash the departing page.
                     if (commit) backAction() else settling = false
