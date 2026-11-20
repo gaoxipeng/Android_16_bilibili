@@ -1795,6 +1795,9 @@ private fun AppNavStackLayers(
                 coverOrigin = (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin,
                 coverSnapshot = (layer.entry as? AppNavEntry.VideoDetail)?.coverSnapshot,
                 onSwipeBack = if (isTop && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
+                onAnimatedSystemBack = onPopNav.takeIf {
+                    isTop && layer.entry is AppNavEntry.UserProfile && coordinator.fullscreenKey == null
+                },
                 pageSwipeBack = layer.entry is AppNavEntry.VideoDetail,
                 standardPageMotion = layer.entry !is AppNavEntry.Search && layer.entry !is AppNavEntry.DynamicDetail && (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin == null,
             ) { activeEntry ->
@@ -1927,7 +1930,6 @@ private fun AppNavEntryContent(
             }
         }
         is AppNavEntry.UserProfile -> {
-            BackHandler(enabled = isActive, onBack = onPopNav)
             UserProfileScreen(
                 onSwipeBackEnabledChange = onVideoSwipeBackEnabledChange,
                 mid = entry.mid,

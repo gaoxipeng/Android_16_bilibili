@@ -95,6 +95,7 @@ fun <T> NavAnimatedOverlay(
     onSwipeBack: (() -> Unit)? = null,
     pageSwipeBack: Boolean = false,
     standardPageMotion: Boolean = false,
+    onAnimatedSystemBack: (() -> Unit)? = null,
     content: @Composable (T) -> Unit,
 ) {
     val navTransitions = LocalNavTransitionCoordinator.current
@@ -207,6 +208,7 @@ fun <T> NavAnimatedOverlay(
                     VideoPageSwipeBack(
                         onSwipeBack = onSwipeBack,
                         restrictToBelowVideo = pageSwipeBack,
+                        onSystemBack = onAnimatedSystemBack,
                         onProgress = { fraction ->
                             swipeProgress = fraction
                             if (standardPageMotion) {

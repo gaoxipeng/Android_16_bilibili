@@ -2,6 +2,9 @@ package com.example.bilibili.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
@@ -28,14 +31,28 @@ import kotlin.math.abs
 
 /** Video details without a source-card rectangle (history, favourites, etc.). */
 @Composable
-internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo: Boolean = true, onProgress: (Float) -> Unit = {}, content: @Composable () -> Unit) {
+internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo: Boolean = true, onProgress: (Float) -> Unit = {}, onSystemBack: (() -> Unit)? = null, content: @Composable () -> Unit) {
     val back by rememberUpdatedState(onSwipeBack)
     val progressCallback by rememberUpdatedState(onProgress)
     val drag = remember { Animatable(0f) }
     var settling by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    var pageWidth by remember { mutableIntStateOf(0) }
+    fun settle(width: Float, onCommit: (() -> Unit)?) {
+        if (settling) return
+        settling = true
+        scope.launch {
+            drag.animateTo(if (onCommit != null) width else 0f, tween(220)) {
+                progressCallback(value / width.coerceAtLeast(1f))
+            }
+            if (onCommit != null) onCommit() else settling = false
+        }
+    }
+    BackHandler(enabled = onSystemBack != null) {
+        settle(pageWidth.toFloat(), onSystemBack)
+    }
     val statusTop = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
-    Box(Modifier.fillMaxSize().pointerInput(Unit) {
+    Box(Modifier.fillMaxSize().onSizeChanged { pageWidth = it.width }.pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             val backAction = back
@@ -52,6 +69,7 @@ internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo
                 if (!claimed && (dx < -viewConfiguration.touchSlop ||
                     abs(dy) > viewConfiguration.touchSlop && abs(dy) > abs(dx))) break
                 if (!claimed && dx > viewConfiguration.touchSlop && dx > abs(dy) * 1.2f) claimed = true
+                if (settling) break
                 if (claimed) {
                     change.consume()
                     val offset = dx.coerceIn(0f, size.width.toFloat())
@@ -60,15 +78,8 @@ internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo
                 }
             }
             if (claimed) {
-                settling = true
                 val width = size.width.toFloat()
-                val commit = dx > width * 0.24f
-                scope.launch {
-                    drag.animateTo(if (commit) width else 0f, tween(220)) { progressCallback(value / width.coerceAtLeast(1f)) }
-                    // Retain the offscreen position while the existing navigation exit
-                    // completes; resetting to zero here would flash the departing page.
-                    if (commit) backAction() else settling = false
-                }
+                settle(width, backAction.takeIf { dx > width * 0.24f })
             }
         }
     }) {
