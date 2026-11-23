@@ -209,6 +209,8 @@ fun BilibiliApp() {
     val appearanceSettingsStore = remember { AppearanceSettingsStore(context) }
     var appearanceMode by remember { mutableStateOf(appearanceSettingsStore.readAppearanceMode()) }
     val bottomBarDisplaySettingsStore = remember { BottomBarDisplaySettingsStore(context) }
+    var hiddenBottomTabs by remember { mutableStateOf(bottomBarDisplaySettingsStore.readHiddenTabs()) }
+    val visibleBottomTabs = MainTab.entries.filter { it.isRequired || it.name !in hiddenBottomTabs }
     var autoHideBarsOnScroll by remember {
         mutableStateOf(bottomBarDisplaySettingsStore.readAutoHideOnScroll())
     }
@@ -1284,6 +1286,13 @@ fun BilibiliApp() {
 
     BilibiliTheme(darkTheme = darkTheme) {
     CompositionLocalProvider(
+        LocalBottomTabSettings provides BottomTabSettings(hiddenBottomTabs) { tab, visible ->
+            if (!tab.isRequired) {
+                hiddenBottomTabs = if (visible) hiddenBottomTabs - tab.name else hiddenBottomTabs + tab.name
+                bottomBarDisplaySettingsStore.writeHiddenTabs(hiddenBottomTabs)
+                if (!visible && selectedTab == tab) handleBottomTabClick(MainTab.Home)
+            }
+        },
         LocalLiquidMenuBackdrop provides bottomBarBackdrop,
         LocalBilibiliCredential provides activeAccount?.credential,
         LocalWatchHistoryReporter provides watchHistoryReporter,
@@ -1448,6 +1457,7 @@ fun BilibiliApp() {
                 KeepAliveTabLayer(visible = selectedTab == MainTab.Mine) {
                     val account = activeAccount
                     MineScreen(
+                        settingsBackEnabled = selectedTab == MainTab.Mine && navStack.isEmpty(),
                         loggedIn = account != null,
                         mid = account?.uid?.toLongOrNull() ?: 0L,
                         seedName = account?.name.orEmpty(),
@@ -1512,6 +1522,7 @@ fun BilibiliApp() {
 
             AppNavStackLayers(
                 navStack = navStack,
+                historyUnderlay = selectedTab == MainTab.History,
                 exitingLayer = navController.exitingLayer,
                 pendingEnterKey = navController.pendingEnterKey,
                 pendingExitKey = navController.pendingExitKey,
@@ -1685,6 +1696,7 @@ fun BilibiliApp() {
                         .zIndex(20f),
                 ) {
                     BilibiliLiquidBottomBar(
+                        tabs = visibleBottomTabs,
                         selectedTab = selectedTab,
                         selectedHomeLabel = MainTab.Home.label,
                         onTabClick = ::handleBottomTabClick,
@@ -1732,6 +1744,7 @@ private data class NavRenderLayer(
 @Composable
 private fun AppNavStackLayers(
     navStack: List<AppNavEntry>,
+    historyUnderlay: Boolean,
     exitingLayer: NavExitingLayer?,
     pendingEnterKey: String?,
     pendingExitKey: String?,
@@ -1808,7 +1821,8 @@ private fun AppNavStackLayers(
                 onSwipeBack = if (isTop && exitingLayer == null && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
                 onAnimatedSystemBack = onPopNav.takeIf {
                     isTop && exitingLayer == null && coordinator.fullscreenKey == null &&
-                        usesPageReturn && layer.entry !is AppNavEntry.VideoDetail
+                        usesPageReturn && (layer.entry !is AppNavEntry.VideoDetail ||
+                            layer.entry.coverOrigin != null || historyUnderlay && layer.index == 0)
                 },
                 passTouchesDuringExit = layer.entry is AppNavEntry.VideoDetail,
                 pageSwipeBack = layer.entry is AppNavEntry.VideoDetail,
@@ -1964,6 +1978,7 @@ private fun AppNavEntryContent(
                     onOpenRelationList(entry.mid, name, face, sign, tab)
                 },
                 enableSettings = myMid != null && myMid == entry.mid,
+                settingsBackEnabled = isActive,
                 feedColumnCount = feedColumnCount,
                 onFeedColumnCountChange = onFeedColumnCountChange,
                 autoHideBarsOnScroll = autoHideBarsOnScroll,

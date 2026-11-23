@@ -199,6 +199,7 @@ fun UserProfileScreen(
     coordinator: VideoPlaybackCoordinator,
     onVideoClick: (BiliVideoItem) -> Unit,
     onSwipeBackEnabledChange: (Boolean) -> Unit = {},
+    settingsBackEnabled: Boolean = true,
     onDynamicClick: (BiliDynamicItem) -> Unit = {},
     onArticleClick: (String, String) -> Unit = { _, _ -> },
     onEnsurePlayStream: (BiliVideoItem) -> Unit = {},
@@ -619,6 +620,7 @@ fun UserProfileScreen(
             onBottomBarGlassAmountChange = onBottomBarGlassAmountChange,
             onBottomBarGlassAmountCommit = onBottomBarGlassAmountCommit,
             onBack = { showSettings = false },
+            handleSystemBack = settingsBackEnabled,
             modifier = Modifier.fillMaxSize(),
         )
         return

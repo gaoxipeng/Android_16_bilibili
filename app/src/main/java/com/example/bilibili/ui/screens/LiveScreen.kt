@@ -1,6 +1,10 @@
 package com.example.bilibili.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -49,7 +53,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,6 +79,8 @@ import com.example.bilibili.ui.components.ObserveStaggeredGridNearEnd
 import com.example.bilibili.ui.components.RemoteImage
 import com.example.bilibili.ui.components.VideoCoverBottomScrim
 import com.example.bilibili.ui.components.VideoCoverOverlayText
+import com.example.bilibili.ui.components.VideoCoverMotion
+import com.example.bilibili.ui.components.consumeTouchEvents
 import com.example.bilibili.ui.components.VideoFeedAuthorAvatar
 import com.example.bilibili.ui.components.VideoFeedCardCorner
 import com.example.bilibili.ui.components.SlidingTextTabs
@@ -81,6 +94,12 @@ private enum class LiveContentTab(val label: String) {
     Following("关注"),
     Recommend("推荐"),
 }
+
+private data class LiveRoomOpen(
+    val room: BiliLiveRoom,
+    val coverBounds: Rect?,
+    val coverSnapshot: ImageBitmap?,
+)
 
 private val LiveAllArea = BiliLiveArea(id = 0L, name = "全部")
 
@@ -130,7 +149,7 @@ fun LiveScreen(
     var followingLoaded by remember { mutableStateOf(false) }
 
     var refreshing by remember { mutableStateOf(false) }
-    var activeRoom by remember { mutableStateOf<BiliLiveRoom?>(null) }
+    var activeRoom by remember { mutableStateOf<LiveRoomOpen?>(null) }
 
     LaunchedEffect(activeRoom) {
         onLiveRoomOpenChange(activeRoom != null)
@@ -428,22 +447,41 @@ fun LiveScreen(
             }
         }
 
-        activeRoom?.let { room ->
-            Box(
+        activeRoom?.let { opened ->
+            val visibility = remember(opened) { MutableTransitionState(true) }
+            LaunchedEffect(visibility.isIdle, visibility.currentState) {
+                if (visibility.isIdle && !visibility.currentState) activeRoom = null
+            }
+            AnimatedVisibility(
+                visibleState = visibility,
+                enter = EnterTransition.None,
+                exit = ExitTransition.None,
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(20f),
+                    .zIndex(20f)
+                    .consumeTouchEvents(),
             ) {
-                LiveRoomScreen(
-                    room = room,
-                    api = api,
-                    credential = credential,
-                    coordinator = coordinator,
-                    onBack = { activeRoom = null },
-                    onOpenAnchorProfile = onOpenAnchorProfile,
-                    navOverlayOpen = navOverlayOpen,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                val roomContent: @Composable () -> Unit = {
+                    LiveRoomScreen(
+                        room = opened.room,
+                        api = api,
+                        credential = credential,
+                        coordinator = coordinator,
+                        onBack = { visibility.targetState = false },
+                        onOpenAnchorProfile = onOpenAnchorProfile,
+                        navOverlayOpen = navOverlayOpen || !visibility.targetState,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                val cover = opened.coverBounds
+                if (cover != null) {
+                    VideoCoverMotion(
+                        cover, opened.coverSnapshot, onSwipeBack = null, onSystemBack = null,
+                        visualOnly = !visibility.targetState, revealFeedVideo = false, content = roomContent,
+                    )
+                } else {
+                    roomContent()
+                }
             }
         }
     }
@@ -508,7 +546,7 @@ private fun LiveRoomGridPage(
     emptyHint: String,
     gridState: androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState,
     contentPadding: PaddingValues,
-    onRoomClick: (BiliLiveRoom) -> Unit,
+    onRoomClick: (LiveRoomOpen) -> Unit,
     loadingMore: Boolean = false,
 ) {
     when {
@@ -543,7 +581,7 @@ private fun LiveRoomGridPage(
                 verticalItemSpacing = HomeFeedGridSpacing,
             ) {
                 items(rooms, key = { it.roomId }) { room ->
-                    LiveRoomCard(room = room, onClick = { onRoomClick(room) })
+                    LiveRoomCard(room = room, onClick = onRoomClick)
                 }
             }
         }
@@ -553,7 +591,7 @@ private fun LiveRoomGridPage(
 @Composable
 private fun LiveRoomCard(
     room: BiliLiveRoom,
-    onClick: () -> Unit,
+    onClick: (LiveRoomOpen) -> Unit,
 ) {
     val showFullTitle = com.example.bilibili.data.rememberShowFullVideoTitles()
     val shape = RoundedCornerShape(VideoFeedCardCorner)
@@ -561,6 +599,9 @@ private fun LiveRoomCard(
     val metaBackground = MaterialTheme.colorScheme.surface
     val titleColor = MaterialTheme.colorScheme.onSurface
     val metaColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val scope = rememberCoroutineScope()
+    val coverLayer = rememberGraphicsLayer()
+    var coverBounds by remember(room.roomId) { mutableStateOf<Rect?>(null) }
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -570,13 +611,26 @@ private fun LiveRoomCard(
             containerColor = metaBackground,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp),
-        onClick = onClick,
+        onClick = {
+            val bounds = coverBounds
+            scope.launch {
+                val snapshot = if (bounds != null) runCatching { coverLayer.toImageBitmap() }.getOrNull() else null
+                onClick(LiveRoomOpen(room, bounds, snapshot))
+            }
+        },
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(LiveFeedCoverAspectRatio),
+                    .aspectRatio(LiveFeedCoverAspectRatio)
+                    .onGloballyPositioned {
+                        coverBounds = it.boundsInRoot().takeIf { bounds -> bounds.width > 0 && bounds.height > 0 }
+                    }
+                    .drawWithContent {
+                        coverLayer.record { this@drawWithContent.drawContent() }
+                        drawLayer(coverLayer)
+                    },
             ) {
                 RemoteImage(
                     url = room.coverUrl,

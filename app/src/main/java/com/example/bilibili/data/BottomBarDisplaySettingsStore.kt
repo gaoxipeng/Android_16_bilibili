@@ -7,6 +7,12 @@ class BottomBarDisplaySettingsStore(context: Context) {
 
     fun readAutoHideOnScroll(): Boolean = prefs.getBoolean(KEY_AUTO_HIDE_ON_SCROLL, true)
 
+    fun readHiddenTabs(): Set<String> = prefs.getStringSet(KEY_HIDDEN_TABS, null).orEmpty().toSet()
+
+    fun writeHiddenTabs(tabs: Set<String>) {
+        prefs.edit().putStringSet(KEY_HIDDEN_TABS, tabs).apply()
+    }
+
     fun writeAutoHideOnScroll(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_AUTO_HIDE_ON_SCROLL, enabled).apply()
     }
@@ -28,6 +34,7 @@ class BottomBarDisplaySettingsStore(context: Context) {
     private companion object {
         const val PREFS_NAME = "bilibili_app_prefs"
         const val KEY_AUTO_HIDE_ON_SCROLL = "bottom_bar_auto_hide_on_scroll"
+        const val KEY_HIDDEN_TABS = "bottom_bar_hidden_tabs"
         const val KEY_BOTTOM_BAR_FROST = "bottom_bar_frost_amount"
         const val KEY_BOTTOM_BAR_GLASS = "bottom_bar_glass_amount"
     }

@@ -114,6 +114,7 @@ import com.example.bilibili.player.LiveDanmakuOverlay
 import com.example.bilibili.player.isPortraitVideoSize
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import android.graphics.Color as AndroidColor
@@ -780,6 +781,8 @@ fun LiveRoomScreen(
                 }
             }
         } else {
+            var headerHeightPx by remember(room.roomId) { mutableIntStateOf(0) }
+            val reservedHeaderHeight = with(LocalDensity.current) { headerHeightPx.toDp() }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -795,16 +798,25 @@ fun LiveRoomScreen(
                         }
                     },
             ) {
-                LiveRoomHeaderSlot(
-                    visible = showLiveInfoUi,
-                    room = room,
-                    detail = detail?.copy(likeCount = liveLikeCount ?: detail?.likeCount),
-                    onlineCount = onlineCount,
-                    topRankUsers = rankUsers,
-                    followState = liveHeaderFollowState,
-                    onAnchorClick = onAnchorProfileClick,
-                    backdrop = livePlayerBackdrop,
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = if (liveInfoCleared) reservedHeaderHeight else 0.dp)
+                        .onSizeChanged { size ->
+                            if (!liveInfoCleared && size.height > 0) headerHeightPx = size.height
+                        },
+                ) {
+                    LiveRoomHeaderSlot(
+                        visible = showLiveInfoUi,
+                        room = room,
+                        detail = detail?.copy(likeCount = liveLikeCount ?: detail?.likeCount),
+                        onlineCount = onlineCount,
+                        topRankUsers = rankUsers,
+                        followState = liveHeaderFollowState,
+                        onAnchorClick = onAnchorProfileClick,
+                        backdrop = livePlayerBackdrop,
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()

@@ -49,6 +49,7 @@ import kotlin.math.abs
 
 @Composable
 internal fun BilibiliLiquidBottomBar(
+    tabs: List<MainTab>,
     selectedTab: MainTab,
     selectedHomeLabel: String,
     onTabClick: (MainTab) -> Unit,
@@ -65,7 +66,6 @@ internal fun BilibiliLiquidBottomBar(
     val collapsedSize = 64.dp
     val barHeight = 64.dp
     val animationOverflow = 12.dp
-    val tabs = MainTab.entries
     val selectedIndex = tabs.indexOf(selectedTab).coerceAtLeast(0)
     var tabsMounted by remember { mutableStateOf(expanded) }
     if (expanded) tabsMounted = true

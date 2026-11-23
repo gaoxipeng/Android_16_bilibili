@@ -78,6 +78,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
     onSwipeBack: (() -> Unit)?,
     onSystemBack: (() -> Unit)?,
     visualOnly: Boolean = false,
+    revealFeedVideo: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val progress by transition.animateFloat(
@@ -92,7 +93,9 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
     var committed by remember { mutableStateOf(false) }
     var swiping by remember { mutableStateOf(false) }
     val sourceRadius = remember(source) { VideoCoverOrigins.radius(source) }
-    DisposableEffect(source) { onDispose { VideoCoverOrigins.reveal() } }
+    DisposableEffect(source, revealFeedVideo) {
+        onDispose { if (revealFeedVideo) VideoCoverOrigins.reveal() }
+    }
     val scope = rememberCoroutineScope()
     val back by rememberUpdatedState(onSwipeBack)
     fun finishReturn(onCommit: () -> Unit) {
@@ -107,7 +110,8 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
         onSystemBack?.let(::finishReturn)
     }
     val motionProgress = if (committed) 1f - settle.value else progress
-    val returning = committed || transition.targetState == androidx.compose.animation.EnterExitState.PostExit
+    val returning = visualOnly || committed ||
+        transition.targetState == androidx.compose.animation.EnterExitState.PostExit
     val background = MaterialTheme.colorScheme.background
     val pageBackdrop = LocalLiquidMenuBackdrop.current
     Box(Modifier.fillMaxSize().onGloballyPositioned { root = it.boundsInRoot() }
@@ -168,7 +172,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
                 root.height * motionProgress
             val corner = with(density) {
                 val target = sourceRadius.dp.toPx()
-                val page = if (swiping || committed) 46.dp.toPx() else 0f
+                val page = if (swiping || returning) 46.dp.toPx() else 0f
                 (target * (1f - motionProgress) + page * motionProgress) / scale.coerceAtLeast(0.01f)
             }
             shape = androidx.compose.foundation.shape.GenericShape { size, _ ->

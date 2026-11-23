@@ -24,7 +24,8 @@ sealed interface BiliLinkTarget {
 }
 
 object BiliTextLinkParser {
-    private val UrlPattern = Regex("""https?://[^\s<>"\]）】（\[\]]+""", RegexOption.IGNORE_CASE)
+    private val UrlPattern = Regex("""https?://[^\s<>"\[\]（）【】。，、；！？：“”‘’《》…]+""", RegexOption.IGNORE_CASE)
+    private val ShortLinkPattern = Regex("""https?://b23\.tv/[A-Za-z0-9_-]+(?![A-Za-z0-9_/?#-])""", RegexOption.IGNORE_CASE)
     private val BvPattern = Regex("""(?<![/\w])BV[\w]{10}(?![\w])""", RegexOption.IGNORE_CASE)
     private val AvPattern = Regex("""(?<![/\w])av(\d+)(?![\w])""", RegexOption.IGNORE_CASE)
 
@@ -55,7 +56,12 @@ object BiliTextLinkParser {
 
         val matches = buildList {
             UrlPattern.findAll(text).forEach { match ->
-                add(RawMatch(match.range.first, match.range.last + 1, match.value, MatchKind.Url))
+                val shortLink = ShortLinkPattern.matchAt(text, match.range.first)
+                val url = trimLinkSuffix(shortLink?.value ?: match.value)
+                val start = match.range.first
+                if (url.substringAfter("://").isNotEmpty()) {
+                    add(RawMatch(start, start + url.length, url, MatchKind.Url))
+                }
             }
             BvPattern.findAll(text).forEach { match ->
                 add(RawMatch(match.range.first, match.range.last + 1, match.value, MatchKind.Bvid))

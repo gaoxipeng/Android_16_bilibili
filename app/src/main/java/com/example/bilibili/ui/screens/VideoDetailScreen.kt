@@ -1452,6 +1452,7 @@ fun VideoDetailScreen(
                             contentPlaybackKey = contentPlaybackKey,
                             stream = readyStream,
                             preferredQualityAfterWarmup = originalStream.quality.takeIf { openingStream != null },
+                            initialControlsVisible = false,
                             isFullscreen = false,
                             coordinator = coordinator,
                             backdrop = controlBackdrop,

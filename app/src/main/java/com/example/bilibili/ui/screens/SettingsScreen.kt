@@ -1,5 +1,10 @@
 package com.example.bilibili.ui.screens
 
+import com.example.bilibili.ui.BottomTabSettings
+import com.example.bilibili.ui.LocalBottomTabSettings
+import com.example.bilibili.ui.MainTab
+import androidx.activity.compose.BackHandler
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -128,7 +133,9 @@ fun SettingsScreen(
     onBottomBarGlassAmountCommit: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    handleSystemBack: Boolean = true,
 ) {
+    BackHandler(enabled = handleSystemBack, onBack = onBack)
     val context = androidx.compose.ui.platform.LocalContext.current
     val appVersionName = remember(context) {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
@@ -187,6 +194,9 @@ fun SettingsScreen(
                     )
                 }
                 item {
+                    LocalBottomTabSettings.current?.let { SettingsBottomTabsCard(it) }
+                }
+                item {
                     SettingsEmoticonSyncCard(
                         emoticonCount = syncedEmoticonCount,
                         emoticons = syncedEmoticons,
@@ -223,6 +233,54 @@ fun SettingsScreen(
                     SettingsAboutCard(versionName = appVersionName)
                 }
             }
+    }
+}
+
+@Composable
+private fun SettingsBottomTabsCard(settings: BottomTabSettings) {
+    var expanded by remember { mutableStateOf(false) }
+    SettingsPlainCard {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("底部导航", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "选择要显示的标签。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                SettingsExpandIndicator(expanded = expanded, rotateOnExpand = true)
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                    MainTab.entries.forEach { tab ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(tab.label, modifier = Modifier.weight(1f))
+                            if (tab.isRequired) {
+                                Text(
+                                    "固定显示",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                SettingsLiquidToggle(
+                                    checked = tab.name !in settings.hiddenTabs,
+                                    onCheckedChange = { settings.onVisibilityChange(tab, it) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -606,7 +664,7 @@ private fun SettingsAboutCard(versionName: String) {
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "哔哩哔哩 · 版本 $versionName",
+                    text = "版本 $versionName",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

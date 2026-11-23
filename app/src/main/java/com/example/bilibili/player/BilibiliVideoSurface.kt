@@ -1050,8 +1050,12 @@ fun BilibiliVideoSurface(
 
     val isSwitchingQuality = requestedQuality != null
     LaunchedEffect(isPlaying, isBuffering, controlsHideSignal, showSpeedMenu, showQualityMenu, isSwitchingQuality) {
-        if (!isPlaying || isBuffering || showSpeedMenu || showQualityMenu || isSwitchingQuality) {
+        if (showSpeedMenu || showQualityMenu || isSwitchingQuality) {
             controlsVisible = true
+            return@LaunchedEffect
+        }
+        if (!isPlaying || isBuffering) {
+            if (initialControlsVisible) controlsVisible = true
             return@LaunchedEffect
         }
         delay(2_000)

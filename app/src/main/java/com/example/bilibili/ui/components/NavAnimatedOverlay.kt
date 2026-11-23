@@ -195,7 +195,8 @@ fun <T> NavAnimatedOverlay(
         ) { if (it == EnterExitState.Visible) 1f else 0f }
         var swipeProgress by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
         SideEffect {
-            navTransitions.pageProgress[layerKey] = if (standardPageMotion) motion * (1f - swipeProgress) else 0f
+            navTransitions.pageProgress[layerKey] =
+                if (standardPageMotion) motion * (1f - swipeProgress) else 0f
         }
         DisposableEffect(layerKey) {
             onDispose { navTransitions.pageProgress.remove(layerKey) }
@@ -208,7 +209,8 @@ fun <T> NavAnimatedOverlay(
                     .then(if (visualOnly) Modifier else Modifier.consumeTouchEvents()),
             ) {
                 val pageContent: @Composable () -> Unit = {
-                    if (passTouchesDuringExit) {
+                    // Cover morphs need the live video surface until it blends into the source card.
+                    if (passTouchesDuringExit && coverOrigin == null) {
                         Box(Modifier.fillMaxSize().drawWithContent {
                             if (!visualOnly) exitFrame.record { this@drawWithContent.drawContent() }
                             drawLayer(exitFrame)
