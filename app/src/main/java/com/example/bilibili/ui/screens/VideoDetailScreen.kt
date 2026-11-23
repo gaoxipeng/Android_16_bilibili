@@ -372,7 +372,6 @@ fun VideoDetailScreen(
     }
 
     // System back leaves playback; horizontal paging still switches detail tabs.
-    BackHandler(enabled = playbackActive, onBack = onBack)
 
     suspend fun loadComments(reset: Boolean) {
         val aid = detail?.video?.aid ?: seedVideo.aid
@@ -894,7 +893,6 @@ fun VideoDetailScreen(
             !(coordinator.hasHandoffPlayer(playbackKey) || handoffKey != null),
         )
     }
-    var playerSurfaceWasReady by remember(playbackKey) { mutableStateOf(false) }
     val playerStreamReady = currentStream != null && streamMatchesTarget
     val playbackActiveState = rememberUpdatedState(playbackActive)
     val hasHandoffPlayer = coordinator.hasHandoffPlayer(playbackKey) ||
@@ -912,6 +910,24 @@ fun VideoDetailScreen(
 
     val handleCommentLinkClick: (BiliLinkTarget) -> Unit = { target ->
         when (target) {
+            is BiliLinkTarget.UserMention -> {
+                scope.launch {
+                    try {
+                        val user = api.searchUsers(target.name, 1, credential).items
+                            .filter { it.mid > 0 && it.name == target.name }
+                            .distinctBy { it.mid }.singleOrNull()
+                        if (user != null) {
+                            onAuthorClick(BiliUserProfile(user.mid, user.name, user.face, user.sign, user.level))
+                        } else {
+                            Toast.makeText(context, "未找到该用户", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        Toast.makeText(context, "查找用户失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
             is BiliLinkTarget.UserSpace -> {
                 onAuthorClick(
                     BiliUserProfile(
@@ -1293,7 +1309,6 @@ fun VideoDetailScreen(
     }
 
     val isVideoFullscreen = coordinator.fullscreenKey == playbackKey
-    val showPlayerCover = !playerSurfaceWasReady && !hasHandoffPlayer
     val showPlayerLoadingOverlay = !isVideoFullscreen &&
         !hasHandoffPlayer &&
         (!playerStreamReady || playerSurfaceLoading)
@@ -1422,12 +1437,21 @@ fun VideoDetailScreen(
                         .clipToBounds(),
                 ) {
                     if (playerStreamReady && !isVideoFullscreen) {
-                        val readyStream = currentStream ?: return@Box
+                        val originalStream = currentStream ?: return@Box
+                        val openingStream = remember(playbackKey, originalStream.cid, originalStream.videoUrl) {
+                            if (hasHandoffPlayer) null
+                            else com.example.bilibili.player.VideoWarmup.warmedOpeningStream(originalStream)
+                        }
+                        val readyStream = openingStream?.copy(
+                            lastPlayTimeMs = originalStream.lastPlayTimeMs,
+                            lastPlayCid = originalStream.lastPlayCid,
+                        ) ?: originalStream
                         key(playbackKey) {
                         BilibiliVideoSurface(
                             playbackKey = playbackKey,
                             contentPlaybackKey = contentPlaybackKey,
                             stream = readyStream,
+                            preferredQualityAfterWarmup = originalStream.quality.takeIf { openingStream != null },
                             isFullscreen = false,
                             coordinator = coordinator,
                             backdrop = controlBackdrop,
@@ -1481,27 +1505,18 @@ fun VideoDetailScreen(
                             onLoadingStateChange = { loading ->
                                 if (playbackActiveState.value) {
                                     playerSurfaceLoading = loading
-                                    if (!loading) playerSurfaceWasReady = true
                                 }
                             },
                         )
                         }
                     }
-                    if (showPlayerLoadingOverlay && (showPlayerCover || showDelayedPlayerSpinner)) {
+                    if (showPlayerLoadingOverlay && showDelayedPlayerSpinner) {
                         Box(
                             Modifier
-                                .fillMaxSize()
-                                .background(if (showPlayerCover) Color.Black else Color.Transparent),
+                                .fillMaxSize(),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (showPlayerCover) {
-                                com.example.bilibili.ui.components.RemoteImage(
-                                    url = currentVideo.coverUrl,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                )
-                            }
-                            if (showDelayedPlayerSpinner) VideoPlayerLoadingIndicator()
+                            VideoPlayerLoadingIndicator()
                         }
                     }
                 }
@@ -1545,7 +1560,7 @@ fun VideoDetailScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
-            userScrollEnabled = true,
+            userScrollEnabled = playbackActive,
         ) { page ->
             when (VideoDetailTab.entries[page]) {
                 VideoDetailTab.Intro -> {
@@ -1640,6 +1655,7 @@ fun VideoDetailScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                     onLinkClick = { target ->
                                         when (target) {
+                                            is BiliLinkTarget.UserMention -> handleCommentLinkClick(target)
                                             is BiliLinkTarget.UserSpace -> {
                                                 onAuthorClick(
                                                     BiliUserProfile(

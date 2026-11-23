@@ -22,7 +22,8 @@ internal object VideoWarmup {
     }
 
     suspend fun preload(stream: BiliPlayStream, factory: DataSource.Factory) = withContext(Dispatchers.IO) {
-        listOfNotNull(stream.videoUrl to 2 * 1024 * 1024, stream.audioUrl?.let { it to 256 * 1024 })
+        val openingStream = lowQualityVariant(stream) ?: stream
+        listOfNotNull(openingStream.videoUrl to 1024 * 1024, stream.audioUrl?.let { it to 256 * 1024 })
             .forEach { (url, limit) ->
                 ensureActive()
                 if (get(url) != null || url.contains("m3u8") || url.contains(".mpd")) return@forEach
@@ -44,6 +45,26 @@ internal object VideoWarmup {
                     // Speculative work must never prevent normal playback.
                 } finally { runCatching { source.close() } }
             }
+    }
+
+    fun warmedOpeningStream(stream: BiliPlayStream): BiliPlayStream? {
+        if (stream.resumePositionMs(stream.cid) > 0L) return null
+        val opening = lowQualityVariant(stream) ?: return null
+        return opening.takeIf {
+            get(it.videoUrl) != null && (it.audioUrl == null || get(it.audioUrl) != null)
+        }
+    }
+
+    private fun lowQualityVariant(stream: BiliPlayStream): BiliPlayStream? {
+        if (stream.quality <= 0) return null
+        val entry = stream.qualityUrls.entries.filter { it.key in 1 until stream.quality }
+            .minByOrNull { it.key } ?: return null
+        return stream.copy(
+            quality = entry.key,
+            videoUrl = entry.value,
+            qualityUrls = stream.qualityUrls + (stream.quality to stream.videoUrl),
+            videoDashManifest = null,
+        )
     }
 
     fun factory(upstream: DataSource.Factory): DataSource.Factory = DataSource.Factory {

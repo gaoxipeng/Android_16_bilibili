@@ -27,10 +27,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.bilibili.ui.theme.BiliBlue
+import com.example.bilibili.ui.theme.BiliPink
 import com.example.bilibili.util.BiliLinkTarget
 import com.example.bilibili.util.BiliTextLinkParser
 
-private val MentionPattern = Regex("""@([^ @:：\n]+)""")
+private val MentionPattern = Regex("""@([^\s@:：,，。！？!?、；;]+)""")
+private val ReplyMentionPattern = Regex("""^回复\s+@(.+?)\s*[:：]""")
 
 val LocalBiliSyncedEmoticons = compositionLocalOf<Map<String, String>> { emptyMap() }
 
@@ -59,11 +61,12 @@ fun BiliCommentText(
     emoticons: Map<String, String>,
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
-    mentionColor: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+    mentionColor: Color = BiliPink,
     linkColor: Color = BiliBlue,
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     onLinkClick: ((BiliLinkTarget) -> Unit)? = null,
+    mentionMids: Map<String, Long> = emptyMap(),
 ) {
     val syncedEmoticons = LocalBiliSyncedEmoticons.current
     val resolvedEmoticons = remember(emoticons, syncedEmoticons) {
@@ -73,6 +76,7 @@ fun BiliCommentText(
     val hasMentions = remember(text) { MentionPattern.containsMatchIn(text) }
     val linkRanges = remember(text) { commentLinkRanges(text) }
     val hasLinks = linkRanges.isNotEmpty()
+    val replyMention = remember(text) { ReplyMentionPattern.find(text) }
     if (resolvedEmoticons.isEmpty() && !hasMentions && !hasLinks) {
         Text(
             text = text,
@@ -115,13 +119,32 @@ fun BiliCommentText(
                 index += phrase.length
                 continue
             }
-            val mention = MentionPattern.find(text, index)
-            if (mention != null && mention.range.first == index) {
-                withStyle(SpanStyle(color = mentionColor)) {
-                    append(mention.value)
+            if (text[index] == '@') {
+                val replyName = replyMention?.groups?.get(1)
+                    ?.takeIf { it.range.first == index + 1 }?.value?.trimEnd()
+                val knownName = mentionMids.keys
+                    .filter { text.startsWith(it, index + 1) }
+                    .filter { name ->
+                        val next = text.getOrNull(index + 1 + name.length)
+                        next == null || next.isWhitespace() || next in "@:：,，。！？!?、；;"
+                    }.maxByOrNull { it.length }
+                val name = replyName ?: knownName ?: MentionPattern.matchAt(text, index)?.groupValues?.get(1)
+                if (!name.isNullOrEmpty()) {
+                    val mid = mentionMids[name]
+                    if (onLinkClick != null) {
+                        val target = if (mid != null) BiliLinkTarget.UserSpace(mid)
+                            else BiliLinkTarget.UserMention(name)
+                        withLink(LinkAnnotation.Clickable(
+                            tag = "mention-$index",
+                            styles = TextLinkStyles(style = SpanStyle(color = mentionColor)),
+                            linkInteractionListener = { onLinkClick(target) },
+                        )) { append("@$name") }
+                    } else {
+                        withStyle(SpanStyle(color = mentionColor)) { append("@$name") }
+                    }
+                    index += name.length + 1
+                    continue
                 }
-                index = mention.range.last + 1
-                continue
             }
             val linkRange = linkRanges.firstOrNull { it.start == index }
             if (linkRange != null) {

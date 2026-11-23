@@ -233,6 +233,11 @@ fun createExoPlayer(
         .build()
     return ExoPlayer.Builder(context)
         .setAudioAttributes(audioAttributes, true)
+        .setLoadControl(
+            androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                .setBufferDurationsMs(50_000, 50_000, 750, 5_000)
+                .build(),
+        )
         .build()
         .apply {
             volume = 1f

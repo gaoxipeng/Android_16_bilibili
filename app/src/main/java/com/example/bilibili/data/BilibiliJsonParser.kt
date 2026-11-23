@@ -818,6 +818,21 @@ object BilibiliJsonParser {
                 emptyList()
             },
             isPinned = isPinned,
+            mentionMids = buildMap {
+                content.optJSONObject("at_name_to_mid")?.let { mentions ->
+                    for (name in mentions.keys()) {
+                        val mid = mentions.optLong(name)
+                        if (name.isNotBlank() && mid > 0L) put(name.removePrefix("@"), mid)
+                    }
+                }
+                val members = content.optJSONArray("members")
+                for (index in 0 until (members?.length() ?: 0)) {
+                    val mentioned = members?.optJSONObject(index) ?: continue
+                    val name = mentioned.optString("uname")
+                    val mid = mentioned.optLong("mid")
+                    if (name.isNotBlank() && mid > 0L) put(name, mid)
+                }
+            },
         )
     }
 

@@ -472,6 +472,7 @@ data class BiliCommentItem(
     val pictures: List<BiliCommentPicture> = emptyList(),
     val replies: List<BiliCommentItem> = emptyList(),
     val isPinned: Boolean = false,
+    val mentionMids: Map<String, Long> = emptyMap(),
 )
 
 data class BiliPlayInfo(

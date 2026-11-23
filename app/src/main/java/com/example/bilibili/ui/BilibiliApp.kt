@@ -443,16 +443,13 @@ fun BilibiliApp() {
             playUrls.cachePlayStream(video, resolved)
             return@runCatching resolved
         }
-        val detail = api.getVideoView(video.bvid, credential()) ?: return@runCatching null
-        val resolvedVideo = if (targetCid != null && targetCid > 0L) {
-            video.copy(aid = video.aid.takeIf { it > 0L } ?: detail.aid)
-        } else {
-            api.resolveVideoForPlayback(video, credential())
-        }
+        val resolvedVideo = if (targetCid != null) video else api.resolveVideoForPlayback(video, credential())
+        val detail = if (resolvedVideo.cid <= 0L || resolvedVideo.aid <= 0L) {
+            api.getVideoView(resolvedVideo.bvid.ifBlank { video.bvid }, credential())
+        } else null
         val cid = resolvedVideo.cid.takeIf { it > 0L }
-            ?: detail.cid.takeIf { it > 0L }
-            ?: return@runCatching null
-        val aid = resolvedVideo.aid.takeIf { it > 0L } ?: detail.aid
+            ?: detail?.cid?.takeIf { it > 0L } ?: return@runCatching null
+        val aid = resolvedVideo.aid.takeIf { it > 0L } ?: detail?.aid ?: 0L
         val playBvid = resolvedVideo.bvid.takeIf { it.isNotBlank() } ?: video.bvid
         val stream = api.getPlayUrl(
             bvid = playBvid,
@@ -535,7 +532,13 @@ fun BilibiliApp() {
         scope.launch {
             val cred = credential()
             val seededVideo = seedVideoPartPage(video, partPage)
-            val resolvedVideo = api.resolveVideoForPlayback(seededVideo, cred)
+            val resolvedVideo = if (!seededVideo.isPgcPlayback() &&
+                seededVideo.bvid.isNotBlank() && seededVideo.cid > 0L && seededVideo.aid > 0L
+            ) {
+                seededVideo
+            } else {
+                api.resolveVideoForPlayback(seededVideo, cred)
+            }
             if (navController.top !is AppNavEntry.VideoDetail) return@launch
             if (shouldPush && (navController.top as AppNavEntry.VideoDetail).video.bvid != initialVideo.bvid) return@launch
             // Match Mac: always refresh playurl on detail open so last_play_* is current.
@@ -797,6 +800,7 @@ fun BilibiliApp() {
     }
 
     fun popNavEntry() {
+        if (navController.exitingLayer != null) return
         val removed = navController.pop() ?: return
         if (removed is AppNavEntry.VideoDetail) {
             coordinator.requestDetailHandoffPreserve(
@@ -1776,7 +1780,9 @@ private fun AppNavStackLayers(
         key(layer.key) {
             val isTop = layer.target != null && layer.key == topActiveKey
             val isExitingLayer = layer.target == null && pendingExitKey == layer.key
+            val pageState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             var detailAllowsSwipeBack by remember { mutableStateOf(true) }
+            val usesPageReturn = layer.entry !is AppNavEntry.Search && layer.entry !is AppNavEntry.DynamicDetail
             NavAnimatedOverlay(
                 target = layer.target,
                 exitSeed = if (layer.target == null) layer.entry else null,
@@ -1794,49 +1800,51 @@ private fun AppNavStackLayers(
                 onHidden = onExitHidden,
                 coverOrigin = (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin,
                 coverSnapshot = (layer.entry as? AppNavEntry.VideoDetail)?.coverSnapshot,
-                onSwipeBack = if (isTop && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
+                onSwipeBack = if (isTop && exitingLayer == null && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
                 onAnimatedSystemBack = onPopNav.takeIf {
-                    isTop && layer.entry is AppNavEntry.UserProfile && coordinator.fullscreenKey == null
+                    isTop && exitingLayer == null && coordinator.fullscreenKey == null && usesPageReturn
                 },
                 pageSwipeBack = layer.entry is AppNavEntry.VideoDetail,
-                standardPageMotion = layer.entry !is AppNavEntry.Search && layer.entry !is AppNavEntry.DynamicDetail && (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin == null,
+                standardPageMotion = usesPageReturn && (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin == null,
             ) { activeEntry ->
                 Box(Modifier.fillMaxSize().blockHiddenTouches(isTop || isExitingLayer)) {
-                    AppNavEntryContent(
-                        entry = activeEntry,
-                        isActive = isTop,
-                        api = api,
-                        credential = credential,
-                        myMid = myMid,
-                        playUrls = playUrls,
-                        coordinator = coordinator,
-                        feedColumnCount = feedColumnCount,
-                        onFeedColumnCountChange = onFeedColumnCountChange,
-                        autoHideBarsOnScroll = autoHideBarsOnScroll,
-                        onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
-                        syncedEmoticonCount = syncedEmoticonCount,
-                        syncedEmoticons = syncedEmoticons,
-                        syncingEmoticons = syncingEmoticons,
-                        onSyncEmoticons = onSyncEmoticons,
-                        contentPadding = contentPadding,
-                        onPopNav = onPopNav,
-                        onOpenVideo = onOpenVideo,
-                        onOpenDescriptionVideo = onOpenDescriptionVideo,
-                        onOpenCommentVideo = onOpenCommentVideo,
-                        onSearchTagClick = onSearchTagClick,
-                        onSwitchVideoPart = onSwitchVideoPart,
-                        onUpdateVideoSeed = onUpdateVideoSeed,
-                        onReplaceVideo = onReplaceVideo,
-                        onOpenProfile = onOpenProfile,
-                        onOpenDynamic = onOpenDynamic,
-                        onOpenArticle = onOpenArticle,
-                        onOpenRelationList = onOpenRelationList,
-                        onLoginRequired = onLoginRequired,
-                        onEnsurePlayStream = onEnsurePlayStream,
-                        onRefreshPlayStream = onRefreshPlayStream,
-                        episodeSwitchScope = episodeSwitchScope,
-                        onVideoSwipeBackEnabledChange = { detailAllowsSwipeBack = it },
-                    )
+                    pageState.SaveableStateProvider(layer.key) {
+                        AppNavEntryContent(
+                            entry = activeEntry,
+                            isActive = isTop,
+                            api = api,
+                            credential = credential,
+                            myMid = myMid,
+                            playUrls = playUrls,
+                            coordinator = coordinator,
+                            feedColumnCount = feedColumnCount,
+                            onFeedColumnCountChange = onFeedColumnCountChange,
+                            autoHideBarsOnScroll = autoHideBarsOnScroll,
+                            onAutoHideBarsOnScrollChange = onAutoHideBarsOnScrollChange,
+                            syncedEmoticonCount = syncedEmoticonCount,
+                            syncedEmoticons = syncedEmoticons,
+                            syncingEmoticons = syncingEmoticons,
+                            onSyncEmoticons = onSyncEmoticons,
+                            contentPadding = contentPadding,
+                            onPopNav = onPopNav,
+                            onOpenVideo = onOpenVideo,
+                            onOpenDescriptionVideo = onOpenDescriptionVideo,
+                            onOpenCommentVideo = onOpenCommentVideo,
+                            onSearchTagClick = onSearchTagClick,
+                            onSwitchVideoPart = onSwitchVideoPart,
+                            onUpdateVideoSeed = onUpdateVideoSeed,
+                            onReplaceVideo = onReplaceVideo,
+                            onOpenProfile = onOpenProfile,
+                            onOpenDynamic = onOpenDynamic,
+                            onOpenArticle = onOpenArticle,
+                            onOpenRelationList = onOpenRelationList,
+                            onLoginRequired = onLoginRequired,
+                            onEnsurePlayStream = onEnsurePlayStream,
+                            onRefreshPlayStream = onRefreshPlayStream,
+                            episodeSwitchScope = episodeSwitchScope,
+                            onVideoSwipeBackEnabledChange = { detailAllowsSwipeBack = it },
+                        )
+                    }
                 }
             }
         }
@@ -1980,6 +1988,7 @@ private fun AppNavEntryContent(
                 webUrl = entry.webUrl,
                 seedTitle = entry.seedTitle,
                 onBack = onPopNav,
+                handleSystemBack = false,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -1996,7 +2005,7 @@ private fun AppNavEntryContent(
                 onBack = onPopNav,
                 onUserClick = { mid, name, face -> onOpenProfile(mid, name, face) },
                 onLoginRequired = onLoginRequired,
-                handleSystemBack = isActive,
+                handleSystemBack = false,
                 modifier = Modifier.fillMaxSize(),
             )
         }

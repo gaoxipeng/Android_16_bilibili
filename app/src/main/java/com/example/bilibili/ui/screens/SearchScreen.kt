@@ -158,10 +158,12 @@ fun SearchScreen(
     var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
     var searchHistoryExpanded by remember { mutableStateOf(false) }
 
-    val pagerState = rememberPagerState(pageCount = { SearchContentTab.entries.size })
-    val videoListState = rememberLazyListState()
-    val videoStaggeredGridState = rememberLazyStaggeredGridState()
-    val userListState = rememberLazyListState()
+    val pagerState = androidx.compose.runtime.key(searchGeneration) {
+        rememberPagerState(pageCount = { SearchContentTab.entries.size })
+    }
+    val videoListState = androidx.compose.runtime.key(searchGeneration) { rememberLazyListState() }
+    val videoStaggeredGridState = androidx.compose.runtime.key(searchGeneration) { rememberLazyStaggeredGridState() }
+    val userListState = androidx.compose.runtime.key(searchGeneration) { rememberLazyListState() }
 
     BackHandler(enabled = handleSystemBack, onBack = onClose)
 
@@ -345,13 +347,6 @@ fun SearchScreen(
             launch { loadPinnedMedia(reset = true, generation = generation) }
             launch { loadUsers(reset = true, generation = generation) }
         }
-    }
-
-    LaunchedEffect(searchGeneration) {
-        pagerState.scrollToPage(0)
-        videoListState.scrollToItem(0)
-        videoStaggeredGridState.scrollToItem(0)
-        userListState.scrollToItem(0)
     }
 
     LaunchedEffect(videoListState, videoStaggeredGridState, useSingleColumnVideos, activeQuery, searchGeneration, videoHasMore) {

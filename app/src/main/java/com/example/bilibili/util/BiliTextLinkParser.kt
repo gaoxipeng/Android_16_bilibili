@@ -16,6 +16,8 @@ sealed interface BiliLinkTarget {
         val mid: Long,
     ) : BiliLinkTarget
 
+    data class UserMention(val name: String) : BiliLinkTarget
+
     data class External(
         val url: String,
     ) : BiliLinkTarget

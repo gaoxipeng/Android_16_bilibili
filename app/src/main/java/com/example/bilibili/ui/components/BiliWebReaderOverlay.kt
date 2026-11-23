@@ -102,6 +102,7 @@ fun BiliWebReaderOverlay(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     showHeader: Boolean = true,
+    handleSystemBack: Boolean = true,
 ) {
     if (state == null) return
 
@@ -110,7 +111,7 @@ fun BiliWebReaderOverlay(
     val viewportCoordinator = remember(state.url) { MobileWebViewportCoordinator() }
     var loading by remember(state.url) { mutableStateOf(true) }
 
-    BackHandler(onBack = onBack)
+    BackHandler(enabled = handleSystemBack, onBack = onBack)
 
     Surface(
         modifier = modifier

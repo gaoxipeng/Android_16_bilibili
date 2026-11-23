@@ -131,6 +131,24 @@ fun DynamicDetailScreen(
 
     val handleCommentLinkClick: (BiliLinkTarget) -> Unit = { target ->
         when (target) {
+            is BiliLinkTarget.UserMention -> {
+                scope.launch {
+                    try {
+                        val user = api.searchUsers(target.name, 1, credential).items
+                            .filter { it.mid > 0 && it.name == target.name }
+                            .distinctBy { it.mid }.singleOrNull()
+                        if (user != null) {
+                            onAuthorClick(BiliUserProfile(user.mid, user.name, user.face, user.sign, user.level))
+                        } else {
+                            Toast.makeText(context, "未找到该用户", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        Toast.makeText(context, "查找用户失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
             is BiliLinkTarget.UserSpace -> {
                 onAuthorClick(
                     BiliUserProfile(
@@ -356,7 +374,6 @@ fun DynamicDetailScreen(
             }
     }
 
-    BackHandler(onBack = onBack)
 
     StatusBarIconsEffect(darkIcons = true)
 

@@ -76,6 +76,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
     source: Rect,
     sourceSnapshot: ImageBitmap?,
     onSwipeBack: (() -> Unit)?,
+    onSystemBack: (() -> Unit)?,
     content: @Composable () -> Unit,
 ) {
     val progress by transition.animateFloat(
@@ -93,6 +94,17 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
     DisposableEffect(source) { onDispose { VideoCoverOrigins.reveal() } }
     val scope = rememberCoroutineScope()
     val back by rememberUpdatedState(onSwipeBack)
+    fun finishReturn(onCommit: () -> Unit) {
+        if (committed) return
+        committed = true
+        scope.launch {
+            settle.animateTo(1f, tween(250, easing = CubicBezierEasing(0.20f, 0.68f, 0.30f, 1f)))
+            onCommit()
+        }
+    }
+    androidx.activity.compose.BackHandler(enabled = onSystemBack != null) {
+        onSystemBack?.let(::finishReturn)
+    }
     val motionProgress = if (committed) 1f - settle.value else progress
     val returning = committed || transition.targetState == androidx.compose.animation.EnterExitState.PostExit
     val background = MaterialTheme.colorScheme.background
@@ -103,7 +115,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 val backAction = back
                 // Leave the video surface's seek/volume/brightness gestures untouched.
-                if (backAction == null || down.position.y < statusTop + size.width * 9f / 16f || drag.isRunning) return@awaitEachGesture
+                if (backAction == null || committed || down.position.y < statusTop + size.width * 9f / 16f || drag.isRunning) return@awaitEachGesture
                 var totalX = 0f
                 var totalY = 0f
                 var claimed = false
@@ -125,9 +137,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
                 if (claimed) scope.launch {
                     val commit = fraction > 0.24f
                     if (commit) {
-                        committed = true
-                        settle.animateTo(1f, tween(250, easing = CubicBezierEasing(0.20f, 0.68f, 0.30f, 1f)))
-                        backAction()
+                        finishReturn(backAction)
                     } else {
                         drag.animateTo(0f, tween(180, easing = CubicBezierEasing(0.20f, 0.68f, 0.30f, 1f)))
                         swiping = false

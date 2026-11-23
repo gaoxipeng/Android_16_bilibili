@@ -168,6 +168,7 @@ fun BilibiliVideoSurface(
     showLoadingIndicator: Boolean = true,
     onLoadingStateChange: ((Boolean) -> Unit)? = null,
     autoPlayWhenReady: Boolean = false,
+    preferredQualityAfterWarmup: Int? = null,
 ) {
     val context = LocalContext.current
     val hapticView = LocalView.current
@@ -232,6 +233,7 @@ fun BilibiliVideoSurface(
     var showSpeedMenu by remember(playbackKey) { mutableStateOf(false) }
     var showQualityMenu by remember(playbackKey) { mutableStateOf(false) }
     var requestedQuality by remember(playbackKey) { mutableStateOf<Int?>(null) }
+    var warmupUpgradeHandled by remember(contentPlaybackKey, stream.videoUrl) { mutableStateOf(false) }
     var primaryVideoSlot by remember(playbackKey) { mutableIntStateOf(0) }
     var qualityCandidate by remember(playbackKey) { mutableStateOf<ExoPlayer?>(null) }
     var qualityAudioPlayer by remember(playbackKey, contentPlaybackKey, stream.cid) {
@@ -570,6 +572,13 @@ fun BilibiliVideoSurface(
 
     val activePlayer = player
     val activePlayerState = rememberUpdatedState(activePlayer)
+    val readyForWarmupUpgrade = playbackEnabled && isPlaying && positionMs >= 3_000L
+    LaunchedEffect(preferredQualityAfterWarmup, readyForWarmupUpgrade, activePlayer) {
+        val preferred = preferredQualityAfterWarmup ?: return@LaunchedEffect
+        if (!readyForWarmupUpgrade || activePlayer == null || warmupUpgradeHandled) return@LaunchedEffect
+        warmupUpgradeHandled = true
+        if (requestedQuality == null && selectedQuality != preferred) requestedQuality = preferred
+    }
     LaunchedEffect(activePlayer, stream, requestedQuality) {
         val quality = requestedQuality ?: return@LaunchedEffect
         val current = activePlayer ?: return@LaunchedEffect
@@ -1039,13 +1048,14 @@ fun BilibiliVideoSurface(
         }
     }
 
-    LaunchedEffect(isPlaying, isBuffering, controlsHideSignal, showSpeedMenu, showQualityMenu) {
-        if (!isPlaying || isBuffering || showSpeedMenu || showQualityMenu) {
+    val isSwitchingQuality = requestedQuality != null
+    LaunchedEffect(isPlaying, isBuffering, controlsHideSignal, showSpeedMenu, showQualityMenu, isSwitchingQuality) {
+        if (!isPlaying || isBuffering || showSpeedMenu || showQualityMenu || isSwitchingQuality) {
             controlsVisible = true
             return@LaunchedEffect
         }
         delay(2_000)
-        if (!showSpeedMenu && !showQualityMenu) {
+        if (!showSpeedMenu && !showQualityMenu && !isSwitchingQuality) {
             controlsVisible = false
         }
     }
@@ -1534,7 +1544,7 @@ fun BilibiliVideoSurface(
                     controlsVisible = true
                     showSpeedMenu = !showSpeedMenu
                 },
-                qualityLabel = videoQualityLabel(selectedQuality),
+                qualityLabel = if (isSwitchingQuality) "切换中" else videoQualityLabel(selectedQuality),
                 onQualityPosition = { qualityCenter = it },
                 onSpeedPosition = { speedCenter = it },
                 onQualityClick = {
@@ -1594,6 +1604,7 @@ fun BilibiliVideoSurface(
                 selectedQuality = selectedQuality,
                 backdrop = layerBackdrop,
                 onSelected = { quality ->
+                    warmupUpgradeHandled = true
                     if (quality != selectedQuality && retiredQualityPlayer == null) requestedQuality = quality
                     showQualityMenu = false
                     controlsHideSignal++

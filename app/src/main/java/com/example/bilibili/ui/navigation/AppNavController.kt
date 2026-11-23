@@ -71,8 +71,8 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
     val hasOverlay: Boolean get() = stack.isNotEmpty() || exitingLayer != null
 
     fun push(entry: AppNavEntry, preserveCurrentVideoDetail: Boolean = false) {
-        pendingEnterKey = entry.stableKey(stack.size)
         pendingExitKey = null
+        exitingLayer = null
         stack = when (entry) {
             is AppNavEntry.Search -> stack.filterNot { it is AppNavEntry.Search } + entry
             is AppNavEntry.VideoDetail -> when {
@@ -85,6 +85,7 @@ class AppNavController(initial: List<AppNavEntry> = emptyList()) {
             is AppNavEntry.ArticleDetail -> stack + entry
             is AppNavEntry.UserRelationList -> stack + entry
         }
+        pendingEnterKey = entry.stableKey(stack.lastIndex)
     }
 
     fun pop(): AppNavEntry? {

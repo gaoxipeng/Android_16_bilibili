@@ -203,7 +203,9 @@ fun <T> NavAnimatedOverlay(
                     .consumeTouchEvents(),
             ) {
                 if (coverOrigin != null) {
-                    this@AnimatedVisibility.VideoCoverMotion(coverOrigin, coverSnapshot, onSwipeBack) { content(item) }
+                    this@AnimatedVisibility.VideoCoverMotion(
+                        coverOrigin, coverSnapshot, onSwipeBack, onAnimatedSystemBack,
+                    ) { content(item) }
                 } else if (pageSwipeBack || standardPageMotion) {
                     VideoPageSwipeBack(
                         onSwipeBack = onSwipeBack,

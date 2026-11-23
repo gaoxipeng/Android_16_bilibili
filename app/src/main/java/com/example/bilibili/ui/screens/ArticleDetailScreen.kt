@@ -12,6 +12,7 @@ fun ArticleDetailScreen(
     seedTitle: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    handleSystemBack: Boolean = true,
 ) {
     val state = remember(webUrl, seedTitle) {
         BiliWebReaderState(
@@ -25,5 +26,6 @@ fun ArticleDetailScreen(
         onBack = onBack,
         modifier = modifier,
         showHeader = false,
+        handleSystemBack = handleSystemBack,
     )
 }

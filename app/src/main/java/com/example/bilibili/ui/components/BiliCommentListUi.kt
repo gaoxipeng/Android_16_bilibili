@@ -90,8 +90,14 @@ fun buildBiliCommentListEntries(
         add(BiliCommentRootEntry(comment))
         if (comment.replyCount <= 0L) continue
         val shownReplies = resolveShownCommentReplies(comment, loadedSubReplies)
+        val threadAuthors = (shownReplies + comment)
+            .filter { it.authorMid > 0L && it.authorName.isNotBlank() }
+            .groupBy { it.authorName }
+            .mapNotNull { (name, items) ->
+                items.map { it.authorMid }.distinct().singleOrNull()?.let { name to it }
+            }.toMap()
         shownReplies.forEach { reply ->
-            add(BiliCommentReplyEntry(comment.id, reply))
+            add(BiliCommentReplyEntry(comment.id, reply.copy(mentionMids = threadAuthors + reply.mentionMids)))
         }
         val hasMoreReplies = comment.replyCount > shownReplies.size && comment.id !in subRepliesEnd
         if (hasMoreReplies) {
@@ -289,6 +295,7 @@ fun BiliCommentRow(
                     emoticons = comment.emoticons,
                     style = MaterialTheme.typography.bodyMedium,
                     onLinkClick = onLinkClick,
+                    mentionMids = comment.mentionMids,
                 )
             }
             if (comment.pictures.isNotEmpty()) {
