@@ -5,6 +5,8 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.EnterTransition
@@ -96,9 +98,12 @@ fun <T> NavAnimatedOverlay(
     pageSwipeBack: Boolean = false,
     standardPageMotion: Boolean = false,
     onAnimatedSystemBack: (() -> Unit)? = null,
+    passTouchesDuringExit: Boolean = false,
     content: @Composable (T) -> Unit,
 ) {
     val navTransitions = LocalNavTransitionCoordinator.current
+    val exitFrame = rememberGraphicsLayer()
+    val visualOnly = passTouchesDuringExit && target == null
     var displayed by remember { mutableStateOf<T?>(null) }
     if (target != null) {
         displayed = target
@@ -200,26 +205,42 @@ fun <T> NavAnimatedOverlay(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(if (coverOrigin != null || pageSwipeBack || standardPageMotion) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.background)
-                    .consumeTouchEvents(),
+                    .then(if (visualOnly) Modifier else Modifier.consumeTouchEvents()),
             ) {
+                val pageContent: @Composable () -> Unit = {
+                    if (passTouchesDuringExit) {
+                        Box(Modifier.fillMaxSize().drawWithContent {
+                            if (!visualOnly) exitFrame.record { this@drawWithContent.drawContent() }
+                            drawLayer(exitFrame)
+                        }) {
+                            if (!visualOnly) content(item)
+                        }
+                    } else {
+                        content(item)
+                    }
+                }
                 if (coverOrigin != null) {
                     this@AnimatedVisibility.VideoCoverMotion(
                         coverOrigin, coverSnapshot, onSwipeBack, onAnimatedSystemBack,
-                    ) { content(item) }
+                        visualOnly = visualOnly,
+                        content = pageContent,
+                    )
                 } else if (pageSwipeBack || standardPageMotion) {
                     VideoPageSwipeBack(
                         onSwipeBack = onSwipeBack,
                         restrictToBelowVideo = pageSwipeBack,
                         onSystemBack = onAnimatedSystemBack,
+                        visualOnly = visualOnly,
                         onProgress = { fraction ->
                             swipeProgress = fraction
                             if (standardPageMotion) {
                                 navTransitions.pageProgress[layerKey] = motion * (1f - fraction)
                             }
                         },
-                    ) { content(item) }
+                        content = pageContent,
+                    )
                 } else {
-                    content(item)
+                    pageContent()
                 }
             }
         }

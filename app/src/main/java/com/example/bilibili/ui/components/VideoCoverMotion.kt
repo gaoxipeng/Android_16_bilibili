@@ -77,6 +77,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
     sourceSnapshot: ImageBitmap?,
     onSwipeBack: (() -> Unit)?,
     onSystemBack: (() -> Unit)?,
+    visualOnly: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val progress by transition.animateFloat(
@@ -110,7 +111,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
     val background = MaterialTheme.colorScheme.background
     val pageBackdrop = LocalLiquidMenuBackdrop.current
     Box(Modifier.fillMaxSize().onGloballyPositioned { root = it.boundsInRoot() }
-        .pointerInput(Unit) {
+        .then(if (visualOnly) Modifier else Modifier.pointerInput(Unit) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 val backAction = back
@@ -144,7 +145,7 @@ internal fun AnimatedVisibilityScope.VideoCoverMotion(
                     }
                 }
             }
-        }) {
+        })) {
         if (!returning && progress < 0.999f && pageBackdrop != null) {
             Box(Modifier.fillMaxSize().drawBackdrop(backdrop = pageBackdrop, shape = { RectangleShape }, effects = {
                 blur((12.dp.toPx() * kotlin.math.sin(progress.coerceIn(0f, 1f) * Math.PI.toFloat())).coerceAtLeast(0f))

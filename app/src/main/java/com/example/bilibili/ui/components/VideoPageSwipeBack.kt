@@ -31,7 +31,7 @@ import kotlin.math.abs
 
 /** Video details without a source-card rectangle (history, favourites, etc.). */
 @Composable
-internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo: Boolean = true, onProgress: (Float) -> Unit = {}, onSystemBack: (() -> Unit)? = null, content: @Composable () -> Unit) {
+internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo: Boolean = true, onProgress: (Float) -> Unit = {}, onSystemBack: (() -> Unit)? = null, visualOnly: Boolean = false, content: @Composable () -> Unit) {
     val back by rememberUpdatedState(onSwipeBack)
     val progressCallback by rememberUpdatedState(onProgress)
     val drag = remember { Animatable(0f) }
@@ -52,7 +52,7 @@ internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo
         settle(pageWidth.toFloat(), onSystemBack)
     }
     val statusTop = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
-    Box(Modifier.fillMaxSize().onSizeChanged { pageWidth = it.width }.pointerInput(Unit) {
+    Box(Modifier.fillMaxSize().onSizeChanged { pageWidth = it.width }.then(if (visualOnly) Modifier else Modifier.pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             val backAction = back
@@ -82,7 +82,7 @@ internal fun VideoPageSwipeBack(onSwipeBack: (() -> Unit)?, restrictToBelowVideo
                 settle(width, backAction.takeIf { dx > width * 0.24f })
             }
         }
-    }) {
+    })) {
         Box(Modifier.fillMaxSize().graphicsLayer { translationX = drag.value }
             .background(MaterialTheme.colorScheme.background), content = { content() })
     }

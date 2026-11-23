@@ -504,11 +504,49 @@ fun BilibiliApp() {
         )
     }
 
+    fun completeNavPopSideEffects() {
+        if (pendingPopSideEffect == null && navController.exitingLayer == null) return
+        when (val removed = pendingPopSideEffect) {
+            is AppNavEntry.VideoDetail -> {
+                coordinator.pauseAll()
+                coordinator.restorePlaybackWindowBrightness()
+                coordinator.activeKey = null
+                coordinator.fullscreenKey = null
+                coordinator.fullscreenPortraitVideo = null
+                coordinator.fullscreenVideo = null
+                coordinator.fullscreenStream = null
+                if (selectedTab == MainTab.History) {
+                    lastOpenedHistoryKid?.takeIf { it.isNotBlank() }?.let { kid ->
+                        promoteHistoryKid = kid
+                    }
+                    lastOpenedHistoryKid = null
+                }
+            }
+            is AppNavEntry.UserProfile -> {
+                navController.stack.lastVideoDetail()?.let { entry ->
+                    coordinator.requestInlinePlayback(
+                        videoPlaybackKey(entry.video.playbackId(), ownerId = "detail"),
+                    )
+                }
+            }
+            is AppNavEntry.Search,
+            is AppNavEntry.DynamicDetail,
+            is AppNavEntry.ArticleDetail,
+            is AppNavEntry.UserRelationList,
+            null -> Unit
+        }
+        pendingPopSideEffect = null
+        navController.clearExitingLayer()
+    }
+
     fun openVideoDetail(
         video: BiliVideoItem,
         partPage: Int = 0,
         keepParentForComment: Boolean = false,
     ) {
+        if (navController.exitingLayer?.entry is AppNavEntry.VideoDetail) {
+            completeNavPopSideEffects()
+        }
         val replacingVideoDetail = navController.top is AppNavEntry.VideoDetail
         val shouldPush = !replacingVideoDetail || keepParentForComment
         val initialVideo = enrichVideoForDetailOpen(video, playUrls)
@@ -762,41 +800,6 @@ fun BilibiliApp() {
                 seedTitle = seedTitle,
             ),
         )
-    }
-
-    fun completeNavPopSideEffects() {
-        if (pendingPopSideEffect == null && navController.exitingLayer == null) return
-        when (val removed = pendingPopSideEffect) {
-            is AppNavEntry.VideoDetail -> {
-                coordinator.pauseAll()
-                coordinator.restorePlaybackWindowBrightness()
-                coordinator.activeKey = null
-                coordinator.fullscreenKey = null
-                coordinator.fullscreenPortraitVideo = null
-                coordinator.fullscreenVideo = null
-                coordinator.fullscreenStream = null
-                if (selectedTab == MainTab.History) {
-                    lastOpenedHistoryKid?.takeIf { it.isNotBlank() }?.let { kid ->
-                        promoteHistoryKid = kid
-                    }
-                    lastOpenedHistoryKid = null
-                }
-            }
-            is AppNavEntry.UserProfile -> {
-                navController.stack.lastVideoDetail()?.let { entry ->
-                    coordinator.requestInlinePlayback(
-                        videoPlaybackKey(entry.video.playbackId(), ownerId = "detail"),
-                    )
-                }
-            }
-            is AppNavEntry.Search,
-            is AppNavEntry.DynamicDetail,
-            is AppNavEntry.ArticleDetail,
-            is AppNavEntry.UserRelationList,
-            null -> Unit
-        }
-        pendingPopSideEffect = null
-        navController.clearExitingLayer()
     }
 
     fun popNavEntry() {
@@ -1298,7 +1301,7 @@ fun BilibiliApp() {
                     .navPageUnderlay(navStack.firstOrNull()?.stableKey(0) ?: navController.exitingLayer?.takeIf { it.index == 0 }?.key)
                     .layerBackdrop(bottomBarBackdrop)
                     .nestedScroll(bottomBarScrollConnection)
-                    .blockHiddenTouches(!navOverlayOpen),
+                    .blockHiddenTouches(navStack.isEmpty()),
             ) {
                 Box(
                     Modifier
@@ -1500,10 +1503,12 @@ fun BilibiliApp() {
                 }
             }
 
-            NavTransitionTouchShield(
-                coordinator = navTransitionCoordinator,
-                modifier = Modifier.zIndex(594f),
-            )
+            if (navController.exitingLayer?.entry !is AppNavEntry.VideoDetail) {
+                NavTransitionTouchShield(
+                    coordinator = navTransitionCoordinator,
+                    modifier = Modifier.zIndex(594f),
+                )
+            }
 
             AppNavStackLayers(
                 navStack = navStack,
@@ -1802,8 +1807,10 @@ private fun AppNavStackLayers(
                 coverSnapshot = (layer.entry as? AppNavEntry.VideoDetail)?.coverSnapshot,
                 onSwipeBack = if (isTop && exitingLayer == null && detailAllowsSwipeBack && coordinator.fullscreenKey == null) onPopNav else null,
                 onAnimatedSystemBack = onPopNav.takeIf {
-                    isTop && exitingLayer == null && coordinator.fullscreenKey == null && usesPageReturn
+                    isTop && exitingLayer == null && coordinator.fullscreenKey == null &&
+                        usesPageReturn && layer.entry !is AppNavEntry.VideoDetail
                 },
+                passTouchesDuringExit = layer.entry is AppNavEntry.VideoDetail,
                 pageSwipeBack = layer.entry is AppNavEntry.VideoDetail,
                 standardPageMotion = usesPageReturn && (layer.entry as? AppNavEntry.VideoDetail)?.coverOrigin == null,
             ) { activeEntry ->
